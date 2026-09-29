@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# 面板前端：产物是纯静态文件、与目标平台无关，固定在构建机原生平台上构建一次
-#（多架构构建时不必在 QEMU 模拟的 arm64 里跑 Node）。npm run build 含类型检查、ESLint 与单元测试。
+# 面板前端：产物是纯静态文件、与目标平台无关，固定在构建机原生平台上构建
+#（若以后要构建其他架构的镜像，Node 这一步也不必在模拟器里跑）。npm run build 含类型检查、ESLint 与单元测试。
 FROM --platform=$BUILDPLATFORM node:24-alpine AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
