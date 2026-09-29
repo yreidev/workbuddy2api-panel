@@ -2,15 +2,16 @@
 // HeroUI 没有侧栏/顶栏组件，布局用 Tailwind 搭，里面的导航、按钮、抽屉都是 HeroUI 组件。
 import { useEffect, useState, type ComponentType, type SVGProps } from 'react'
 import {
-  ArrowsRotateRight, Bars, Boxes3, ChartColumn, Cpu, Gear, ListCheck, ListTimeline, Moon, Persons, Plus, Sun,
+  ArrowsRotateRight, Bars, Boxes3, ChartColumn, Cpu, Gear, ListCheck, ListTimeline, LogoGithub, Moon, Persons, Plus, Sun,
 } from '@gravity-ui/icons'
 import {
-  Button, Drawer, Label, ListBox, RouterProvider, ScrollShadow, Toast, Tooltip, toast, useMediaQuery, useTheme,
+  Button, Drawer, Label, Link, ListBox, RouterProvider, ScrollShadow, Toast, Tooltip, toast, useMediaQuery, useTheme,
 } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Outlet, useLocation, useMatches, useRouter } from '@tanstack/react-router'
 import { post } from '../lib/api'
 import { uptime } from '../lib/format'
+import { isExternalHref } from '../lib/links'
 import { toastError } from '../lib/hooks'
 import { qk, useOverview } from '../lib/queries'
 import { AddAccountModal } from './AddAccountModal'
@@ -18,6 +19,9 @@ import { BusyButton } from './Feedback'
 import { KeyGate } from './KeyGate'
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>
+
+/** 本面板的源码仓库（侧栏底部的链接） */
+const REPO = { name: 'yreidev/workbuddy2api-panel', url: 'https://github.com/yreidev/workbuddy2api-panel' }
 
 const NAV: { to: string; label: string; icon: Icon }[] = [
   { to: '/accounts', label: '账号池', icon: Persons },
@@ -45,7 +49,8 @@ export function Shell() {
   return (
     <RouterProvider
       navigate={(to) => void router.navigate({ to })}
-      useHref={(to) => router.history.createHref(router.buildLocation({ to }).href)}
+      // 面板内部路径交给路由生成 #/xxx 地址；https:// 这类完整地址（外链）原样保留
+      useHref={(to) => (isExternalHref(to) ? to : router.history.createHref(router.buildLocation({ to }).href))}
     >
       <div className="flex min-h-dvh">
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-separator lg:flex">
@@ -119,6 +124,16 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <div className="flex flex-col gap-1 border-t border-separator px-5 py-3 text-xs text-muted">
         <span className="flex items-center gap-2"><span className={`size-2 rounded-full ${state.dot}`} />{state.text}</span>
         {data && <span>v{data.version} · {data.redis_mode === 'upstash' ? 'Redis 镜像' : '本地内存'}</span>}
+        <Link
+          href={REPO.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={'GitHub 仓库 ' + REPO.name + '（在新标签页打开）'}
+          className="mt-0.5 flex w-fit items-center gap-1.5 text-xs text-muted no-underline hover:text-foreground"
+        >
+          <LogoGithub className="size-3.5 shrink-0" />
+          <span className="truncate">{REPO.name}</span>
+        </Link>
       </div>
     </>
   )
