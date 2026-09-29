@@ -1,6 +1,6 @@
 // 账号池的状态推导、筛选与排序（纯函数，见 accounts.test.ts）。
-import { timeMs } from './format'
-import type { Account } from './types'
+import { dur, fmtLocalDateTime, timeMs } from './format'
+import type { Account, RateLimitedModel } from './types'
 
 export type AccountState = 'ok' | 'cooling' | 'disabled'
 export type StatusFilter = 'all' | AccountState
@@ -30,9 +30,47 @@ export function accountHealth(a: Account, fetchedAt: number): Health {
   return { state: 'cooling', coolEnd: end, kind }
 }
 
-/** 仍在限额中的模型（到期的自然消失） */
-export function activeRateLimits(a: Account, now: number) {
-  return (a.rate_limited_models || []).filter((m) => (timeMs(m.until) ?? Infinity) > now)
+/** 暂时不能用的模型（后端只返回仍在冷却中的条目，这里只去掉缺模型名的脏数据） */
+export function activeRateLimits(a: Account) {
+  return (a.rate_limited_models || []).filter((m) => m && m.model)
+}
+
+export interface RateLimitInfo {
+  model: string
+  unavailable: boolean
+  /** 完整说明：「预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试」 */
+  detail: string
+  /** 表格里的短说明：「2时00分后解封」「不可用 · 1时00分后重试」 */
+  short: string
+  /** 上游重置时刻优先，没有就用网关最早重试时刻 */
+  deadline: number | null
+}
+
+/**
+ * 限流 / 模型不可用的展示文案（口径与上游旧面板 rateLimitMeta 一致，见 accounts.test.ts）：
+ * 上游给了重置时间（reset_at）就按它说「几点解封」，网关更早重试（until 早于 reset_at）时补一句；
+ * 只有 until 就按它说「几点恢复」；都没有就是「时间未知」。模型不可用只说多久后重试。
+ */
+export function rateLimitInfo(row: RateLimitedModel, now: number): RateLimitInfo {
+  const model = row.model || '未知模型'
+  const resetAt = timeMs(row.reset_at)
+  const until = timeMs(row.until)
+  const deadline = resetAt ?? until
+  const remaining = deadline != null && deadline > now ? Math.round((deadline - now) / 1000) : 0
+  if (row.kind === 'model_unavailable') {
+    return {
+      model, unavailable: true, deadline,
+      detail: remaining ? '预计 ' + dur(remaining) + ' 后重试' : '等待重新探测',
+      short: remaining ? '不可用 · ' + dur(remaining) + '后重试' : '不可用 · 等待重新探测',
+    }
+  }
+  let detail = resetAt != null
+    ? '预计 ' + fmtLocalDateTime(resetAt) + ' 解封' + (remaining ? '（剩余 ' + dur(remaining) + '）' : '')
+    : until != null ? '预计 ' + fmtLocalDateTime(until) + ' 恢复（剩余 ' + dur(remaining) + '）' : '预计解封时间未知'
+  if (until != null && resetAt != null && until < resetAt) {
+    detail += ' · 网关最快 ' + dur(Math.max(0, Math.round((until - now) / 1000))) + ' 后重试'
+  }
+  return { model, unavailable: false, deadline, detail, short: remaining ? dur(remaining) + '后解封' : '解封时间未知' }
 }
 
 /** 积分进度百分比：有总额按 剩余/总额；旧数据没有总额时按池内最高 = 100% */

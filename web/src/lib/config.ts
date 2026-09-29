@@ -30,8 +30,8 @@ export interface ConfigTab {
 
 const hours = (name: string, key: string, label: string, placeholder: string, hint?: string): FieldDef =>
   ({ name, path: ['schedule', key], label, kind: 'hours', placeholder, hint })
-const toggle = (name: string, path: string[], label: string, hint?: string): FieldDef =>
-  ({ name, path, label, kind: 'switch', hint })
+const toggle = (name: string, path: string[], label: string, hint?: string, restart?: boolean): FieldDef =>
+  ({ name, path, label, kind: 'switch', hint, restart })
 const duration = (name: string, path: string[], label: string, placeholder: string, hint?: string, restart?: boolean): FieldDef =>
   ({ name, path, label, kind: 'duration', placeholder, hint, restart })
 const num = (name: string, path: string[], label: string, placeholder: string, extra: Partial<FieldDef> = {}): FieldDef =>
@@ -137,6 +137,15 @@ export const CONFIG_TABS: ConfigTab[] = [
           { name: 'prompt_file', path: ['prompt', 'file'], label: '提示词文件路径', kind: 'text', placeholder: '留空 = 内置默认提示词', restart: true },
           toggle('sanitize_blacklist_fingerprints', ['features', 'sanitize_blacklist_fingerprints'], '出站请求指纹脱敏'),
           toggle('session_sticky_enabled', ['session_sticky', 'enabled'], '会话粘性路由'),
+        ],
+      },
+      {
+        title: '请求日志归档',
+        fields: [
+          toggle('request_archive_enabled', ['logging', 'request_archive_enabled'], '请求元数据 JSONL 归档',
+            '只记录时间、状态、模型、账号、耗时、token、积分，不记录提示词、响应正文或密钥', true),
+          num('request_retention_days', ['logging', 'request_retention_days'], '归档保留天数', '7', { min: 1, restart: true, hint: '超期文件在启动和定期清理时删除' }),
+          num('request_archive_max_mb', ['logging', 'request_archive_max_mb'], '归档容量上限（MiB）', '100', { min: 1, restart: true, hint: '超过上限先删最旧的文件' }),
         ],
       },
     ],

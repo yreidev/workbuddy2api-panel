@@ -2,7 +2,7 @@
 // 最早到期批次、连败 / 熔断计数、最近一次请求。数据取自总览（随 5 秒轮询实时更新）。
 import type { ReactNode } from 'react'
 import { Chip, Drawer, Separator, useMediaQuery } from '@heroui/react'
-import { activeRateLimits, type Health } from '../../lib/accounts'
+import { activeRateLimits, rateLimitInfo, type Health } from '../../lib/accounts'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import type { Account } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
@@ -60,7 +60,7 @@ function Body({ a, health, now, busy, run }: {
   busy: string | null
   run: (a: Account, action: AccountAction) => void
 }) {
-  const limited = activeRateLimits(a, now)
+  const limited = activeRateLimits(a)
   const costs = (a.model_costs || []).filter((c) => c.model)
   const tu = a.token_usage || {}
   const earliest = timeMs(a.credits_earliest_expiry)
@@ -88,21 +88,22 @@ function Body({ a, health, now, busy, run }: {
         </Section>
 
         <Separator />
-        <Section title={`模型级限额${limited.length ? `（${limited.length}）` : ''}`}>
+        <Section title={`模型限流与不可用${limited.length ? `（${limited.length}）` : ''}`}>
           {limited.length === 0 ? (
-            <p className="text-sm text-muted">没有模型在限额中。</p>
+            <p className="text-sm text-muted">所有模型都可以用。</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {limited.map((m) => {
-                const u = timeMs(m.until), r = timeMs(m.reset_at)
+                const info = rateLimitInfo(m, now)
                 return (
                   <li key={m.model} className="rounded-xl bg-surface-secondary px-3 py-2 text-sm">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-medium">{m.model}</span>
-                      {u != null && <Chip size="sm" variant="soft" color="warning">{until(u, now)}恢复</Chip>}
+                      <span className="truncate font-medium">{info.model}</span>
+                      <Chip size="sm" variant="soft" color={info.unavailable ? 'default' : 'warning'}>
+                        {info.unavailable ? '模型不可用' : '限流'}
+                      </Chip>
                     </div>
-                    {u != null && <div className="text-xs text-muted">冷却到 {dateTime(u)}</div>}
-                    {r != null && <div className="text-xs text-muted">上游称 {dateTime(r)} 重置</div>}
+                    <div className="text-xs text-muted">{info.detail}</div>
                     {m.reason && <div className="mt-0.5 break-all text-xs text-muted">{m.reason}</div>}
                   </li>
                 )

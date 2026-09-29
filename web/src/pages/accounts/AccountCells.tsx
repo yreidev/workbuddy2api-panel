@@ -1,6 +1,6 @@
 // 账号的各个展示单元（名称、状态、积分、用量），账号表、手机卡片、详情抽屉共用。
 import { Chip, ProgressBar } from '@heroui/react'
-import { activeRateLimits, creditPercent, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditPercent, rateLimitInfo, type Health } from '../../lib/accounts'
 import { dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import type { Account } from '../../lib/types'
 
@@ -25,17 +25,36 @@ export function HealthChip({ health, now }: { health: Health; now: number }) {
 }
 
 export function StatusCell({ a, health, now }: { a: Account; health: Health; now: number }) {
-  const limited = activeRateLimits(a, now)
   return (
     <div className="flex min-w-40 flex-col items-start gap-1">
-      <div className="flex flex-wrap items-center gap-1">
-        <HealthChip health={health} now={now} />
-        {limited.length > 0 && (
-          <Chip size="sm" variant="soft" color="warning">{limited.length} 个模型限额中</Chip>
-        )}
-      </div>
+      <HealthChip health={health} now={now} />
       {a.reason && <span className="line-clamp-2 max-w-40 text-xs text-muted">{a.reason}</span>}
+      <RateLimitList a={a} now={now} />
     </div>
+  )
+}
+
+/**
+ * 暂时不能用的模型，每个一行：模型名 + 多久后解封（限流）或「不可用」。
+ * 完整的解封时间、网关最早重试时间写在悬停提示和详情抽屉里。
+ */
+export function RateLimitList({ a, now }: { a: Account; now: number }) {
+  const rows = activeRateLimits(a)
+  if (!rows.length) return null
+  return (
+    <ul className="flex max-w-48 flex-col gap-0.5 text-xs" aria-label="暂时不能用的模型">
+      {rows.map((row) => {
+        const info = rateLimitInfo(row, now)
+        return (
+          // 模型名不截断：放不下时说明文字换到下一行
+          <li key={row.model} title={info.model + '\n' + info.detail} className="flex flex-wrap items-baseline gap-x-1.5">
+            <span className={`size-1.5 shrink-0 translate-y-[-1px] rounded-full ${info.unavailable ? 'bg-muted' : 'bg-warning'}`} />
+            <span className="break-all font-mono">{info.model}</span>
+            <span className={`whitespace-nowrap ${info.unavailable ? 'text-muted' : 'text-warning'}`}>{info.short}</span>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 

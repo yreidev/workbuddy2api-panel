@@ -1,4 +1,4 @@
-// 运行日志：最近 500 行（网关内存环形缓冲），按频道 / 级别 / 关键字筛选。
+// 运行日志页：上方是请求指标（RequestMetrics.tsx），下方是运行日志——最近 500 行（网关内存环形缓冲），按频道 / 级别 / 关键字筛选。
 // 停在底部时每 5 秒跟随新日志；往上翻看旧日志时冻结画面（日志环满了会从顶部淘汰旧行，
 // 不冻结的话翻看中的内容会整体上移），滚回底部或点「回到最新」再继续跟随。
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -9,6 +9,7 @@ import { useLogs } from '../../lib/queries'
 import type { LogEntry } from '../../lib/types'
 import { Empty, Loaded } from '../../components/Feedback'
 import { Panel } from '../../components/Panel'
+import { RequestMetrics } from './RequestMetrics'
 
 const CH_COLOR: Record<string, 'accent' | 'success' | 'default'> = { task: 'accent', chat: 'success', sys: 'default' }
 const LEVEL_TEXT = { error: 'text-danger', warn: 'text-warning', info: '' }
@@ -67,6 +68,8 @@ export function LogsPage() {
   }
 
   return (
+    <>
+    <RequestMetrics />
     <Panel
       title="运行日志"
       desc={ch === 'all'
@@ -124,5 +127,6 @@ export function LogsPage() {
         )}
       </Loaded>
     </Panel>
+    </>
   )
 }

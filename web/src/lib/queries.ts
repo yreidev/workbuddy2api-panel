@@ -3,7 +3,8 @@
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ApiError, acct, api } from './api'
 import type {
-  ConfigResp, LogEntry, Model, Overview, PackageAccount, ProbesResp, QueueState, Task, UsageResp, VoucherAccount,
+  ConfigResp, LogEntry, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent, RequestMetrics, Task, UsageResp,
+  VoucherAccount,
 } from './types'
 
 export const queryClient = new QueryClient({
@@ -19,6 +20,7 @@ export const queryClient = new QueryClient({
 export const qk = {
   overview: ['overview'] as const,
   logs: ['logs'] as const,
+  requests: ['request_metrics'] as const,
   models: ['models'] as const,
   probes: ['model_probes'] as const,
   usage: (hours: string) => ['usage', hours] as const,
@@ -46,11 +48,33 @@ export function useLogs(live: boolean) {
   })
 }
 
+/**
+ * 请求指标：进程内统计 + 最近的请求。最近请求优先读 JSONL 归档（重启后也有历史），归档关闭或为空时
+ * 用内存里的最近 100 条。两个接口都是可选的（旧网关没有），读失败按空处理，不影响运行日志。
+ */
+export function useRequestMetrics(live: boolean) {
+  return useQuery({
+    queryKey: qk.requests,
+    queryFn: async () => {
+      const [metrics, archived] = await Promise.all([
+        api<RequestMetrics>('request_metrics').catch((): RequestMetrics | null => null),
+        api<{ entries: RequestEvent[] | null }>('request_logs?limit=100').catch(() => ({ entries: null })),
+      ])
+      const recent = archived.entries?.length ? archived.entries : metrics?.recent || []
+      return { metrics, recent }
+    },
+    refetchInterval: live ? 5000 : false,
+  })
+}
+
+/** 模型目录（实时查上游）：用量页借它回填积分倍率，与模型页共用同一份缓存 */
+const fetchModels = () => api<{ models: Model[] | null }>('models')
+
 /** 模型列表会实时查上游并刷新降级缓存：只在首次进入和手动「重新获取」时查 */
 export function useModels() {
   return useQuery({
     queryKey: qk.models,
-    queryFn: () => api<{ models: Model[] | null }>('models'),
+    queryFn: fetchModels,
     staleTime: Infinity,
   })
 }
@@ -64,10 +88,17 @@ export function useProbes() {
   })
 }
 
+/**
+ * 用量。积分扣除按模型的「积分倍率」来自网关缓存的模型目录：拉用量前先确保目录在 10 分钟内查过
+ * （和旧版面板同口径；模型页刚查过就直接复用，不重复打上游）。目录查询失败不影响用量本身。
+ */
 export function useUsage(hours: string) {
   return useQuery({
     queryKey: qk.usage(hours),
-    queryFn: () => api<UsageResp>('usage?hours=' + encodeURIComponent(hours)),
+    queryFn: async () => {
+      await queryClient.fetchQuery({ queryKey: qk.models, queryFn: fetchModels, staleTime: 10 * 60_000 }).catch(() => undefined)
+      return api<UsageResp>('usage?hours=' + encodeURIComponent(hours))
+    },
     placeholderData: keepPreviousData,
   })
 }

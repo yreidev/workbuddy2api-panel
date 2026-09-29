@@ -149,7 +149,7 @@ function Field({ f, value, error, onChange }: {
       <Switch isSelected={!!value} onChange={onChange}>
         <Switch.Content>
           <Switch.Control><Switch.Thumb /></Switch.Control>
-          <Label>{f.label}</Label>
+          <FieldLabel f={f} />
         </Switch.Content>
         {f.hint && <Description>{f.hint}</Description>}
       </Switch>

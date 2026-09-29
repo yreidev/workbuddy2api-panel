@@ -9,6 +9,7 @@ import type { KeyedUsage, UsagePoint } from '../../lib/types'
 import { chartPoints, dayBoundaries, minGap, nearestTicks, tickLabel, type ChartPoint } from '../../lib/usage'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { Panel, Stat } from '../../components/Panel'
+import { CreditHistory } from './CreditHistory'
 
 const WINDOWS = [
   { id: '24', label: '近 24 小时' },
@@ -69,6 +70,7 @@ export function UsagePage() {
 
       {d && (
         <>
+          <CreditHistory data={d} />
           <Panel title="按账号" desc="请求数含失败尝试">
             <UsageTable kind="account" rows={d.by_account || []} />
           </Panel>

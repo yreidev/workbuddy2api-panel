@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountHealth, activeRateLimits, creditPercent, filterAccounts, sortAccounts } from './accounts'
+import { accountHealth, activeRateLimits, creditPercent, filterAccounts, rateLimitInfo, sortAccounts } from './accounts'
 import type { Account } from './types'
 
 const base: Account = {
@@ -24,9 +24,9 @@ describe('accountHealth', () => {
 })
 
 describe('账号表辅助', () => {
-  it('只保留仍在限额中的模型', () => {
-    const a = { ...base, rate_limited_models: [{ model: 'x', until: iso(now - 1) }, { model: 'y', until: iso(now + 1000) }] }
-    expect(activeRateLimits(a, now).map((m) => m.model)).toEqual(['y'])
+  it('限额台账原样展示后端返回的条目，只去掉缺模型名的', () => {
+    const a = { ...base, rate_limited_models: [{ model: '' }, { model: 'y', until: iso(now + 1000) }, { model: 'z', kind: 'model_unavailable' }] }
+    expect(activeRateLimits(a).map((m) => m.model)).toEqual(['y', 'z'])
   })
   it('积分百分比：有总额用总额，没有按池内最高', () => {
     expect(creditPercent({ ...base, credits: 25, credits_total: 100 }, 999)).toBe(25)
@@ -42,5 +42,32 @@ describe('账号表辅助', () => {
     expect(filterAccounts(list, now, 'all', '乙').map((a) => a.uid)).toEqual(['bbb'])
     expect(sortAccounts(list, 'credits', true).map((a) => a.uid)).toEqual(['bbb', 'ccc', 'aaa'])
     expect(sortAccounts(list, null, false)).toBe(list)
+  })
+})
+
+// 从上游 internal/panel/frontend_test.go 的 TestAppJSRateLimitMeta 平移（期望值原样保留）：
+// 同时支持上游 reset_at、网关 until 和两者都没有三种形态，以及模型不可用。
+describe('rateLimitInfo', () => {
+  const t = (h: number) => new Date(2026, 8, 28, h, 0, 0).getTime()
+  const at = t(14)
+  it('上游重置时间 + 网关更早重试', () => {
+    const r = rateLimitInfo({ model: 'glm-5.3', kind: 'rate_limit', reset_at: new Date(t(16)).toISOString(), until: new Date(t(15)).toISOString() }, at)
+    expect(r.detail).toBe('预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试')
+    expect(r.short).toBe('2时00分后解封')
+    expect(r.unavailable).toBe(false)
+  })
+  it('模型不可用', () => {
+    const r = rateLimitInfo({ model: 'missing', kind: 'model_unavailable', until: new Date(t(15)).toISOString() }, at)
+    expect(r.detail).toBe('预计 1时00分 后重试')
+    expect(r.short).toBe('不可用 · 1时00分后重试')
+    expect(r.unavailable).toBe(true)
+    expect(rateLimitInfo({ model: 'missing', kind: 'model_unavailable' }, at).detail).toBe('等待重新探测')
+  })
+  it('没有任何时间', () => {
+    expect(rateLimitInfo({ model: 'glm-5.3', kind: 'rate_limit' }, at).detail).toBe('预计解封时间未知')
+  })
+  it('只有网关重试时间；Go 零值时间当作没有', () => {
+    const r = rateLimitInfo({ model: 'glm-5.3', until: new Date(t(15)).toISOString(), reset_at: '0001-01-01T00:00:00Z' }, at)
+    expect(r.detail).toBe('预计 2026-09-28 15:00 恢复（剩余 1时00分）')
   })
 })

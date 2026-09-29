@@ -21,9 +21,15 @@ export interface ModelCost {
   samples?: number
 }
 
-/** 模型级限额台账（issue #36）：该账号的某个模型还在限额中，预计何时恢复 */
+/**
+ * 模型级限额台账（issue #36）：该账号的某个模型暂时不能用。
+ * kind：rate_limit（6004 限流）/ model_unavailable（11102 模型不可用）。
+ * until 是网关最早重试时刻，reset_at 是上游「将在 … 重置」的原始时刻（可能没有）。
+ */
 export interface RateLimitedModel {
   model: string
+  /** rate_limit / model_unavailable */
+  kind?: string
   until?: string
   reset_at?: string
   reason?: string
@@ -125,8 +131,28 @@ export interface UsageAgg {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  /** 上游 usage.credit 累计（只统计明确返回了积分的请求） */
+  credits?: number
+  /** 带积分的请求数（区分「没返回积分」和「真的扣了 0」） */
+  credit_samples?: number
+  /** 同时有积分和 token 的请求的 token 合计（积分 / 1M Token 的分母） */
+  credit_tokens?: number
+  credits_per_1m_tokens?: number
   avg_latency_ms: number
   avg_tokens_per_second: number
+}
+
+/** 积分扣除按账号 / 按模型（模型行带请求时生效的积分倍率）聚合的一行 */
+export interface CreditUsage {
+  key: string
+  realm?: string
+  nickname?: string
+  rate?: string
+  requests: number
+  credits: number
+  credit_samples: number
+  credit_tokens: number
+  credits_per_1m_tokens: number
 }
 
 export interface KeyedUsage extends UsageAgg {
@@ -148,6 +174,8 @@ export interface UsageResp {
   by_account: KeyedUsage[] | null
   by_model: KeyedUsage[] | null
   series: UsagePoint[] | null
+  credit_by_account?: CreditUsage[] | null
+  credit_by_model?: CreditUsage[] | null
   buckets: number
   file_bytes: number
   since?: string
@@ -307,4 +335,47 @@ export interface ImportResp {
   imported: number
   skipped: number
   errors: string[] | null
+}
+
+/** 一次请求的元数据（不含提示词、响应正文与凭证） */
+export interface RequestEvent {
+  time: string
+  request_id: string
+  path: string
+  /** 账号展示名（昵称(uid 前 8 位)） */
+  account?: string
+  model?: string
+  status: number
+  ok: boolean
+  /** success / http_error / stream_error / interrupted */
+  outcome: string
+  duration_ms: number
+  ttfb_ms?: number
+  attempts?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+  credit?: number
+  credit_known: boolean
+}
+
+export interface RequestMetrics {
+  started_at?: string
+  completed?: number
+  in_flight?: number
+  succeeded?: number
+  failed?: number
+  success_rate?: number
+  http_success_rate?: number
+  avg_duration_ms?: number
+  /** 最近的请求，最新的在前 */
+  recent?: RequestEvent[] | null
+  archive?: {
+    enabled: boolean
+    dir?: string
+    files?: number
+    bytes?: number
+    dropped_writes?: number
+    last_error?: string
+  }
 }

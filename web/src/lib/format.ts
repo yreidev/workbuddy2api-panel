@@ -114,3 +114,41 @@ export function until(ms: number, now = Date.now()): string {
   if (h < 24) return h + ' 小时后'
   return Math.ceil(diff / 86400000) + ' 天后'
 }
+
+/** 本地时间 yyyy-MM-dd HH:mm（与旧版面板的限流解封时间同格式） */
+export function fmtLocalDateTime(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+}
+
+export function fmtBytes(bytes?: number | null): string {
+  const n = Number(bytes || 0)
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
+}
+
+/** 去掉小数末尾的 0：1.50 → 1.5，2.00 → 2 */
+function trimFixed(s: string): string {
+  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s
+}
+
+/** 积分：最多两位小数 */
+export function fmtCredit(n?: number | null): string {
+  const v = Number(n || 0)
+  return Number.isFinite(v) ? trimFixed(v.toFixed(2)) : '—'
+}
+
+/** 积分 / 1M Token。没有积分样本或没有匹配的 token 时不伪造比例 */
+export function fmtCreditRatio(v?: number | null, samples?: number | null, tokens?: number | null): string {
+  if (!samples || !tokens) return '—'
+  const n = Number(v || 0)
+  return Number.isFinite(n) ? trimFixed(n.toFixed(4)) + ' / 1M' : '—'
+}
+
+/** 积分倍率：0.5 → x0.5 */
+export function fmtModelRate(rate?: string | null): string {
+  const s = String(rate || '').trim()
+  return s ? 'x' + s : '—'
+}
