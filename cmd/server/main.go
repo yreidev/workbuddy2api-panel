@@ -313,19 +313,54 @@ func main() {
 		// （长流式生成合法时长可达数分钟，全局 WriteTimeout 会误杀在途 SSE）。
 		IdleTimeout: 120 * time.Second,
 	}
+	grace, graceErr := shutdownGrace(os.Getenv("WB2A_SHUTDOWN_TIMEOUT"))
+	if graceErr != nil {
+		log.Printf("WB2A_SHUTDOWN_TIMEOUT 无效（%v），优雅停机沿用默认 %s", graceErr, grace)
+	}
+	// 优雅停机：收到 SIGTERM/SIGINT 后 /readyz 立刻转 503（编排系统据此摘流量），
+	// 先落盘，再 Shutdown——停止接新连接，等在途请求（含流式对话）结束，最多等 grace。
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
+		server.SetDraining()
 		p.Flush() // 信号触发：先落盘再做优雅停机
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		log.Printf("收到停止信号：/readyz 已转 503，停止接新连接，最多等 %s 让在途请求结束", grace)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("等待 %s 后仍有请求未结束，强制退出：%v", grace, err)
+		}
 	}()
 
 	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
 	}
+	// Shutdown 一开始 ListenAndServe 就会返回 ErrServerClosed，此时在途请求还没结束：
+	// 必须等 Shutdown 返回再退出 main，否则进程立刻结束，等待时间形同虚设，
+	// 后面的 defer（池状态最后一次落盘、用量与请求日志收尾）也会和在途请求抢跑。
+	<-shutdownDone
 	log.Printf("bye")
+}
+
+// defaultShutdownGrace 优雅停机默认最长等待（未设置 WB2A_SHUTDOWN_TIMEOUT 时，与历史行为一致）。
+const defaultShutdownGrace = 5 * time.Second
+
+// shutdownGrace 解析 WB2A_SHUTDOWN_TIMEOUT（Go 时长，如 570s、10m）。未设置返回默认 5 秒；
+// 格式不对或不是正数也回落默认，并返回错误供启动日志提示。
+func shutdownGrace(v string) (time.Duration, error) {
+	if v == "" {
+		return defaultShutdownGrace, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return defaultShutdownGrace, err
+	}
+	if d <= 0 {
+		return defaultShutdownGrace, fmt.Errorf("%q 不是正数", v)
+	}
+	return d, nil
 }
 
 // panelListenPath 从 listen 地址提取 ":port" 形式，用于启动日志拼面板 URL

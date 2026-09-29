@@ -205,7 +205,7 @@ flowchart LR
 
 ### 方式〇：GHCR 镜像（免克隆免构建）
 
-CI 会自动构建多架构镜像（`amd64` / `arm64`）并发布到 GHCR，`git clone` 之外的部署路径：
+CI 会自动构建镜像（`linux/amd64`）并发布到 GHCR，`git clone` 之外的部署路径：
 
 ```bash
 # 1. 准备配置与数据目录
@@ -409,6 +409,10 @@ curl -s http://localhost:7863/v1/chat/completions \
 
 `WB2A_LISTEN` · `WB2A_API_KEY` · `WB2A_AUTH_DIR` · `WB2A_STATE_FILE` · `WB2A_MAX_BODY_MB` · `WB2A_SOFT_RATE`(duration) · `WB2A_SOFT_RATE_MAX`(duration) · `WB2A_TIMEOUT_SECONDS` · `WB2A_HEADER_TIMEOUT_SECONDS` · `WB2A_IDLE_TIMEOUT_SECONDS` · `WB2A_USER_AGENT` · `WB2A_SANITIZE_FINGERPRINTS`(bool) · `WB2A_PROMPT_MODE` · `WB2A_PROMPT_FILE`
 
+`WB2A_SHUTDOWN_TIMEOUT`(duration，只能用环境变量设置)：收到停止信号后最多等在途请求（含流式对话）多久，默认 `5s`。
+停机时先让 `/readyz` 返回 503、落盘，再停止接新连接、等在途请求结束，超时才强制退出。
+k3s 滚动更新时建议设成 `570s`，并配 `preStop` 先 `sleep 10`、`terminationGracePeriodSeconds` 不小于 600。
+
 ## 核心行为语义
 
 ### 系统提示词体系
@@ -586,8 +590,9 @@ http://127.0.0.1:7863/panel/
 | `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 1h；失败返回空列表 + 5min 负缓存）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |
 | `GET /status` | Bearer（`api_key` 非空时） | 账号状态汇总 + 每账号详情（积分/冷却/熔断/在途/粘性） |
 | `GET /healthz` | 无 | 健康检查：有 healthy 且未占满账号返回 200，否则 503；响应带身份标识（见下） |
+| `GET /readyz` | 无 | 就绪检查：平时 200（与账号是否可用无关，空池也是 200），收到停止信号后 503。给 k3s 等编排系统的就绪探针用；`/healthz` 在账号全忙或没账号时本来就是 503，不适合做就绪判断 |
 
-> 鉴权规则：仅当 `api_key` 非空才校验 `Authorization: Bearer <api_key>`；**`api_key` 为空时上述端点直接放行**；`/healthz` 恒无鉴权。
+> 鉴权规则：仅当 `api_key` 非空才校验 `Authorization: Bearer <api_key>`；**`api_key` 为空时上述端点直接放行**；`/healthz`、`/readyz` 恒无鉴权。
 
 `/healthz` 响应示例（200 / 503 同结构，仅状态码与计数变化）：
 

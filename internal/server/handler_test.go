@@ -1179,6 +1179,40 @@ func TestStatusPortraitFields(t *testing.T) {
 	}
 }
 
+// TestReadyz 就绪探针：平时 200（与账号是否可用无关，空池也是 200）；停机开始后 503，/healthz 不受影响。
+func TestReadyz(t *testing.T) {
+	t.Cleanup(func() { draining.Store(false) })
+	h := NewHandler(Config{Pool: pool.New(""), Upstream: upstream.New(), APIKey: "k"})
+	get := func(path string) (int, map[string]any) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s not json: %v body=%s", path, err, rec.Body)
+		}
+		if rec.Header().Get("X-Service") != ServiceName {
+			t.Errorf("%s X-Service=%q", path, rec.Header().Get("X-Service"))
+		}
+		return rec.Code, resp
+	}
+
+	// 空池：/healthz 503（暂不可服务），/readyz 仍 200（实例没在停机，不该被摘流量）；无需鉴权
+	if code, resp := get("/readyz"); code != http.StatusOK || resp["ready"] != true {
+		t.Fatalf("readyz before drain code=%d resp=%v want 200 ready=true", code, resp)
+	}
+	if code, _ := get("/healthz"); code != http.StatusServiceUnavailable {
+		t.Fatalf("healthz code=%d want 503 (empty pool)", code)
+	}
+
+	SetDraining()
+	if code, resp := get("/readyz"); code != http.StatusServiceUnavailable || resp["ready"] != false || resp["draining"] != true {
+		t.Fatalf("readyz after drain code=%d resp=%v want 503 ready=false draining=true", code, resp)
+	}
+	if code, _ := get("/healthz"); code != http.StatusServiceUnavailable {
+		t.Fatalf("healthz after drain code=%d want 503 (unchanged semantics)", code)
+	}
+}
+
 // TestHealthzEmptyPool 空池（healthy=0）→ 503，表示暂不可服务。
 func TestHealthzEmptyPool(t *testing.T) {
 	h := NewHandler(Config{Pool: pool.New(""), Upstream: upstream.New()})

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -130,6 +131,7 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
+	h.mux.HandleFunc("GET /readyz", h.readyz)
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}
@@ -164,6 +166,26 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// draining 进程收到停止信号后置位（main 调 SetDraining），此后 /readyz 恒返回 503。
+// 全局而非挂在 Handler 上：停机是进程级状态，信号处理处拿不到 Handler 实例也能标记。
+var draining atomic.Bool
+
+// SetDraining 标记开始停机：/readyz 立刻转 503，让编排系统（k3s 就绪探针）把本实例摘出流量；
+// 已建立的连接与在途请求（含流式对话）照常处理完，由 http.Server.Shutdown 负责等待。
+func SetDraining() { draining.Store(true) }
+
+// readyz 就绪探针：平时 200，停机开始后 503。
+// 与 /healthz 分开：/healthz 在账号全忙或没账号时本来就返回 503（表示暂不可服务），
+// 拿它做就绪判断会把「号忙」误当成「实例要下线」；/readyz 只反映进程是否在停机。恒无鉴权。
+func (h *Handler) readyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Service", ServiceName)
+	if draining.Load() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "draining": true, "service": ServiceName})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ready": true, "service": ServiceName})
 }
 
 func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
