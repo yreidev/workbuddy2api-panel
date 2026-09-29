@@ -31,7 +31,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # github.repository 自动小写化，得到 ghcr.io/linguo2625469/workbuddy2api-panel
+  # github.repository 自动小写化，得到 ghcr.io/yreidev/workbuddy2api-panel
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
