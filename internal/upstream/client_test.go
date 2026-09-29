@@ -561,8 +561,36 @@ func TestFetchModelsDefaultEffortDualKeyAndSizes(t *testing.T) {
 	if g.MaxAllowedSize != 1000000 || g.MaxTokens != 48000 || g.Credits != "x0.79" {
 		t.Errorf("glm-5.3 sizes: maxAllowed=%d maxOut=%d credits=%q", g.MaxAllowedSize, g.MaxTokens, g.Credits)
 	}
+	if got := c.ModelRate("cn", "glm-5.3"); got != "0.79" {
+		t.Errorf("glm-5.3 ModelRate=%q want 0.79", got)
+	}
 	if au := byID["auto"]; au.DefaultEffort != "high" {
 		t.Errorf("auto DefaultEffort=%q want high (from legacy effort key)", au.DefaultEffort)
+	}
+}
+
+func TestModelRateCacheEffectiveAndNormalized(t *testing.T) {
+	c := New()
+	factor := 0.5
+	c.storeModelRates("cn", []ModelInfo{
+		{ID: "base", Credits: "x0.50 credits"},
+		{ID: "promo", Credits: "x0.80", PromoFactor: &factor, PromoCredits: "0.50x"},
+	})
+	if got := c.ModelRate("cn", "base"); got != "0.5" {
+		t.Fatalf("base rate=%q want 0.5", got)
+	}
+	if got := c.ModelRate("cn", "promo"); got != "0.5" {
+		t.Fatalf("promo rate=%q want 0.5", got)
+	}
+	if got := normalizeModelRate("x0.05 credits"); got != "0.05" {
+		t.Fatalf("normalizeModelRate=%q want 0.05", got)
+	}
+	c.storeModelRates("cn", []ModelInfo{{ID: "base", Credits: "x0.79"}})
+	if got := c.ModelRate("cn", "base"); got != "0.79" {
+		t.Fatalf("refreshed base rate=%q want 0.79", got)
+	}
+	if got := c.ModelRate("cn", "promo"); got != "" {
+		t.Fatalf("stale promo rate=%q want empty after full refresh", got)
 	}
 }
 

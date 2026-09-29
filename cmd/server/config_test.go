@@ -48,6 +48,30 @@ func TestPanelPackageDetailLimit(t *testing.T) {
 	}
 }
 
+func TestLoggingDefaults(t *testing.T) {
+	c := Default()
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Logging.RequestArchiveEnabled || c.Logging.RequestRetentionDays != 7 || c.Logging.RequestArchiveMaxMB != 100 {
+		t.Fatalf("logging defaults = %+v", c.Logging)
+	}
+	configured, err := ParseConfig([]byte(`{"logging":{"request_archive_enabled":false,"request_retention_days":30,"request_archive_max_mb":500}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.Logging.RequestArchiveEnabled || configured.Logging.RequestRetentionDays != 30 || configured.Logging.RequestArchiveMaxMB != 500 {
+		t.Fatalf("configured logging = %+v", configured.Logging)
+	}
+	fallback, err := ParseConfig([]byte(`{"logging":{"request_retention_days":0,"request_archive_max_mb":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Logging.RequestRetentionDays != 7 || fallback.Logging.RequestArchiveMaxMB != 100 {
+		t.Fatalf("logging fallback = %+v", fallback.Logging)
+	}
+}
+
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")

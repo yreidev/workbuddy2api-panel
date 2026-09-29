@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 )
 
 // chatSeq 进程级请求序号。
@@ -32,14 +34,22 @@ func SetChatLogOutput(w io.Writer) { chatLogOut = w }
 
 // chatStat 单个 chat 请求的日志统计；handler 挂 defer，请求出口后落一行。
 type chatStat struct {
-	start  time.Time
-	model  string
-	mode   string // "stream" | "sync"
-	uid    string // 完整 uid，展示时只取前 8 位
-	nick   string // 账号昵称（随选号同步），流水行经 logfmt.Label 拼成 "昵称(uid8)"
-	ttfb   time.Duration
-	toks   int // <0 表示 usage 缺失 → 显示 "-"
-	status int
+	start            time.Time
+	model            string
+	mode             string // "stream" | "sync"
+	uid              string // 完整 uid，展示时只取前 8 位
+	nick             string // 账号昵称（随选号同步），流水行经 logfmt.Label 拼成 "昵称(uid8)"
+	ttfb             time.Duration
+	toks             int // <0 表示 usage 缺失 → 显示 "-"
+	status           int
+	requestID        string
+	outcome          string
+	attempts         int
+	credit           float64
+	hasCredit        bool
+	promptTokens     int64
+	completionTokens int64
+	totalTokens      int64
 
 	logged bool
 }
@@ -59,7 +69,8 @@ func (s *chatStat) done() {
 		return
 	}
 	s.logged = true
-	logChatRow(s.ttfb, time.Since(s.start), s.model, s.mode, s.uid, s.nick, s.status, s.toks)
+	logChatRowEx(s.ttfb, time.Since(s.start), s.model, s.mode, s.uid, s.nick, s.status, s.toks,
+		s.requestID, s.outcome, s.attempts, s.credit, s.hasCredit)
 }
 
 // chatStatsReader 在流式透传时抓取 SSE 末帧的 usage.completion_tokens 精确值，
@@ -77,9 +88,10 @@ type chatStatsReader struct {
 	hasCompletionTokens bool
 	hasTotalTokens      bool
 	// credit 上游末帧 usage.credit（本次真实扣费积分），供成本台账（NoteModelCost）。
-	hasCredit bool
-	credit    float64
-	pend      []byte // 已读未返回的行缓存
+	hasCredit  bool
+	credit     float64
+	errorFrame bool
+	pend       []byte // 已读未返回的行缓存
 }
 
 // newChatStatsReaderSince 以 since 为 TTFB 计时起点（通常是请求进入 handler 的时刻）。
@@ -126,6 +138,7 @@ func (s *chatStatsReader) parseSSELine(line string) {
 		s.ttfb = time.Since(s.start)
 	}
 	var chunk struct {
+		Error json.RawMessage `json:"error"`
 		Usage *struct {
 			PromptTokens     *int     `json:"prompt_tokens"`
 			CompletionTokens *int     `json:"completion_tokens"`
@@ -134,7 +147,13 @@ func (s *chatStatsReader) parseSSELine(line string) {
 		} `json:"usage"`
 	}
 	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
+		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
+			s.errorFrame = true
+		}
 		return
+	}
+	if len(chunk.Error) > 0 {
+		s.errorFrame = true
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true
@@ -153,6 +172,9 @@ func (s *chatStatsReader) parseSSELine(line string) {
 		s.credit = *chunk.Usage.Credit
 	}
 }
+
+// SawErrorFrame 报告流中是否透传过 SSE error 帧。
+func (s *chatStatsReader) SawErrorFrame() bool { return s.errorFrame }
 
 // Read 返回原始数据，同时解析统计 TTFB/token。
 func (s *chatStatsReader) Read(p []byte) (int, error) {
@@ -264,6 +286,88 @@ func uidPrefix(uid string) string {
 	return logfmt.UID8(uid)
 }
 
+type requestTraceKey struct{}
+
+// requestTrace 在一次 chat 请求内共享标识与最终统计，ServeHTTP 出口统一记账。
+type requestTrace struct {
+	id    string
+	start time.Time
+	stat  *chatStat
+}
+
+func requestTraceFrom(r *http.Request) *requestTrace {
+	if r == nil {
+		return nil
+	}
+	tr, _ := r.Context().Value(requestTraceKey{}).(*requestTrace)
+	return tr
+}
+
+func (t *requestTrace) event(status int) reqlog.Event {
+	e := reqlog.Event{
+		Time:      t.start,
+		RequestID: t.id,
+		Path:      "/v1/chat/completions",
+		Status:    status,
+	}
+	duration := time.Since(t.start)
+	e.DurationMs = duration.Milliseconds()
+	if e.DurationMs < 1 {
+		e.DurationMs = 1
+	}
+	if t.stat != nil {
+		s := t.stat
+		e.Account = logfmt.Label(s.uid, s.nick)
+		e.Model = s.model
+		e.Outcome = s.outcome
+		e.TTFBMs = s.ttfb.Milliseconds()
+		e.Attempts = s.attempts
+		e.PromptTokens = s.promptTokens
+		e.CompletionTokens = s.completionTokens
+		e.TotalTokens = s.totalTokens
+		e.Credit = s.credit
+		e.HasCredit = s.hasCredit
+	}
+	if e.Outcome == "" {
+		if status >= 200 && status < 300 {
+			e.Outcome = reqlog.OutcomeSuccess
+		} else {
+			e.Outcome = reqlog.OutcomeHTTPError
+		}
+	}
+	e.OK = status >= 200 && status < 300 && e.Outcome == reqlog.OutcomeSuccess
+	return e
+}
+
+// responseObserver 捕获 handler 实际写出的 HTTP 状态，同时保留 Flusher/Unwrap，
+// 避免破坏 SSE 逐帧刷新。
+type responseObserver struct {
+	http.ResponseWriter
+	status int
+}
+
+func (o *responseObserver) WriteHeader(code int) {
+	if o.status == 0 {
+		o.status = code
+	}
+	o.ResponseWriter.WriteHeader(code)
+}
+
+func (o *responseObserver) Write(p []byte) (int, error) {
+	if o.status == 0 {
+		o.status = http.StatusOK
+	}
+	return o.ResponseWriter.Write(p)
+}
+
+func (o *responseObserver) Flush() {
+	if f, ok := o.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (o *responseObserver) Unwrap() http.ResponseWriter { return o.ResponseWriter }
+
 // 请求流水行的固定列宽（显示列宽，非字节）。取固定宽度而不是让内容自然长度撑开，
 // 是为了让 stdout 里成百上千行能竖着扫——否则模型名长短不一、中文昵称按字节补空格
 // 错位，根本没法用肉眼对齐着一列列看（这正是上一版 11 字节硬截断要解决的问题）。
@@ -286,6 +390,13 @@ const (
 //     uid8 时人眼无法判断是哪个号，要辨认必须再查 auths/，排障多一跳；
 //   - toks<0 表示 usage 缺失，显示 "-"。
 func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int) {
+	logChatRowEx(ttfb, total, model, mode, uid, nick, status, toks, "", "", 0, 0, false)
+}
+
+// logChatRowEx 是带请求 ID、结果、重试和积分字段的扩展流水行。旧调用保持原格式；
+// requestID 非空时才追加扩展字段。
+func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int,
+	requestID, outcome string, attempts int, credit float64, hasCredit bool) {
 	if !chatLogEnabled {
 		return
 	}
@@ -307,7 +418,21 @@ func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status
 	if ttfb > 0 {
 		ttfbMS = fmt.Sprintf("%dms", ttfb.Milliseconds())
 	}
-	fmt.Fprintf(chatLogOut, "| #%03d | %s | %s | %s | %d | %s | TTFB=%s | tok=%s | %s | total=%.1fs |\n",
+	extra := ""
+	if requestID != "" {
+		if outcome == "" {
+			outcome = reqlog.OutcomeHTTPError
+			if status >= 200 && status < 300 {
+				outcome = reqlog.OutcomeSuccess
+			}
+		}
+		creditField := "-"
+		if hasCredit {
+			creditField = fmt.Sprintf("%.4f", credit)
+		}
+		extra = fmt.Sprintf(" rid=%s | out=%s | try=%d | credit=%s |", requestID, outcome, attempts, creditField)
+	}
+	fmt.Fprintf(chatLogOut, "| #%03d | %s | %s | %s | %d | %s | TTFB=%s | tok=%s | %s | total=%.1fs |%s\n",
 		seq,
 		time.Now().Format("15:04:05"),
 		model,
@@ -318,5 +443,6 @@ func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status
 		logfmt.Pad(tokField, chatTokWidth),
 		logfmt.Pad(tokpsField, chatRateWidth),
 		total.Seconds(),
+		extra,
 	)
 }

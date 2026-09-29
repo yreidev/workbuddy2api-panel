@@ -27,6 +27,15 @@ type Config struct {
 		PackageDetailLimit int `json:"package_detail_limit"`
 	} `json:"panel"`
 
+	Logging struct {
+		// RequestArchiveEnabled 请求元数据 JSONL 归档开关，缺省 true。
+		RequestArchiveEnabled bool `json:"request_archive_enabled"`
+		// RequestRetentionDays 归档保留天数，缺省 7；<=0 回落默认。
+		RequestRetentionDays int `json:"request_retention_days"`
+		// RequestArchiveMaxMB 归档总上限（MiB），缺省 100；<=0 回落默认。
+		RequestArchiveMaxMB int `json:"request_archive_max_mb"`
+	} `json:"logging"`
+
 	Cooldown struct {
 		// hard_credit / err_threshold / err_cooldown 三个历史键已退役：
 		// 硬冷却固定为次日 04:00（CooldownUntilTomorrow4AM），连续错误语义并入熔断器。
@@ -189,6 +198,9 @@ func Default() *Config {
 	c.Cooldown.SoftRate = "600s"
 	c.Cooldown.SoftRateMax = "2h"
 	c.Panel.PackageDetailLimit = 5
+	c.Logging.RequestArchiveEnabled = true
+	c.Logging.RequestRetentionDays = 7
+	c.Logging.RequestArchiveMaxMB = 100
 	c.Schedule.CheckinHours = []int{9, 21}
 	c.Schedule.TravelHours = []int{9, 21}
 	c.Schedule.ActivityHours = []int{10}
@@ -397,6 +409,12 @@ func (c *Config) normalize() error {
 	if c.Panel.PackageDetailLimit <= 0 {
 		c.Panel.PackageDetailLimit = 5
 	}
+	if c.Logging.RequestRetentionDays <= 0 {
+		c.Logging.RequestRetentionDays = 7
+	}
+	if c.Logging.RequestArchiveMaxMB <= 0 {
+		c.Logging.RequestArchiveMaxMB = 100
+	}
 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
 		return fmt.Errorf("cooldown.soft_rate: %w", err)
 	}
@@ -500,6 +518,8 @@ func (c *Config) normalize() error {
 	}
 	if len(c.Schedule.BlackcatHours) == 0 {
 		c.Schedule.BlackcatHours = []int{23}
+	}
+	if len(c.Schedule.GrowthHours) == 0 {
 		c.Schedule.GrowthHours = []int{1}
 	}
 	// 余额后台刷新：启用时 minutes<=0 回落默认 5；关闭时 interval 保持 0（不启动）。

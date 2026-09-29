@@ -20,6 +20,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
 
 // TestMain 默认关闭聊天表格日志（chatLogEnabled=false），消除 go test 期间的 stdout 噪音。
@@ -261,6 +262,45 @@ func TestChatStreamPassthrough(t *testing.T) {
 	}
 	if st.TokenUsage.LastLatencyMs < 1 || st.TokenUsage.LastTokensPerSecond == nil || *st.TokenUsage.LastTokensPerSecond <= 0 {
 		t.Errorf("latest performance=%+v", st.TokenUsage)
+	}
+}
+
+func TestChatRecordsCreditForStreamAndSync(t *testing.T) {
+	const sseCredit = "data: {\"id\":\"chatcmpl-credit\",\"object\":\"chat.completion.chunk\",\"created\":1753600000,\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10,\"credit\":1.25}}\n\n" +
+		"data: [DONE]\n\n"
+	for _, stream := range []bool{false, true} {
+		name := "sync"
+		if stream {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			up := newFakeUpstream(t, func(string) (int, string, bool) {
+				return 200, sseCredit, true
+			})
+			rec := usage.New("")
+			h := NewHandler(Config{
+				Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+				Upstream: up,
+				Usage:    rec,
+			})
+			body := `{"model":"glm-5.2","messages":[]}`
+			if stream {
+				body = `{"model":"glm-5.2","stream":true,"messages":[]}`
+			}
+			recorder := httptest.NewRecorder()
+			h.ServeHTTP(recorder, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("code=%d body=%s", recorder.Code, recorder.Body)
+			}
+			s := rec.Snapshot(24, nil)
+			if s.Totals.Credits != 1.25 || s.Totals.CreditSamples != 1 || s.Totals.CreditTokens != 10 || s.Totals.CreditsPer1MTokens != 125000 {
+				t.Fatalf("usage totals = %+v, want credit=1.25 tokens=10 ratio=125000", s.Totals)
+			}
+			if len(s.CreditByAccount) != 1 || s.CreditByAccount[0].Key != "u1" ||
+				len(s.CreditByModel) != 1 || s.CreditByModel[0].Key != "glm-5.2" {
+				t.Fatalf("credit dimensions = %+v / %+v", s.CreditByAccount, s.CreditByModel)
+			}
+		})
 	}
 }
 
@@ -698,6 +738,9 @@ func TestChat6004WithoutResetFallsBackToBackoff(t *testing.T) {
 	// 冷却时长 = 注入 soft 基数(60s)，非解析时间（无重置文案）。
 	if st.CoolRemaining <= 0 || st.CoolRemaining > 60 {
 		t.Errorf("cool_remaining_sec=%d want ~60 (soft base, not parsed)", st.CoolRemaining)
+	}
+	if len(st.RateLimitedModels) != 1 || st.RateLimitedModels[0].Model != "glm-5.3" || st.RateLimitedModels[0].Kind != "rate_limit" {
+		t.Fatalf("rate-limited models=%+v, want audit row for glm-5.3", st.RateLimitedModels)
 	}
 }
 
@@ -1459,9 +1502,9 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 				Body:       io.NopCloser(strings.NewReader(sseOK)),
 			}, nil
 		})},
-		ChatBaseCN:           "https://fake.example",
-		SanitizeFingerprints: true, // 开启清洗层（与生产一致）
+		ChatBaseCN: "https://fake.example",
 	}
+	up.SanitizeFingerprints.Store(true) // 开启清洗层（与生产一致）
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	const customSys = "我是网关自有提示词"
 	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "custom", PromptText: customSys})

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -404,8 +405,16 @@ func parseRetryNumber(v, headerName string) (time.Duration, bool) {
 	}
 	switch headerName {
 	case "Retry-After":
+		// 先做上限校验再乘 time.Second：16 位数字乘 1e9 会溢出 int64 回绕成
+		// 小正数，进而通过调用方的 retryAfterSanity 校验被当作合法等待时长。
+		if n > int64(retryAfterSanity/time.Second) {
+			return 0, false
+		}
 		return time.Duration(n) * time.Second, true
 	case "Retry-After-Ms":
+		if n > int64(retryAfterSanity/time.Millisecond) {
+			return 0, false
+		}
 		return time.Duration(n) * time.Millisecond, true
 	default: // X-Ratelimit-Reset：epoch → 剩余量
 		sec := n
@@ -616,13 +625,17 @@ type Client struct {
 	// thinking.go 补档：缺显式 effort 时优先用模型声明默认档，空串回退硬编码 high。
 	// 与 efforts 同 realm 分层桶（同 C-2 隔离原则），共用 effortsMu。
 	defaultEfforts map[string]map[string]string
+	// modelRates 缓存各模型当前生效积分倍率（规范化数值，如 "0.5"）。
+	// 与 efforts 共用 realm 分层和锁；每次成功刷新模型目录时整体替换对应域。
+	modelRates map[string]map[string]string
 
 	// globalModels 缓存 global 模型名目录探测结果（成功 ∩ 静态 overlay；
 	// 1h TTL + 5min 负缓存），见 global_models.go。按实例持有，测试新建 Client 即隔离。
 	globalModels fetchGlobalModelsCache
 
 	// SanitizeFingerprints 出站请求体黑名单指纹脱敏开关（默认 true；false 完全还原）。
-	SanitizeFingerprints bool
+	// 面板保存配置热改 + chat 热路径并发读写，用 atomic.Bool 消除数据竞争。
+	SanitizeFingerprints atomic.Bool
 
 	// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
 	// 空 = 默认官方形态：chat/refresh/FetchModels 走
@@ -674,17 +687,18 @@ type Client struct {
 // kongjianguan 4 连击实测经验）。
 func New() *Client {
 	tr := newTransport()
-	return &Client{
-		HTTP:                 &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:             &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
-		SanitizeFingerprints: true,
-		ChatBaseCN:           "https://copilot.tencent.com",
-		BillingBaseCN:        "https://www.codebuddy.cn",
-		WebBaseCN:            "https://www.workbuddy.cn",
+	c := &Client{
+		HTTP:         &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP:     &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		ChatBaseCN:   "https://copilot.tencent.com",
+		BillingBaseCN: "https://www.codebuddy.cn",
+		WebBaseCN:    "https://www.workbuddy.cn",
 		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：
 		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。
 		GlobalEnabled: true,
 	}
+	c.SanitizeFingerprints.Store(true)
+	return c
 }
 
 // chatHTTP 返回聊天专用 client；未设置（如测试只注入 HTTP）时回落 HTTP。
@@ -768,7 +782,6 @@ func (c *Client) chatBase(a *auth.Auth) string {
 }
 
 // prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
-// prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
 // realm 为账号 Realm()（cn/global），供 efforts 缓存分桶（跨域 effort 集合不互相污染）。
 func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []byte {
 	efforts, defs := c.effortsSnapshot(realm), c.defaultEffortsSnapshot(realm)
@@ -778,7 +791,7 @@ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []b
 		//（issue #84：往 WorkBuddy 上游发 low/max 非法，须降级到 high）。
 		efforts, defs = globalEffortMap(efforts, defs)
 	}
-	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints, efforts, defs)
+	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints.Load(), efforts, defs)
 	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
 	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。
 	body = InjectPromptCacheKey(body, uid, conversationID)
@@ -1245,6 +1258,7 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("models api returned empty list")
 	}
+	c.storeModelRates(a.Realm(), out)
 	// 刷新 effort 能力缓存（供请求体降级；无 supportedEfforts 的模型不入桶）。
 	// 空桶时跳过写：避免「某探测无档位数据」清掉既有桶。
 	cache := make(map[string][]string, len(out))
@@ -1545,6 +1559,71 @@ func (c *Client) storeEfforts(realm string, efforts map[string][]string, defs ma
 	}
 	c.efforts[k] = efforts
 	c.defaultEfforts[k] = defs
+}
+
+// normalizeModelRate 把上游倍率原文规范化为可比较的数值键。
+// 兼容 "x0.05" / "x0.05 credits" / "0.50x" 等形态；无法数值化时保留去除
+// credits 后缀与空白后的原文，避免编造倍率。
+func normalizeModelRate(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if strings.HasSuffix(strings.ToLower(s), "credits") {
+		s = strings.TrimSpace(s[:len(s)-len("credits")])
+	}
+	if strings.HasPrefix(strings.ToLower(s), "x") {
+		s = strings.TrimSpace(s[1:])
+	} else if strings.HasSuffix(strings.ToLower(s), "x") {
+		s = strings.TrimSpace(s[:len(s)-1])
+	}
+	if s == "" {
+		return ""
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// effectiveModelRate 返回模型当前生效倍率：有机器可读优惠时取折扣价，
+// 否则取牌价；两者均缺省时为空。
+func effectiveModelRate(mi ModelInfo) string {
+	if mi.PromoFactor != nil && strings.TrimSpace(mi.PromoCredits) != "" {
+		return normalizeModelRate(mi.PromoCredits)
+	}
+	return normalizeModelRate(mi.Credits)
+}
+
+// storeModelRates 按 realm 整体替换模型倍率快照。目录成功刷新但没有可解析
+// 倍率时写入空桶，使旧倍率不会继续冒充当前价。
+func (c *Client) storeModelRates(realm string, infos []ModelInfo) {
+	rates := make(map[string]string, len(infos))
+	for _, mi := range infos {
+		if mi.ID == "" {
+			continue
+		}
+		if rate := effectiveModelRate(mi); rate != "" {
+			rates[mi.ID] = rate
+		}
+	}
+	c.effortsMu.Lock()
+	defer c.effortsMu.Unlock()
+	if c.modelRates == nil {
+		c.modelRates = make(map[string]map[string]string)
+	}
+	c.modelRates[realmKey(realm)] = rates
+}
+
+// ModelRate 返回最近成功刷新的指定域模型生效倍率；未知返回空串。
+func (c *Client) ModelRate(realm, model string) string {
+	if c == nil || model == "" {
+		return ""
+	}
+	c.effortsMu.RLock()
+	defer c.effortsMu.RUnlock()
+	return c.modelRates[realmKey(realm)][model]
 }
 
 // GlobalEffortSnapshot 导出 global 域 effort 能力缓存（探测下发 ∪ 静态兜底合并后的桶），

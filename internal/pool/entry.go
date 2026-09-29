@@ -123,6 +123,8 @@ type ModelCostStatus struct {
 // RateLimitedModel 单个被限流模型的台账行（issue #36）。
 type RateLimitedModel struct {
 	Model string `json:"model"`
+	// Kind 区分限流与模型不可用：6004 是 rate_limit，11102 是 model_unavailable。
+	Kind string `json:"kind"`
 	// Until 冷却到期时刻 = 该模型的独立冷却截止（modelCooldowns[m].Until，截断后），
 	// 多模型限流时不再等于 Status.Until（账号级）。
 	Until time.Time `json:"until,omitempty"`
@@ -149,6 +151,9 @@ type modelCooldown struct {
 	Reason string
 	// Hits 11102 负缓存的累计命中次数（驱动指数退避）。6004 条目 Hits 恒 0。
 	Hits int
+	// AuditOnly 为 true 时仅用于状态展示（例如无重置时间的 6004），
+	// healthyForModel 与 modelExempt 必须忽略它，避免改变选号行为。
+	AuditOnly bool
 }
 
 // modelCostTTL 成本观测的有效期。取 6 小时：既覆盖"夜间免费"这类时段性优惠的
@@ -272,8 +277,15 @@ func (e *entry) healthy(now time.Time) bool {
 // healthyForModel 与 ServableNow 共用本谓词，保证 chat 选号与探活口径一致。
 // 调用方负责 now 与冷却有效性的判断（本方法只看形态，不看冷却是否已过期）。
 func (e *entry) modelExempt() bool {
-	return len(e.modelCooldowns) > 0 &&
-		!e.disabled && e.breakerUntil.IsZero()
+	if e.disabled || !e.until.IsZero() || !e.degradeUntil.IsZero() || !e.breakerUntil.IsZero() {
+		return false
+	}
+	for _, mc := range e.modelCooldowns {
+		if !mc.AuditOnly && !mc.Until.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 // modelCooled 报告账号对指定 model 是否正处 6004 模型级冷却（该模型的独立冷却未过期）。
@@ -283,7 +295,7 @@ func (e *entry) modelCooled(now time.Time, reqModel string) bool {
 		return false
 	}
 	mc, ok := e.modelCooldowns[reqModel]
-	if !ok {
+	if !ok || mc.AuditOnly {
 		return false
 	}
 	return !mc.Until.IsZero() && now.Before(mc.Until)
@@ -443,9 +455,10 @@ type stateAccount struct {
 // modelCooldown 同构（Until/ResetAt/Reason 字段名与语义对齐），落盘/恢复往返无损。
 // Hits 不落盘（重启后 11102 退避从 6h 基数重新学习，同 modelCost 口径）。
 type stateModelCooldown struct {
-	Until   time.Time `json:"until"`
-	ResetAt time.Time `json:"reset_at,omitempty"`
-	Reason  string    `json:"reason,omitempty"`
+	Until     time.Time `json:"until"`
+	ResetAt   time.Time `json:"reset_at,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	AuditOnly bool      `json:"audit_only,omitempty"`
 }
 
 // stateModelCost 单个 (账号, 模型) 的成本观测持久化记录，与运行态 modelCostEntry

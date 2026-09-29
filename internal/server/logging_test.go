@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 )
 
 // captureStdout 重定向 os.Stdout（连同 chatLogOut，见 SetChatLogOutput 的注入点）
@@ -110,6 +111,56 @@ func TestChatStatsReaderBytesPassthrough(t *testing.T) {
 	}
 }
 
+func TestRequestMetricsRecordsStream(t *testing.T) {
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream:   up,
+		RequestLog: reqLog,
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("X-Request-Id"); !strings.HasPrefix(got, "req-") {
+		t.Fatalf("X-Request-Id=%q", got)
+	}
+	s := reqLog.Snapshot()
+	if s.Completed != 1 || s.Succeeded != 1 || s.Failed != 0 || len(s.Recent) != 1 {
+		t.Fatalf("metrics = %+v", s)
+	}
+	e := s.Recent[0]
+	if e.Outcome != reqlog.OutcomeSuccess || e.Status != http.StatusOK || !e.OK || e.Model != "glm-5.2" || e.TotalTokens != 2 || e.Attempts != 1 {
+		t.Fatalf("event = %+v", e)
+	}
+}
+
+func TestRequestMetricsDetectsStreamErrorFrame(t *testing.T) {
+	const sseErr = "data: {\"error\":{\"message\":\"upstream failed\"}}\n\ndata: [DONE]\n\n"
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, sseErr, true
+	})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream:   up,
+		RequestLog: reqLog,
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[]}`)))
+	s := reqLog.Snapshot()
+	if len(s.Recent) != 1 || s.Recent[0].Outcome != reqlog.OutcomeStreamError || s.Recent[0].OK {
+		t.Fatalf("stream error metrics = %+v", s.Recent)
+	}
+}
+
 func TestParseModelFromBody(t *testing.T) {
 	if got := parseModelFromBody([]byte(`{"model":"deepseek-v4-flash","stream":true}`)); got != "deepseek-v4-flash" {
 		t.Errorf("got %q", got)
@@ -174,6 +225,19 @@ func TestLogChatRowNoUsageShowsDash(t *testing.T) {
 	for _, want := range []string{"TTFB=-", "tok=-", "tok=-      |", "| 503 |"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("row missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestLogChatRowExtendedFields(t *testing.T) {
+	withChatLog(t)
+	out := captureStdout(t, func() {
+		logChatRowEx(10*time.Millisecond, 2*time.Second, "glm-5.3", "stream", "u123456789", "示例号",
+			http.StatusOK, 42, "req-abc123", reqlog.OutcomeSuccess, 2, 1.25, true)
+	})
+	for _, want := range []string{"rid=req-abc123", "out=success", "try=2", "credit=1.2500"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("extended row missing %q:\n%s", want, out)
 		}
 	}
 }

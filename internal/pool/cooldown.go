@@ -82,10 +82,9 @@ func (p *Pool) Cooldown(uid string, kind CoolKind, d time.Duration, reason strin
 		e.until = time.Now().Add(d)
 		e.coolKind = kind
 		e.reason = reason
-		// 非模型级冷却入口：清空模型级独立冷却表（modelCooldowns），
-		// 避免上一次模型级限流的模型豁免泄漏到本次**账号级**限流上
-		// （否则换模型请求会错误绕过本次冷却）。
-		e.modelCooldowns = nil
+		// 非模型级冷却入口：清空会参与路由的模型级冷却，避免上一次
+		// 模型豁免泄漏到账号级冷却上；AuditOnly 条目不影响路由，保留展示。
+		clearRoutingModelCooldownsLocked(e)
 		p.dirty.Store(true)
 	}
 }
@@ -127,9 +126,54 @@ func (p *Pool) CooldownSoftForModel(uid string, base time.Duration, resetAt time
 			}
 			e.coolKind = CoolSoft
 			e.reason = reason
-			e.modelCooldowns = nil
+			clearRoutingModelCooldownsLocked(e)
 		}
 		p.dirty.Store(true)
+	}
+}
+
+// RecordModelRateLimitAudit 记录无法参与模型路由的 6004 展示项。
+// 典型场景是 6004 没有可解析重置时间：账号仍按原有有界退避冷却，
+// 本方法只把模型名挂到 e.until 上供账号页展示，不影响 healthyForModel。
+func (p *Pool) RecordModelRateLimitAudit(uid, model, reason string) {
+	if uid == "" || model == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return
+	}
+	now := time.Now()
+	if old, exists := e.modelCooldowns[model]; exists && !old.AuditOnly && old.Until.After(now) {
+		return // 已有真实模型冷却，审计记录不得覆盖路由截止
+	}
+	until := e.until
+	if until.IsZero() || !until.After(now) {
+		until = now.Add(p.softRateMaxOr())
+	}
+	if e.modelCooldowns == nil {
+		e.modelCooldowns = make(map[string]modelCooldown)
+	}
+	e.modelCooldowns[model] = modelCooldown{
+		Until:     until,
+		Reason:    reason,
+		AuditOnly: true,
+	}
+	p.dirty.Store(true)
+}
+
+// clearRoutingModelCooldownsLocked 删除参与选号豁免的模型冷却，保留 AuditOnly 台账。
+// 调用方必须已持有 p.mu 写锁。
+func clearRoutingModelCooldownsLocked(e *entry) {
+	for model, mc := range e.modelCooldowns {
+		if !mc.AuditOnly {
+			delete(e.modelCooldowns, model)
+		}
+	}
+	if len(e.modelCooldowns) == 0 {
+		e.modelCooldowns = nil
 	}
 }
 
@@ -237,7 +281,7 @@ func (p *Pool) CooldownSoftRate(uid string, base time.Duration, resetAt time.Tim
 		}
 		e.coolKind = CoolSoft
 		e.reason = reason
-		e.modelCooldowns = nil // 账号级软冷却：清空模型豁免（切模型不绕过）
+		clearRoutingModelCooldownsLocked(e) // 账号级软冷却：清路由豁免，保留审计台账
 		p.dirty.Store(true)
 	}
 }

@@ -5,6 +5,7 @@ package pool
 import (
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -197,22 +198,20 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 			d = e.credits // 钳 0：扣穿（对账延迟/消费早于记账）不产生负余额
 		}
 		e.credits -= d
-		consume := d
 		if e.creditsExpiring > 0 {
-			if consume > e.creditsExpiring {
-				consume = e.creditsExpiring
+			if d > e.creditsExpiring {
+				e.creditsExpiring = 0
+			} else {
+				e.creditsExpiring -= d
 			}
-			e.creditsExpiring -= consume
 		}
 		if e.creditsEarliestRemaining > 0 {
-			if consume > e.creditsEarliestRemaining {
-				consume = e.creditsEarliestRemaining
+			if d >= e.creditsEarliestRemaining {
+				e.creditsEarliestRemaining = 0
+				e.creditsEarliestExpiry = time.Time{}
+			} else {
+				e.creditsEarliestRemaining -= d
 			}
-			e.creditsEarliestRemaining -= consume
-		}
-		if e.creditsExpiring == 0 || e.creditsEarliestRemaining == 0 {
-			e.creditsEarliestExpiry = time.Time{}
-			e.creditsEarliestRemaining = 0
 		}
 	}
 	if e.modelCost == nil {
@@ -362,6 +361,8 @@ func (p *Pool) PickByUIDForModel(uid, model string) *auth.Auth {
 		return nil
 	}
 	e.lastUsed = now
+	p.pickSeq++
+	e.usedSeq = p.pickSeq
 	return e.a
 }
 
@@ -382,6 +383,8 @@ func (p *Pool) PickByUID(uid string) *auth.Auth {
 		return nil
 	}
 	e.lastUsed = now
+	p.pickSeq++
+	e.usedSeq = p.pickSeq
 	return e.a
 }
 
@@ -511,11 +514,24 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 	}
 	if st.Cooling {
 		// 冷却剩余秒数（向上取整，避免 0 显示为已到期）。
-		st.CoolRemaining = int64(time.Until(e.until).Seconds() + 0.999)
-		if st.CoolRemaining < 0 {
-			st.CoolRemaining = 0
+		// 常规冷却（until）与熔断期（breakerUntil）可能只有其一在生效，
+		// 取仍在未来且更晚截止的那个，避免仅熔断期时误报 0 / unknown。
+		remaining := int64(0)
+		if now.Before(e.until) {
+			if r := int64(time.Until(e.until).Seconds() + 0.999); r > remaining {
+				remaining = r
+			}
 		}
-		st.CoolKind = e.coolKind.String()
+		if now.Before(e.breakerUntil) {
+			if r := int64(time.Until(e.breakerUntil).Seconds() + 0.999); r > remaining {
+				remaining = r
+				st.CoolKind = "breaker"
+			}
+		}
+		st.CoolRemaining = remaining
+		if st.CoolKind == "" {
+			st.CoolKind = e.coolKind.String()
+		}
 	}
 	return st
 }
@@ -572,8 +588,13 @@ func (p *Pool) rateLimitedModelsLocked(e *entry, now time.Time) []RateLimitedMod
 	for _, m := range models {
 		mc := e.modelCooldowns[m]
 		if !mc.Until.IsZero() && now.Before(mc.Until) {
+			kind := "rate_limit"
+			if strings.HasPrefix(mc.Reason, "11102") {
+				kind = "model_unavailable"
+			}
 			row := RateLimitedModel{
 				Model:  m,
+				Kind:   kind,
 				Until:  mc.Until,
 				Reason: mc.Reason,
 			}

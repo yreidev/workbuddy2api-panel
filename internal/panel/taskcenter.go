@@ -47,7 +47,9 @@ func growthPending(t upstream.Task) bool {
 		return false
 	}
 	if t.Target > 0 && t.Current >= t.Target {
-		return false // 达标未领：也入队（队列执行后会自动领）
+		// 达标未领：也入队（队列执行后会自动领）——但仅限有自动化动作的任务，
+		// 否则队列执行时会因 autoActionFor 为 nil 直接报错。
+		return autoActionFor(t.TaskCode) != nil
 	}
 	return autoActionFor(t.TaskCode) != nil
 }
@@ -187,6 +189,10 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 		q.mu.Unlock()
 		return false, 0, -1, "队列正在执行中（可在任务中心查看进度）"
 	}
+	// 先占位：扫描（数秒级网络耗时）期间若并发再次触发，直接命中上面的 running
+	// 判拒，避免两个 goroutine 同时启动互相覆盖 q.items/q.seq。无待办时回滚。
+	q.running = true
+	q.startedAt = time.Now()
 	q.mu.Unlock()
 
 	// 扫描待办（复用扫描逻辑的拉取部分）。
@@ -255,12 +261,14 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	}
 	if len(items) == 0 {
 		log.Printf("panel: 队列启动：无可执行待办（全部账号任务已完成）")
+		q.mu.Lock()
+		q.running = false
+		q.startedAt = time.Time{}
+		q.mu.Unlock()
 		return false, 0, 0, "全部账号没有待办任务"
 	}
 
 	q.mu.Lock()
-	q.running = true
-	q.startedAt = time.Now()
 	q.items = items
 	q.conc = concurrency
 	q.seq++

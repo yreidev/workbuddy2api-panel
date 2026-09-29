@@ -6,6 +6,11 @@
   "panel": {
     "package_detail_limit": 5
   },
+  "logging": {
+    "request_archive_enabled": true,
+    "request_retention_days": 7,
+    "request_archive_max_mb": 100
+  },
   "cooldown": {
     "soft_rate": "600s",
     "soft_rate_max": "2h"
