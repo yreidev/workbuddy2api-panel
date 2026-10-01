@@ -34,6 +34,14 @@ type Config struct {
 		RequestRetentionDays int `json:"request_retention_days"`
 		// RequestArchiveMaxMB 归档总上限（MiB），缺省 100；<=0 回落默认。
 		RequestArchiveMaxMB int `json:"request_archive_max_mb"`
+		// RequestClientInfo 是否在请求日志（归档事件 + stdout 流水行 + 面板运行
+		// 日志）里记录调用来源：客户端 IP 与 User-Agent。缺省 true。
+		//
+		// 为什么做成开关而不是恒开：来源信息是排查"谁在打网关"的第一手线索，
+		// 但它比 token 计数敏感（IP 属个人信息），共享部署/多租户场景可能需要
+		// 关掉。关闭后 Event.ClientIP/UserAgent 保持为空，归档里不出现该字段。
+		// 热生效（经 livecfg 快照），无需重启。
+		RequestClientInfo bool `json:"request_client_info"`
 	} `json:"logging"`
 
 	Cooldown struct {
@@ -164,6 +172,11 @@ type Config struct {
 		// 错误策略）。默认 "30m"（≤48 次/天/模型）；"0" 关停（完全回到现状行为）；
 		// 空值回落默认。
 		CostExploreInterval string `json:"cost_explore_interval"`
+		// CreditFloor 积分保底：账号余额低于该值时，对实测收费模型（tier 2）不再
+		// 参与选号——防止收费请求把余额打穿、连免费模型都 402 冷却到次日签到。
+		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
+		// 默认 0 = 关闭；负值钳 0。
+		CreditFloor int64 `json:"credit_floor"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -201,6 +214,9 @@ func Default() *Config {
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
+	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，
+	// 只有显式 false 才关闭来源记录。
+	c.Logging.RequestClientInfo = true
 	c.Schedule.CheckinHours = []int{9, 21}
 	c.Schedule.TravelHours = []int{9, 21}
 	c.Schedule.ActivityHours = []int{10}
@@ -464,6 +480,10 @@ func (c *Config) normalize() error {
 	}
 	if c.CostExploreIntervalDur < 0 {
 		c.CostExploreIntervalDur = 0
+	}
+	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
+	if c.Pool.CreditFloor < 0 {
+		c.Pool.CreditFloor = 0
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3

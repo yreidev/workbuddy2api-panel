@@ -141,6 +141,100 @@ func TestRequestMetricsRecordsStream(t *testing.T) {
 	}
 }
 
+// 调用来源必须进归档事件：X-Forwarded-For 首段（反代后真实客户端）+ 截断后的 UA。
+func TestRequestMetricsCapturesClientInfo(t *testing.T) {
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:             testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream:         up,
+		RequestLog:       reqLog,
+		RecordClientInfo: true,
+	})
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+	req.Header.Set("User-Agent", "python-requests/2.31.0")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	s := reqLog.Snapshot()
+	if len(s.Recent) != 1 {
+		t.Fatalf("recent = %+v", s.Recent)
+	}
+	if got := s.Recent[0].ClientIP; got != "203.0.113.7" {
+		t.Errorf("client ip = %q want 203.0.113.7 (XFF first hop)", got)
+	}
+	if got := s.Recent[0].UserAgent; got != "python-requests/2.31.0" {
+		t.Errorf("user agent = %q", got)
+	}
+}
+
+// 开关关闭时不采集来源（归档里不出现 IP/UA），但请求指标照常记录。
+func TestRequestMetricsClientInfoDisabled(t *testing.T) {
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream:   up,
+		RequestLog: reqLog,
+	})
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	req.Header.Set("User-Agent", "python-requests/2.31.0")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	s := reqLog.Snapshot()
+	if len(s.Recent) != 1 {
+		t.Fatalf("recent = %+v", s.Recent)
+	}
+	if s.Recent[0].ClientIP != "" || s.Recent[0].UserAgent != "" {
+		t.Fatalf("client info recorded while disabled: %+v", s.Recent[0])
+	}
+	if s.Recent[0].Model != "glm-5.2" {
+		t.Errorf("model = %q, metrics should be unaffected", s.Recent[0].Model)
+	}
+}
+
+// 无代理头时回落到 TCP 对端地址——直连部署下这是唯一来源线索。
+func TestClientIPForLogFallsBackToRemoteAddr(t *testing.T) {
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.RemoteAddr = "198.51.100.9:54321"
+	if got := clientIPForLog(req); got != "198.51.100.9" {
+		t.Errorf("got %q want 198.51.100.9", got)
+	}
+	// 代理头优先（X-Real-IP 兜底 XFF）。
+	req.Header.Set("X-Real-IP", "192.0.2.5")
+	if got := clientIPForLog(req); got != "192.0.2.5" {
+		t.Errorf("X-Real-IP got %q want 192.0.2.5", got)
+	}
+	req.Header.Set("X-Forwarded-For", "192.0.2.9, 10.1.1.1")
+	if got := clientIPForLog(req); got != "192.0.2.9" {
+		t.Errorf("XFF got %q want 192.0.2.9", got)
+	}
+	if got := clientIPForLog(nil); got != "" {
+		t.Errorf("nil request got %q want empty", got)
+	}
+}
+
+// 超长 UA 落盘前截断：UA 是客户端可控自由文本，不截断会把归档行撑爆。
+func TestCaptureClientInfoTruncatesUserAgent(t *testing.T) {
+	tr := &requestTrace{}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.RemoteAddr = "198.51.100.9:1234"
+	req.Header.Set("User-Agent", strings.Repeat("A", 5000))
+	tr.captureClientInfo(req)
+	if len(tr.userAgent) != maxUserAgentLen {
+		t.Fatalf("ua len = %d want %d", len(tr.userAgent), maxUserAgentLen)
+	}
+}
+
 func TestRequestMetricsDetectsStreamErrorFrame(t *testing.T) {
 	const sseErr = "data: {\"error\":{\"message\":\"upstream failed\"}}\n\ndata: [DONE]\n\n"
 	up := newFakeUpstream(t, func(string) (int, string, bool) {
@@ -233,12 +327,46 @@ func TestLogChatRowExtendedFields(t *testing.T) {
 	withChatLog(t)
 	out := captureStdout(t, func() {
 		logChatRowEx(10*time.Millisecond, 2*time.Second, "glm-5.3", "stream", "u123456789", "示例号",
-			http.StatusOK, 42, "req-abc123", reqlog.OutcomeSuccess, 2, 1.25, true)
+			http.StatusOK, 42, "req-abc123", reqlog.OutcomeSuccess, 2, 1.25, true, "", "")
 	})
 	for _, want := range []string{"rid=req-abc123", "out=success", "try=2", "credit=1.2500"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("extended row missing %q:\n%s", want, out)
 		}
+	}
+	// 来源未采集时不追加 src 段（旧行格式不变，方便既有日志解析脚本继续工作）。
+	if strings.Contains(out, "src=") {
+		t.Errorf("empty source must not add src field:\n%s", out)
+	}
+}
+
+// 调用来源必须落进流水行：IP 用裸值，UA 用 ShortUA 压缩后的客户端标签。
+func TestLogChatRowSourceFields(t *testing.T) {
+	withChatLog(t)
+	out := captureStdout(t, func() {
+		logChatRowEx(10*time.Millisecond, 2*time.Second, "glm-5.3", "stream", "u123456789", "示例号",
+			http.StatusOK, 42, "req-abc123", reqlog.OutcomeSuccess, 1, 0, false,
+			"203.0.113.7", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	})
+	for _, want := range []string{`src=203.0.113.7`, `ua="Chrome/120.0.0.0"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("source row missing %q:\n%s", want, out)
+		}
+	}
+	// 完整浏览器 UA 不该整段铺进流水行（只留客户端标签）。
+	if strings.Contains(out, "AppleWebKit") {
+		t.Errorf("full UA leaked into row:\n%s", out)
+	}
+}
+
+// 只有 IP 没有 UA（非浏览器客户端不带头）时，UA 列显示 "-"，IP 照常展示。
+func TestLogChatRowSourcePartial(t *testing.T) {
+	withChatLog(t)
+	out := captureStdout(t, func() {
+		logChatRow(0, time.Second, "m", "sync", "u", "", 200, 1)
+	})
+	if strings.Contains(out, "src=") {
+		t.Errorf("logChatRow has no source, want no src field:\n%s", out)
 	}
 }
 

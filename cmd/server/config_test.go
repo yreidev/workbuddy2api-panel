@@ -56,12 +56,23 @@ func TestLoggingDefaults(t *testing.T) {
 	if !c.Logging.RequestArchiveEnabled || c.Logging.RequestRetentionDays != 7 || c.Logging.RequestArchiveMaxMB != 100 {
 		t.Fatalf("logging defaults = %+v", c.Logging)
 	}
+	// 来源记录（IP/UA）缺省开启：键缺席时必须保持 true，只有显式 false 才关闭。
+	if !c.Logging.RequestClientInfo {
+		t.Fatalf("request_client_info default = false, want true: %+v", c.Logging)
+	}
 	configured, err := ParseConfig([]byte(`{"logging":{"request_archive_enabled":false,"request_retention_days":30,"request_archive_max_mb":500}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if configured.Logging.RequestArchiveEnabled || configured.Logging.RequestRetentionDays != 30 || configured.Logging.RequestArchiveMaxMB != 500 {
 		t.Fatalf("configured logging = %+v", configured.Logging)
+	}
+	off, err := ParseConfig([]byte(`{"logging":{"request_client_info":false}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Logging.RequestClientInfo {
+		t.Fatalf("explicit false ignored: %+v", off.Logging)
 	}
 	fallback, err := ParseConfig([]byte(`{"logging":{"request_retention_days":0,"request_archive_max_mb":0}}`))
 	if err != nil {

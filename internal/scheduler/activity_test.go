@@ -426,3 +426,186 @@ func TestRunDispatchesActivityAndTravel(t *testing.T) {
 		t.Fatal("Run 未在 ctx 取消后返回")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 国际版活跃上报：global 账号不再被跳过（上游 a190252 同口径）
+// ---------------------------------------------------------------------------
+
+// withGlobalSwitch 临时打开 global realm 开关并复位（生产缺省即开，此辅助确保测试隔离）。
+func withGlobalSwitch(t *testing.T) {
+	t.Helper()
+	old := auth.GlobalEnabled()
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(old) })
+}
+
+// globalAccount 构造一个 realm=global 的账号（BackfillRealmFor 落显式标识）。
+func globalAccount(t *testing.T, uid string) *auth.Auth {
+	t.Helper()
+	a := &auth.Auth{UID: uid, AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999}
+	if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
+		t.Fatalf("BackfillRealmFor(global): %v", err)
+	}
+	if !a.IsGlobal() {
+		t.Fatalf("%s IsGlobal()=false want true", uid)
+	}
+	return a
+}
+
+// TestRunActivityNowReportsGlobalAccount 纯 global 池：账号必须上报（曾因
+// 「D4 门控：global 无活跃体系」被跳过 → 国际版永远点不亮连登、拿不到每日积分）。
+func TestRunActivityNowReportsGlobalAccount(t *testing.T) {
+	withGlobalSwitch(t)
+	fastActivity(t)
+	var cnHits, globalHits atomic.Int32
+	cnSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/report" {
+			cnHits.Add(1)
+		}
+		w.Write([]byte(`{"code":0,"msg":"OK"}`))
+	}))
+	defer cnSrv.Close()
+	globalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/report" {
+			globalHits.Add(1)
+		}
+		w.Write([]byte(`{"code":0,"msg":"OK"}`))
+	}))
+	defer globalSrv.Close()
+
+	p := pool.New("")
+	p.Add(globalAccount(t, "g1"))
+	// global base 单独指向另一台 server：断言路由按 realm 切，不碰 CN 端点。
+	up := &upstream.Client{
+		HTTP:              cnSrv.Client(),
+		GlobalEnabled:     true,
+		ChatBaseCN:        cnSrv.URL,
+		BillingBaseCN:     cnSrv.URL,
+		ChatBaseGlobal:    globalSrv.URL,
+		BillingBaseGlobal: globalSrv.URL,
+	}
+	s := New(Config{Pool: p, Upstream: up})
+
+	s.RunActivityNow()
+
+	if n := globalHits.Load(); n == 0 {
+		t.Error("global 账号未上报：/v2/report 未打到 global base（国际版将永远点不亮连登）")
+	}
+	if n := cnHits.Load(); n != 0 {
+		t.Errorf("CN base hits=%d want 0（global 账号不应打到 CN 端点）", n)
+	}
+}
+
+// TestRunActivityNowMixedPoolReportsBoth 混池：CN 与 global 各上报一次，
+// 且分别路由到各自 realm 的 base。
+func TestRunActivityNowMixedPoolReportsBoth(t *testing.T) {
+	withGlobalSwitch(t)
+	fastActivity(t)
+	var cnHits, globalHits atomic.Int32
+	cnSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/report" {
+			cnHits.Add(1)
+		}
+		w.Write([]byte(`{"code":0,"msg":"OK"}`))
+	}))
+	defer cnSrv.Close()
+	globalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/report" {
+			globalHits.Add(1)
+		}
+		w.Write([]byte(`{"code":0,"msg":"OK"}`))
+	}))
+	defer globalSrv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "cn1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(globalAccount(t, "g1"))
+	up := &upstream.Client{
+		HTTP:              cnSrv.Client(),
+		GlobalEnabled:     true,
+		ChatBaseCN:        cnSrv.URL,
+		BillingBaseCN:     cnSrv.URL,
+		ChatBaseGlobal:    globalSrv.URL,
+		BillingBaseGlobal: globalSrv.URL,
+	}
+	s := New(Config{Pool: p, Upstream: up})
+
+	s.RunActivityNow()
+
+	if n := cnHits.Load(); n != 1 {
+		t.Errorf("CN report hits=%d want 1", n)
+	}
+	if n := globalHits.Load(); n != 1 {
+		t.Errorf("global report hits=%d want 1", n)
+	}
+}
+
+// TestRunActivityNowGlobalErrorDoesNotSkipCN global report 失败（404）时
+// CN 账号照常上报：单账号失败只 break 该号，不影响遍历。
+func TestRunActivityNowGlobalErrorDoesNotSkipCN(t *testing.T) {
+	withGlobalSwitch(t)
+	fastActivity(t)
+	var cnHits atomic.Int32
+	cnSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/report" {
+			cnHits.Add(1)
+		}
+		w.Write([]byte(`{"code":0,"msg":"OK"}`))
+	}))
+	defer cnSrv.Close()
+	// global 侧一律 404：模拟国际版端点不可用。
+	globalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", 404)
+	}))
+	defer globalSrv.Close()
+
+	p := pool.New("")
+	p.Add(globalAccount(t, "g1"))
+	p.Add(&auth.Auth{UID: "cn1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	up := &upstream.Client{
+		HTTP:              cnSrv.Client(),
+		GlobalEnabled:     true,
+		ChatBaseCN:        cnSrv.URL,
+		BillingBaseCN:     cnSrv.URL,
+		ChatBaseGlobal:    globalSrv.URL,
+		BillingBaseGlobal: globalSrv.URL,
+	}
+	s := New(Config{Pool: p, Upstream: up})
+
+	s.RunActivityNow() // 不应 panic
+
+	if n := cnHits.Load(); n != 1 {
+		t.Errorf("CN report hits=%d want 1（global 失败不应影响 CN 账号）", n)
+	}
+}
+
+// TestCheckinStillSkipsGlobal 回归护栏：本次只放开活跃上报，签到仍跳过 global
+// （上游 a190252 明确「checkin/travel 门控不动」）。误删该 gate 会让国际版去打
+// CN 专属签到端点。
+func TestCheckinStillSkipsGlobal(t *testing.T) {
+	withGlobalSwitch(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(globalAccount(t, "g1"))
+	up := &upstream.Client{
+		HTTP:              srv.Client(),
+		GlobalEnabled:     true,
+		ChatBaseCN:        srv.URL,
+		BillingBaseCN:     srv.URL,
+		ChatBaseGlobal:    srv.URL,
+		BillingBaseGlobal: srv.URL,
+	}
+	s := New(Config{Pool: p, Upstream: up})
+
+	s.RunCheckinNow()
+
+	if n := hits.Load(); n != 0 {
+		t.Errorf("checkin global 上游调用=%d want 0（签到仍应跳过 global）", n)
+	}
+}

@@ -9,7 +9,8 @@
   "logging": {
     "request_archive_enabled": true,
     "request_retention_days": 7,
-    "request_archive_max_mb": 100
+    "request_archive_max_mb": 100,
+    "request_client_info": true
   },
   "cooldown": {
     "soft_rate": "600s",
@@ -72,7 +73,8 @@
     "idle_weight_max": 5.0,
     "prefer_expiring": true,
     "expiring_soon": "168h",
-    "cost_explore_interval": "30m"
+    "cost_explore_interval": "30m",
+    "credit_floor": 100
   },
   "session_sticky": {
     "enabled": true,

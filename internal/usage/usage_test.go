@@ -203,6 +203,94 @@ func TestSnapshotWindowFilter(t *testing.T) {
 	}
 }
 
+// 显式区间（「今天」/「自定义」）与滚动窗口走同一套全口径过滤；区间是闭区间
+// （桶起点落在 [From, To] 内即命中），且 From/To 会回显给面板确认口径。
+func TestSnapshotExplicitWindow(t *testing.T) {
+	r := New("")
+	base := time.Now().Truncate(time.Hour).Add(-5 * time.Hour)
+	for i := 0; i < 6; i++ {
+		r.Add(base.Add(time.Duration(i)*time.Hour), "cn", "u", "m",
+			Delta{PromptTokens: 10, HasPromptTokens: true}, true)
+	}
+	// 只取中间两小时（base+2h、base+3h）。
+	s := r.SnapshotWindow(Window{
+		From: base.Add(2 * time.Hour),
+		To:   base.Add(3 * time.Hour),
+	}, nil, nil)
+	if s.Totals.Requests != 2 || s.Totals.PromptTokens != 20 {
+		t.Fatalf("显式区间 totals = %d/%d, want 2/20", s.Totals.Requests, s.Totals.PromptTokens)
+	}
+	if len(s.Series) != 2 || s.Buckets != 2 {
+		t.Fatalf("显式区间 series/buckets = %d/%d, want 2/2", len(s.Series), s.Buckets)
+	}
+	if s.WindowFrom == "" || s.WindowTo == "" {
+		t.Fatalf("显式区间应回显 window_from/window_to: %+v", s)
+	}
+	if _, err := time.Parse(time.RFC3339, s.WindowFrom); err != nil {
+		t.Fatalf("window_from 不是 RFC3339: %q", s.WindowFrom)
+	}
+
+	// 只有 From（「今天」的形态）：从该点起到最新，全量命中。
+	only := r.SnapshotWindow(Window{From: base.Add(4 * time.Hour)}, nil, nil)
+	if only.Totals.Requests != 2 {
+		t.Fatalf("仅 From 的 totals = %d, want 2", only.Totals.Requests)
+	}
+	if only.WindowFrom == "" || only.WindowTo != "" {
+		t.Fatalf("仅 From 时 window_to 应为空: %+v", only)
+	}
+
+	// 空窗口（From/To 全零且 Hours<=0）= 全部历史，与 Snapshot(0) 等价。
+	all := r.SnapshotWindow(Window{}, nil, nil)
+	if all.Totals.Requests != 6 {
+		t.Fatalf("全零窗口 totals = %d, want 6（全部历史）", all.Totals.Requests)
+	}
+	if all.WindowFrom != "" || all.WindowTo != "" {
+		t.Fatalf("全部历史不应回显区间: %+v", all)
+	}
+}
+
+// 滚动窗口的上限仍是 60 天，且与显式区间互不干扰（From/To 优先）。
+func TestWindowBounds(t *testing.T) {
+	// From/To 优先于 Hours。
+	from := time.Now().Add(-2 * time.Hour)
+	gotFrom, gotTo := Window{Hours: 720, From: from}.bounds()
+	if !gotFrom.Equal(from) || !gotTo.IsZero() {
+		t.Fatalf("From 应优先于 Hours: from=%v to=%v", gotFrom, gotTo)
+	}
+	// 只有 Hours：起点 = 当前整点往回 Hours-1 小时。
+	f, to := Window{Hours: 24}.bounds()
+	want := time.Now().Truncate(time.Hour).Add(-23 * time.Hour)
+	if !f.Equal(want) || !to.IsZero() {
+		t.Fatalf("24h bounds = %v/%v, want %v/零值", f, to, want)
+	}
+	// Hours<=0 且无 From/To = 全部历史。
+	if f, to := (Window{}).bounds(); !f.IsZero() || !to.IsZero() {
+		t.Fatalf("空窗口 bounds = %v/%v, want 零值/零值", f, to)
+	}
+	// 上限 60 天。
+	f60, _ := Window{Hours: 100000}.bounds()
+	want60 := time.Now().Truncate(time.Hour).Add(-(24*60 - 1) * time.Hour)
+	if !f60.Equal(want60) {
+		t.Fatalf("超限 Hours 未被夹到 60 天: %v want %v", f60, want60)
+	}
+}
+
+// 脏 scope（解析失败）不进任何口径，也不会让整次快照失败。
+func TestBucketTimeRejectsGarbage(t *testing.T) {
+	if _, ok := bucketTime("h:not-a-time"); ok {
+		t.Fatal("脏小时 scope 应判定失败")
+	}
+	if _, ok := bucketTime("d:2026-13-45"); ok {
+		t.Fatal("脏日 scope 应判定失败")
+	}
+	if ts, ok := bucketTime("h:2026-09-30T13"); !ok || ts.Hour() != 13 {
+		t.Fatalf("合法小时 scope 解析失败: %v %v", ts, ok)
+	}
+	if ts, ok := bucketTime("d:2026-09-30"); !ok || ts.Day() != 30 {
+		t.Fatalf("合法日 scope 解析失败: %v %v", ts, ok)
+	}
+}
+
 // Stop 触发最终落盘（Start 后未到防抖间隔也要落）。
 func TestLifecycleFlush(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.json")
@@ -212,5 +300,56 @@ func TestLifecycleFlush(t *testing.T) {
 	r.Stop()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("Stop 后应有落盘文件: %v", err)
+	}
+}
+
+// TestCacheHitRateAccumulation（issue #92）：桶累计 hit/miss，credit_by_model
+// 与 totals 输出命中率；无缓存观测的桶不参与（rate 零值省略）。
+func TestCacheHitRateAccumulation(t *testing.T) {
+	r := New(t.TempDir() + "/usage.json")
+	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.Local)
+	r.Add(base, "cn", "u1", "glm-5.3", Delta{
+		PromptTokens: 1000, HasPromptTokens: true,
+		Credit: 1, HasCredit: true, TotalTokens: 1005, HasTotal: true,
+		HasCacheTokens: true, CacheHitTokens: 900, CacheMissTokens: 100,
+	}, true)
+	r.Add(base.Add(time.Minute), "cn", "u1", "glm-5.3", Delta{
+		PromptTokens: 1000, HasPromptTokens: true,
+		Credit: 2, HasCredit: true, TotalTokens: 1004, HasTotal: true,
+		HasCacheTokens: true, CacheHitTokens: 100, CacheMissTokens: 900,
+	}, true)
+	snap := r.Snapshot(0, nil)
+	if got := snap.CreditByModel[0].CacheHitRate; got != 50 {
+		t.Fatalf("cache_hit_rate=%v want 50", got)
+	}
+	if snap.Totals.CacheHitRate != 50 {
+		t.Fatalf("totals cache_hit_rate=%v want 50", snap.Totals.CacheHitRate)
+	}
+	if snap.CreditByModel[0].CacheHitTokens != 1000 || snap.CreditByModel[0].CacheMissTokens != 1000 {
+		t.Fatalf("hit/miss 累计错误: %+v", snap.CreditByModel[0])
+	}
+
+	// 无缓存观测的桶：rate 零值。
+	r2 := New(t.TempDir() + "/usage2.json")
+	r2.Add(base, "cn", "u1", "m", Delta{PromptTokens: 10, HasPromptTokens: true, Credit: 1, HasCredit: true, TotalTokens: 12, HasTotal: true}, true)
+	if got := r2.Snapshot(0, nil).CreditByModel[0].CacheHitRate; got != 0 {
+		t.Fatalf("无缓存观测应 rate=0, got %v", got)
+	}
+}
+
+// TestCacheTokensPersistRoundtrip：ch/cm 落盘 v4 并无损恢复。
+func TestCacheTokensPersistRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	r := New(dir + "/usage.json")
+	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.Local)
+	r.Add(base, "cn", "u1", "m", Delta{
+		Credit: 1, HasCredit: true, TotalTokens: 100, HasTotal: true,
+		HasCacheTokens: true, CacheHitTokens: 75, CacheMissTokens: 25,
+	}, true)
+	r.Save()
+	r2 := New(dir + "/usage.json")
+	snap := r2.Snapshot(0, nil)
+	if snap.CreditByModel[0].CacheHitRate != 75 {
+		t.Fatalf("恢复后 cache_hit_rate=%v want 75", snap.CreditByModel[0].CacheHitRate)
 	}
 }

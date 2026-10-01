@@ -442,6 +442,7 @@ func (s *Scheduler) RunCheckinNow() {
 		if err := s.cfg.Upstream.DailyCheckin(a); err != nil {
 			// "今天已签到"是幂等成功（上游对重复签到返回 code!=0），不再当失败打 error 行。
 			if upstream.IsAlreadyCheckin(err) {
+				s.cfg.Pool.NoteCheckinDone(st.UID)
 				log.Printf("checkin %s: 今天已签到（幂等）", logfmt.Label(st.UID, st.Nickname))
 			} else {
 				log.Printf("checkin %s: %v", logfmt.Label(st.UID, st.Nickname), err)
@@ -450,6 +451,7 @@ func (s *Scheduler) RunCheckinNow() {
 		} else {
 			// 首次签到成功此前静默——排查「签到到底跑没跑」时无迹可循（幂等行只在
 			// 重复触发时出现），成功也落一行。
+			s.cfg.Pool.NoteCheckinDone(st.UID)
 			log.Printf("checkin %s: 签到成功", logfmt.Label(st.UID, st.Nickname))
 		}
 		// 分桶查余额：配置窗口内的积分单独标记，同时记录最早未来到期批次。
@@ -466,7 +468,8 @@ func (s *Scheduler) RunCheckinNow() {
 
 // RunActivityNow 立即对池内所有可用账号执行一次对话活跃上报。
 // 禁用账号跳过；无 AccessToken 的跳过；账号间限速 activityAccountDelay。
-// 一条上报同时点亮 growth 连登 + 解锁 first_buddy 任务。
+// CN 与 global 账号**都上报**（PR #45 实测国际版 /v2/report 在 workbuddy.ai 上
+// code=0 OK，点亮连登）；一条上报同时点亮 growth 连登 + 解锁 first_buddy 任务。
 // 上报成功后续跑 streak 自检（checkActivityStreak）：回读连登天数，发现
 // 「上报 200 但 streak 没涨」的静默丢弃（只读 oracle，不做重试）。
 // RunActivityNow 是无 ctx 的外部入口（面板/测试一次性触发）；排程主循环走
@@ -486,9 +489,11 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		if a == nil || a.AccessTokenValue() == "" {
 			continue
 		}
-		if a.IsGlobal() {
-			continue // D4 门控：global 无任务中心/活跃体系，不发起任何上游调用
-		}
+		// global 账号同样上报（PR #45 实测国际版 /v2/report 在 workbuddy.ai 上 code=0 OK，
+		// 点亮连登）；realmBase 路由/头由 upstream.billingJSON/BillingHeaders 按 realm 切，
+		// 无需改动 upstream。此处曾按「D4 门控：global 无活跃体系」跳过 global，实测该
+		// 判断不成立——国际版 /v2/report 可用，跳过即国际版账号永远点不亮连登（上游
+		// a190252 同口径修复）。checkin/travel 的 global 门控不受影响，仍跳过。
 		if !first {
 			if !sleepCtx(ctx, activityAccountDelay) {
 				return // 优雅停机：不等限速睡满，剩余账号下轮再报

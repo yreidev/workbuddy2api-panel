@@ -90,7 +90,10 @@ type Status struct {
 	ErrTotal        int64      `json:"err_total,omitempty"`
 	LastSuccessTime time.Time  `json:"last_success,omitempty"`
 	LastErrTime     time.Time  `json:"last_err,omitempty"`
-	TokenUsage      TokenUsage `json:"token_usage,omitempty"`
+	// CheckinDone 本地今日已签到（签到成功或上游"今天已签到"幂等拒绝均算）。
+	// global 域账号无签到体系，恒为 false。面板签到按钮据此显示 签到/已签。
+	CheckinDone bool        `json:"checkin_done,omitempty"`
+	TokenUsage  TokenUsage  `json:"token_usage,omitempty"`
 	// ModelCosts 每模型实测成本台账（P1-anti-monopoly 可观测性）：运维据此自查
 	//「为什么总选它」——tier 0（免费）垄断 / tier 2 单价排序一眼可见。
 	// 仅 modelCostTTL 内的有效观测，每模型一行（cost_per_1k + last_seen +
@@ -182,11 +185,15 @@ type entry struct {
 	lastErr                  time.Time  // 最近一次错误时间
 	lastSuccess              time.Time  // 最近一次成功时间
 	tokenUsage               TokenUsage // 聊天请求 token 用量摘要（持久化）
-	coolKind                 CoolKind
-	until                    time.Time // 冷却截止（即时冷却：CoolSoft 429 / CoolHard 余额耗尽）
-	disabled                 bool
-	reason                   string
-	lastUsed                 time.Time // 最近被选中时刻（防并发撞号）
+	// lastCheckinDay 最近一次签到成功的本地日期（"2006-01-02"）。签到成功与上游
+	// 幂等拒绝（"今天已签到"）都算；statusOf 据此输出 CheckinDone 供面板按钮显示
+	// 签到/已签。持久化：跨重启不丢当日状态。
+	lastCheckinDay string
+	coolKind       CoolKind
+	until          time.Time // 冷却截止（即时冷却：CoolSoft 429 / CoolHard 余额耗尽）
+	disabled       bool
+	reason         string
+	lastUsed       time.Time // 最近被选中时刻（防并发撞号）
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
 	// Windows 等平台 time.Now() 精度有限（~0.5ms），高并发/快速连续选号时多个
 	// 账号 lastUsed 完全相等，基于 wall-clock 的 LRU/防惊群判定失效。
@@ -408,10 +415,13 @@ type stateAccount struct {
 	// err_total 累计错误计数。旧版 err_count（连续错误）仍可读：加载时映射到 err_total，
 	// 仅作一次性迁移，不再回写 err_count。
 	ErrTotal    int64      `json:"err_total,omitempty"`
-	ErrCount    int        `json:"err_count,omitempty"` // 兼容旧文件的迁移源，仅读取
-	LastSuccess time.Time  `json:"last_success,omitempty"`
-	LastErr     time.Time  `json:"last_err,omitempty"`
-	TokenUsage  TokenUsage `json:"token_usage,omitempty"`
+	ErrCount       int        `json:"err_count,omitempty"` // 兼容旧文件的迁移源，仅读取
+	LastSuccess    time.Time  `json:"last_success,omitempty"`
+	LastErr        time.Time  `json:"last_err,omitempty"`
+	// LastCheckinDay 最近一次签到成功的本地日期（entry.lastCheckinDay 同源）。
+	// 持久化以保留「当日已签」状态：签到后重启，面板按钮不回退成「签到」。
+	LastCheckinDay string     `json:"last_checkin_day,omitempty"`
+	TokenUsage     TokenUsage `json:"token_usage,omitempty"`
 	// 运行态计数（soft_streak/session_dead_fails/credits_expiring）不用 omitempty：
 	// 零值缺失会让人误以为"没记录"，实际是零值被省略。
 	SoftStreak int `json:"soft_streak"`

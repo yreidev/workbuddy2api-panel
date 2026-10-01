@@ -73,6 +73,38 @@ func TestAvailableUIDsForModelRealm(t *testing.T) {
 	}
 }
 
+func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
+	p := realmPool(t)
+	now := time.Now()
+	p.SetCreditsDetailed("cn2", 100, 100, 100, now.Add(time.Hour), 100)
+
+	got := p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
+	want := []string{"cn1", "cn2", "cn2", "cn2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("weighted cn candidates=%v want %v", got, want)
+	}
+
+	// 在途满载账号不进入候选，快过期权重不得突破现有并发上限。
+	p.SetMaxInFlight(1)
+	if !p.Acquire("cn2") {
+		t.Fatal("failed to acquire cn2")
+	}
+	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
+	want = []string{"cn1"}
+	p.Release("cn2")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("in-flight-full weighted candidates=%v want %v", got, want)
+	}
+
+	// 关闭总开关后逐账号只出现一次，旧行为完全恢复。
+	p.SetPreferExpiring(false)
+	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
+	want = []string{"cn1", "cn2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("disabled weighted cn candidates=%v want %v", got, want)
+	}
+}
+
 func TestPickExcludingForRealm(t *testing.T) {
 	p := realmPool(t)
 	// realm=cn → 只从 cn 集合选。

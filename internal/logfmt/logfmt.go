@@ -91,6 +91,45 @@ func Pad(s string, width int) string {
 	return s
 }
 
+// maxShortUALen ShortUA 的返回上限（显示列宽足够放下 "WorkBuddy/5.5.6"、
+// "python-requests/2.31.0" 这类常见客户端标签）。
+const maxShortUALen = 40
+
+// shortUAEngines UA 里只说明渲染引擎、不说明"是什么客户端"的通用 token：浏览器 UA
+// 恒定包含它们，拿它当客户端标签等于没信息。
+var shortUAEngines = map[string]bool{
+	"mozilla": true, "applewebkit": true, "gecko": true, "khtml": true,
+	"like": true, "safari": true, "compatible": true, "msie": true, "trident": true,
+}
+
+// ShortUA 从 User-Agent 提取便于人眼识别的客户端标签（"curl/8.4.0"、
+// "WorkBuddy/5.5.6"、"Chrome/120.0.0.0"）。
+//
+// 为什么需要：面板「运行日志」与 stdout 流水行都要展示调用来源，而完整 UA 动辄
+// 120+ 字符（浏览器尤其），直接铺进表格会把其它列挤没。这里只留"是什么客户端"，
+// 完整 UA 仍存在 reqlog.Event.UserAgent 里供面板悬停查看。
+//
+// 规则：取第一个形如 name/version 且 name 不是渲染引擎的 token；没有则回落整串
+// 的前 maxShortUALen 字节（纯产品名 UA，如 "node"）。空 UA 返回空串。
+func ShortUA(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if ua == "" {
+		return ""
+	}
+	for _, tok := range strings.Fields(ua) {
+		tok = strings.Trim(tok, "(),;")
+		name, _, ok := strings.Cut(tok, "/")
+		if !ok || name == "" {
+			continue
+		}
+		if shortUAEngines[strings.ToLower(name)] {
+			continue
+		}
+		return Truncate(tok, maxShortUALen)
+	}
+	return Truncate(ua, maxShortUALen)
+}
+
 // runeWidth 单个 rune 的显示列宽。区段判定取自 Unicode East Asian Width 的
 // Wide/Fullwidth 集合（与 go-runewidth 的默认表口径一致），只保留实际会用到的段。
 func runeWidth(r rune) int {

@@ -3,6 +3,7 @@ package pool
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1739,7 +1740,7 @@ func TestTokenUsagePersistsAcrossReload(t *testing.T) {
 	}
 }
 
-func TestPickPrefersEarliestExpiring(t *testing.T) {
+func TestPickPrefersExpiringByVirtualWeight(t *testing.T) {
 	withNoPickGap(t)
 	p := New("")
 	p.Add(&auth.Auth{UID: "later"})
@@ -1748,22 +1749,33 @@ func TestPickPrefersEarliestExpiring(t *testing.T) {
 
 	now := time.Now()
 	p.SetCreditsDetailed("later", 100, 100, 100, now.Add(48*time.Hour), 100)
-	p.SetCreditsDetailed("soon", 10, 10, 10, now.Add(2*time.Hour), 10)
-	p.SetCreditsDetailed("none", 1000, 1000, 0, time.Time{}, 0)
+	p.SetCreditsDetailed("soon", 100, 100, 100, now.Add(2*time.Hour), 100)
+	p.SetCreditsDetailed("none", 100, 100, 0, time.Time{}, 0)
 
-	for i := 0; i < 5; i++ {
+	// 3:1 虚拟实例是软偏好而非硬优先。用确定性随机源统计长期分布：两个快过期
+	// 账号的合计份额应显著高于普通账号，同时普通账号仍保留少量流量。
+	rng := rand.New(rand.NewPCG(1, 2))
+	p.SetRandomSource(func(n int64) int64 { return rng.Int64N(n) })
+	counts := map[string]int{}
+	for i := 0; i < 2000; i++ {
 		got := p.Pick()
-		if got == nil || got.UID != "soon" {
-			t.Fatalf("pick %d=%v want soon", i, got)
+		if got == nil {
+			t.Fatal("pick returned nil")
 		}
+		counts[got.UID]++
+	}
+	expiring := counts["soon"] + counts["later"]
+	if expiring < 1500 || counts["none"] == 0 {
+		t.Fatalf("virtual weight distribution=%v, want expiring majority and regular non-zero", counts)
 	}
 }
 
-func TestPickEarliestExpiryTieBreaksByRemaining(t *testing.T) {
+func TestPickExpiringTieUsesExistingWeight(t *testing.T) {
 	withNoPickGap(t)
 	p := New("")
 	p.Add(&auth.Auth{UID: "small"})
 	p.Add(&auth.Auth{UID: "large"})
+	p.SetRandomSource(func(n int64) int64 { return 0 })
 
 	at := time.Now().Add(time.Hour)
 	p.SetCreditsDetailed("small", 10, 10, 10, at, 10)
@@ -1782,11 +1794,20 @@ func TestPreferExpiringDisabledRestoresWeight(t *testing.T) {
 	now := time.Now()
 	p.SetCreditsDetailed("a", 100, 100, 50, now.Add(time.Hour), 50)
 	p.SetCreditsDetailed("b", 100, 100, 0, time.Time{}, 0)
+
+	p.mu.Lock()
+	we := p.routingWeightOf(p.byUID["a"], 100, now)
+	wn := p.routingWeightOf(p.byUID["b"], 100, now)
+	p.mu.Unlock()
+	if we != wn*expiringVirtualSlots {
+		t.Fatalf("enabled expiring weight=%v want %v", we, wn*expiringVirtualSlots)
+	}
+
 	p.SetPreferExpiring(false)
 
 	p.mu.Lock()
-	wa := p.weightOf(p.byUID["a"], 100, now)
-	wb := p.weightOf(p.byUID["b"], 100, now)
+	wa := p.routingWeightOf(p.byUID["a"], 100, now)
+	wb := p.routingWeightOf(p.byUID["b"], 100, now)
 	p.mu.Unlock()
 	if wa != wb {
 		t.Fatalf("disabled expiring weights differ: %v/%v", wa, wb)

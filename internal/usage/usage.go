@@ -42,8 +42,9 @@ const (
 )
 
 // fileVersion 是 usage.json 的当前格式版本。版本 2 增加积分观测字段，版本 3
-// 增加模型生效倍率分区；旧版本缺失字段按零值加载，旧数据不会丢弃。
-const fileVersion = 3
+// 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计；
+// 旧版本缺失字段按零值加载，旧数据不会丢弃。
+const fileVersion = 4
 
 // bucket 一个 (时间片, realm, uid, model, rate) 的累计量。
 // JSON 字段名刻意取短，因为桶数量会随时间增长。
@@ -65,6 +66,8 @@ type bucket struct {
 	CR    float64 `json:"cr,omitempty"` // usage.credit 累计（仅明确存在的观测）
 	CRN   int64   `json:"cn,omitempty"` // usage.credit 样本数（区分缺字段与真实 0）
 	CRT   int64   `json:"ct,omitempty"` // 同时具备 credit 与 token 的 Token 合计
+	CH    int64   `json:"ch,omitempty"` // 前缀缓存命中 token 累计（上游回该维度才累计）
+	CM    int64   `json:"cm,omitempty"` // 前缀缓存未命中 token 累计
 }
 
 // file 落盘结构。
@@ -145,6 +148,10 @@ type Delta struct {
 	Credit           float64
 	HasCredit        bool
 	ModelRate        string
+	// CacheHitTokens / CacheMissTokens 前缀缓存命中/未命中观测（issue #92）。
+	HasCacheTokens   bool
+	CacheHitTokens   int64
+	CacheMissTokens  int64
 	LatencyMs        int64
 	HasLatency       bool
 	TokensPerSecond  float64
@@ -202,6 +209,10 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 		} else if d.HasPromptTokens || d.HasCompletion {
 			b.CRT += d.PromptTokens + d.CompletionTokens
 		}
+	}
+	if d.HasCacheTokens {
+		b.CH += d.CacheHitTokens
+		b.CM += d.CacheMissTokens
 	}
 	if d.HasLatency {
 		b.LatMs += d.LatencyMs
@@ -262,6 +273,8 @@ func (r *Recorder) Rollup(now time.Time) {
 			dst.CR += src.CR
 			dst.CRN += src.CRN
 			dst.CRT += src.CRT
+			dst.CH += src.CH
+			dst.CM += src.CM
 		}
 		delete(r.buckets, m.from)
 	}
@@ -344,6 +357,9 @@ type Agg struct {
 	CreditSamples      int64   `json:"credit_samples"`
 	CreditTokens       int64   `json:"credit_tokens"`
 	CreditsPer1MTokens float64 `json:"credits_per_1m_tokens"`
+	CacheHitTokens     int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens    int64   `json:"cache_miss_tokens,omitempty"`
+	CacheHitRate       float64 `json:"cache_hit_rate,omitempty"`
 	AvgLatencyMs       float64 `json:"avg_latency_ms"`
 	AvgTPS             float64 `json:"avg_tokens_per_second"`
 }
@@ -367,6 +383,8 @@ func (g *aggAcc) add(b *bucket) {
 	g.Credits += b.CR
 	g.CreditSamples += b.CRN
 	g.CreditTokens += b.CRT
+	g.CacheHitTokens += b.CH
+	g.CacheMissTokens += b.CM
 	g.latSum += b.LatMs
 	g.latSamples += b.LatN
 	g.tpsSum += b.TPS
@@ -383,6 +401,9 @@ func (g *aggAcc) finish() Agg {
 	}
 	if g.CreditTokens > 0 {
 		a.CreditsPer1MTokens = g.Credits / float64(g.CreditTokens) * 1_000_000
+	}
+	if total := g.CacheHitTokens + g.CacheMissTokens; total > 0 {
+		a.CacheHitRate = float64(g.CacheHitTokens) / float64(total) * 100
 	}
 	return a
 }
@@ -414,6 +435,9 @@ type CreditAgg struct {
 	CreditSamples      int64   `json:"credit_samples"`
 	CreditTokens       int64   `json:"credit_tokens"`
 	CreditsPer1MTokens float64 `json:"credits_per_1m_tokens"`
+	CacheHitTokens     int64   `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens    int64   `json:"cache_miss_tokens,omitempty"`
+	CacheHitRate       float64 `json:"cache_hit_rate,omitempty"`
 }
 
 type creditAcc struct {
@@ -425,12 +449,17 @@ func (a *creditAcc) add(b *bucket) {
 	a.Credits += b.CR
 	a.CreditSamples += b.CRN
 	a.CreditTokens += b.CRT
+	a.CacheHitTokens += b.CH
+	a.CacheMissTokens += b.CM
 }
 
 func (a *creditAcc) finish() CreditAgg {
 	out := a.CreditAgg
 	if a.CreditTokens > 0 {
 		out.CreditsPer1MTokens = a.Credits / float64(a.CreditTokens) * 1_000_000
+	}
+	if total := a.CacheHitTokens + a.CacheMissTokens; total > 0 {
+		out.CacheHitRate = float64(a.CacheHitTokens) / float64(total) * 100
 	}
 	return out
 }
@@ -447,7 +476,51 @@ type Snapshot struct {
 	Buckets         int         `json:"buckets"`
 	FileBytes       int64       `json:"file_bytes"`
 	Since           string      `json:"since,omitempty"`
-	Generated       string      `json:"generated"`
+	// WindowFrom/WindowTo 本次实际生效的统计区间（本地时间，RFC3339），供面板
+	// 回显口径——「自定义」区间下用户必须能确认服务端到底按哪段算的。
+	// 空串 = 该侧不设界（全部历史 / 到今天为止）。
+	WindowFrom string `json:"window_from,omitempty"`
+	WindowTo   string `json:"window_to,omitempty"`
+	Generated  string `json:"generated"`
+}
+
+// Window 用量统计窗口。三种口径按优先级解析（见 bounds）：
+//   - From/To 任一非零 → 显式区间 [From, To]（To 零值 = 不设上界）
+//   - 否则 Hours>0     → 滚动窗口：当前整点往回 Hours-1 小时
+//   - 否则             → 全部历史
+//
+// 为什么显式区间用「桶起点落在 [From, To] 内」判定而不是求交集：小时桶的粒度
+// 就是一小时，用户选到 14:00 时把 14:00 这一小时的桶算进来符合直觉；同时这也
+// 让 Hours 口径与历史行为逐位一致（原实现就是 ts.Before(from) 即跳过）。
+type Window struct {
+	Hours int
+	From  time.Time
+	To    time.Time
+}
+
+// bounds 解析出实际生效的 [from, to]；零值表示该侧不设界。
+func (w Window) bounds() (time.Time, time.Time) {
+	if !w.From.IsZero() || !w.To.IsZero() {
+		return w.From, w.To
+	}
+	if w.Hours <= 0 {
+		return time.Time{}, time.Time{}
+	}
+	h := w.Hours
+	if h > 24*60 {
+		h = 24 * 60
+	}
+	return time.Now().Truncate(time.Hour).Add(-time.Duration(h-1) * time.Hour), time.Time{}
+}
+
+// bucketTime 把桶 scope 解析成本地时间；脏 scope 返回 false（不进任何口径）。
+func bucketTime(scope string) (time.Time, bool) {
+	if strings.HasPrefix(scope, "h:") {
+		ts, err := time.ParseInLocation(hourLayout, strings.TrimPrefix(scope, "h:"), time.Local)
+		return ts, err == nil
+	}
+	ts, err := time.ParseInLocation(dayLayout, strings.TrimPrefix(scope, "d:"), time.Local)
+	return ts, err == nil
 }
 
 // Snapshot 聚合**所选窗口内**的桶，产出面板一次拉取的全部用量视图数据。
@@ -467,13 +540,23 @@ func (r *Recorder) Snapshot(hours int, nicks map[string]string) Snapshot {
 // SnapshotWithRates 与 Snapshot 相同，但允许为缺少历史倍率的旧桶提供当前
 // 模型倍率回填。currentRate 返回空串时该行按“未知倍率”聚合，不伪造价格。
 func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
+	return r.SnapshotWindow(Window{Hours: hours}, nicks, currentRate)
+}
+
+// SnapshotWindow 聚合**所选窗口内**的桶，产出面板一次拉取的全部用量视图数据。
+//
+// 窗口语义见 Window：滚动窗口（Hours）/ 显式区间（From-To）/ 全部历史。卡片汇总、
+// 按域、按账号、按模型、时序**全部**按同一窗口口径统计——切窗口时所有数字随之变化
+// （曾长期是"卡片为全部历史累计、hours 只改时序分片"的口径，界面上被读成"筛选没
+// 生效"，已废弃）。小时桶按整点入窗；日桶（Rollup 折叠出的长期数据）按日起点入窗，
+// 故小时窗口天然不含更早的日桶。
+func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
 	if r == nil {
 		return Snapshot{Generated: time.Now().Format(time.RFC3339)}
 	}
-	windowed := hours > 0
-	if windowed && hours > 24*60 {
-		hours = 24 * 60
-	}
+	from, to := w.bounds()
+	explicit := !w.From.IsZero() || !w.To.IsZero()
+	windowed := !from.IsZero() || !to.IsZero()
 
 	r.mu.Lock()
 	bs := make([]bucket, 0, len(r.buckets))
@@ -493,12 +576,6 @@ func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, current
 	creditModelAgg := map[string]*creditAcc{}
 	rateCache := map[string]string{}
 
-	var hourFrom time.Time
-	if windowed {
-		nowHour := time.Now().Truncate(time.Hour)
-		hourFrom = nowHour.Add(-time.Duration(hours-1) * time.Hour)
-	}
-
 	// 数据起点（全库最早分片）：不受窗口影响，表示"记录自何时开始"。scope 字典序
 	// 即时间序（同前缀内同格式排序；"d:" 恒早于 "h:"——日桶只来自 90 天前的小时折叠）。
 	since := ""
@@ -509,15 +586,15 @@ func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, current
 			since = b.Scope
 		}
 		if windowed {
-			var ts time.Time
-			var err error
-			if strings.HasPrefix(b.Scope, "h:") {
-				ts, err = time.ParseInLocation(hourLayout, strings.TrimPrefix(b.Scope, "h:"), time.Local)
-			} else {
-				ts, err = time.ParseInLocation(dayLayout, strings.TrimPrefix(b.Scope, "d:"), time.Local)
-			}
+			ts, ok := bucketTime(b.Scope)
 			// 解析失败的脏桶不进窗口聚合（也不该出现在任何口径里）。
-			if err != nil || ts.Before(hourFrom) {
+			if !ok {
+				continue
+			}
+			if !from.IsZero() && ts.Before(from) {
+				continue
+			}
+			if !to.IsZero() && ts.After(to) {
 				continue
 			}
 		}
@@ -634,6 +711,16 @@ func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, current
 	// since 去掉 scope 前缀（"h:2026-09-16T13" → "2026-09-16T13"）给前端展示；
 	// 无任何桶时保持空（无数据不伪造起点）。
 	snap.Since = strings.TrimPrefix(strings.TrimPrefix(since, "h:"), "d:")
+	// 回显实际生效的区间：**仅显式区间口径**。滚动窗口由 hours 表达（前端自己
+	// 知道选的是哪个预设），全部历史没有区间——两者回显都会变成噪音。
+	if explicit {
+		if !w.From.IsZero() {
+			snap.WindowFrom = w.From.Format(time.RFC3339)
+		}
+		if !w.To.IsZero() {
+			snap.WindowTo = w.To.Format(time.RFC3339)
+		}
+	}
 	return snap
 }
 

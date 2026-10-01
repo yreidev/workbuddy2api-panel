@@ -1,5 +1,7 @@
 package upstream
 
+import "encoding/json"
+
 // normalizeUsageCacheAliases keeps cache-hit aliases consistent before the
 // response leaves the gateway. Some WorkBuddy responses carry the real hit in
 // prompt_tokens_details.cached_tokens while also emitting
@@ -96,4 +98,52 @@ func cloneUsageDetails(usage map[string]any, key string) map[string]any {
 		out[detailKey] = value
 	}
 	return out
+}
+
+// UsageCacheHitTokens 返回 usage 里的缓存命中 token 数（多别名取最优，口径与
+// 回写给客户端的 normalizeUsageCacheAliases 一致）。供网关统计层（usage 桶 /
+// reqlog）观测命中率使用；usage 缺失该维度时 ok=false。
+func UsageCacheHitTokens(usage map[string]any) (float64, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	return bestUsageCacheHitTokens(usage)
+}
+
+// UsageCacheMissTokens 返回 usage 里的缓存未命中 token 数：优先读上游显式的
+// prompt_cache_miss_tokens，缺失时按 prompt_tokens - 命中 推导（推导值为负时
+// 视为不可信，返回 ok=false）。
+func UsageCacheMissTokens(usage map[string]any) (float64, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	if miss, ok := usageNumber(usage, "prompt_cache_miss_tokens"); ok {
+		return miss, true
+	}
+	prompt, okP := usageNumber(usage, "prompt_tokens")
+	hit, okH := UsageCacheHitTokens(usage)
+	if okP && okH && prompt-hit >= 0 {
+		return prompt - hit, true
+	}
+	return 0, false
+}
+
+// usageNumber 从 usage 顶层取数值字段（JSON 数字可能是 float64 / json.Number 形态）。
+func usageNumber(usage map[string]any, key string) (float64, bool) {
+	v, ok := usage[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
 }

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,33 @@ func routerWith(store redisstore.Store, avail []string, ttl time.Duration) *Rout
 		Store:     store,
 		Available: func() []string { return avail },
 	})
+}
+
+func TestWeightedVirtualCandidatesBiasNewSessions(t *testing.T) {
+	st := newCountingStore()
+	// 一个普通账号 1 个虚拟实例，一个快过期账号 3 个虚拟实例。
+	r := routerWith(st, []string{"regular", "expiring", "expiring", "expiring"}, time.Minute)
+
+	// 先让每个真实账号都已有绑定，确保后续新会话进入全池哈希阶段，而不是
+	// 被“未绑定账号优先”规则逐个填满。这样可以直接验证虚拟实例权重。
+	r.Bind("warm-regular", "regular")
+	r.Bind("warm-expiring", "expiring")
+
+	counts := map[string]int{}
+	const n = 4000
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("session-%d", i)
+		uid, ok := r.Resolve(key)
+		if !ok {
+			t.Fatal("Resolve returned !ok")
+		}
+		counts[uid]++
+	}
+
+	share := float64(counts["expiring"]) / float64(n)
+	if share < 0.70 || share > 0.80 {
+		t.Fatalf("weighted expiring share=%.3f counts=%v, want 70%%-80%%", share, counts)
+	}
 }
 
 func TestSameKeySameAccount(t *testing.T) {
