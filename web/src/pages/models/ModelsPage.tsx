@@ -2,11 +2,14 @@
 // 输出上限列若有 scripts/probe_max_tokens.py 的实测结果，标注钳制情况；没有则显示上游声称值。
 import { useMemo, useState, type ReactNode } from 'react'
 import {
-  Card, Chip, SearchField, Table, ToggleButton, ToggleButtonGroup, useMediaQuery,
+  Button, Card, Chip, Label, ListBox, SearchField, Select, Table, ToggleButton, ToggleButtonGroup, useMediaQuery,
 } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { fmtK } from '../../lib/format'
-import { filterModels, probeFor, type Capability, type RealmFilter } from '../../lib/models'
+import {
+  EMPTY_MODEL_FILTER, filterModels, probeFor, type Capability, type EffortFilter, type ModelFilter, type ModelSort, type PromoFilter,
+  type RealmFilter,
+} from '../../lib/models'
 import { qk, useModels, useProbes } from '../../lib/queries'
 import type { Model, Probe } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
@@ -100,6 +103,47 @@ function ModelName({ m }: { m: Model }) {
   )
 }
 
+const EFFORTS: { id: EffortFilter; label: string }[] = [
+  { id: '', label: '全部档位' },
+  { id: 'any', label: '可调档位' },
+  { id: 'off', label: '可关闭思考' },
+  ...(['low', 'medium', 'high', 'xhigh', 'max'] as const).map((id) => ({ id, label: id })),
+]
+const PROMOS: { id: PromoFilter; label: string }[] = [
+  { id: '', label: '全部价格' },
+  { id: 'promo', label: '有折扣 / 限时免费' },
+  { id: 'free', label: '限时免费' },
+  { id: 'discount', label: '打折（非免费）' },
+]
+const SORTS: { id: ModelSort; label: string }[] = [
+  { id: 'default', label: '上游默认顺序' },
+  { id: 'rate', label: '积分倍率 低 → 高' },
+  { id: 'context', label: '上下文 大 → 小' },
+  { id: 'output', label: '最大输出 大 → 小' },
+  { id: 'name', label: '模型 ID A → Z' },
+]
+
+/** 下拉筛选（选项 id 可能是空串：「全部」） */
+function Pick<T extends string>({ label, value, options, onChange, className }: {
+  label: string
+  value: T
+  options: { id: T; label: string }[]
+  onChange: (v: T) => void
+  className?: string
+}) {
+  return (
+    <Select aria-label={label} value={value} onChange={(k) => k != null && onChange(k as T)} className={className}>
+      <Label className="sr-only">{label}</Label>
+      <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+      <Select.Popover>
+        <ListBox>
+          {options.map((o) => <ListBox.Item key={o.id} id={o.id} textValue={o.label}>{o.label}<ListBox.ItemIndicator /></ListBox.Item>)}
+        </ListBox>
+      </Select.Popover>
+    </Select>
+  )
+}
+
 const ctx = (m: Model) => (m.context_length ? Math.round(m.context_length / 1000) + 'K' : '—')
 
 export function ModelsPage() {
@@ -107,12 +151,13 @@ export function ModelsPage() {
   const models = useModels()
   const probes = useProbes()
   const isDesktop = useMediaQuery('(min-width: 1024px)')
-  const [q, setQ] = useState('')
-  const [realm, setRealm] = useState<RealmFilter>('all')
-  const [caps, setCaps] = useState<Capability[]>([])
+  const [filter, setFilter] = useState<ModelFilter>(EMPTY_MODEL_FILTER)
+  const [sort, setSort] = useState<ModelSort>('default')
+  const set = <K extends keyof ModelFilter>(k: K, v: ModelFilter[K]) => setFilter((f) => ({ ...f, [k]: v }))
+  const filtered = JSON.stringify(filter) !== JSON.stringify(EMPTY_MODEL_FILTER)
 
   const list = useMemo(() => models.data?.models || [], [models.data])
-  const shown = useMemo(() => filterModels(list, q, realm, caps), [list, q, realm, caps])
+  const shown = useMemo(() => filterModels(list, filter, sort), [list, filter, sort])
   const pr = probes.data?.probes || {}
   const hit = list.filter((m) => probeFor(pr, m.id)).length
 
@@ -134,25 +179,37 @@ export function ModelsPage() {
       contentClassName="flex flex-col gap-3"
     >
       <div className="flex flex-wrap items-center gap-3">
-        <SearchField aria-label="搜索模型" value={q} onChange={setQ} className="w-full sm:w-64">
+        <SearchField aria-label="搜索模型" value={filter.q} onChange={(v) => set('q', v)} className="w-full sm:w-72">
           <SearchField.Group>
             <SearchField.SearchIcon />
-            <SearchField.Input placeholder="搜索模型、名称或厂商" />
+            <SearchField.Input placeholder="搜索 ID / 名称 / 厂商 / 描述" />
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
         <ToggleButtonGroup aria-label="按域筛选" size="sm" selectionMode="single" disallowEmptySelection
-          selectedKeys={[realm]} onSelectionChange={(k) => setRealm(([...k][0] as RealmFilter) ?? 'all')}>
+          selectedKeys={[filter.realm]} onSelectionChange={(k) => set('realm', ([...k][0] as RealmFilter) ?? 'all')}>
           <ToggleButton id="all">全部</ToggleButton>
           <ToggleButton id="cn"><ToggleButtonGroup.Separator />国内版</ToggleButton>
           <ToggleButton id="global"><ToggleButtonGroup.Separator />国际版</ToggleButton>
         </ToggleButtonGroup>
         <ToggleButtonGroup aria-label="按能力筛选" size="sm" selectionMode="multiple"
-          selectedKeys={caps} onSelectionChange={(k) => setCaps([...k] as Capability[])}>
+          selectedKeys={filter.caps} onSelectionChange={(k) => set('caps', [...k] as Capability[])}>
           <ToggleButton id="tools">工具调用</ToggleButton>
           <ToggleButton id="vision"><ToggleButtonGroup.Separator />视觉</ToggleButton>
-          <ToggleButton id="effort"><ToggleButtonGroup.Separator />可调思考档位</ToggleButton>
+          <ToggleButton id="reasoning"><ToggleButtonGroup.Separator />思考</ToggleButton>
+          <ToggleButton id="default"><ToggleButtonGroup.Separator />默认模型</ToggleButton>
         </ToggleButtonGroup>
+        <Pick label="按思考档位筛选" value={filter.effort} options={EFFORTS} onChange={(v) => set('effort', v)} className="w-32" />
+        <Pick label="按价格筛选" value={filter.promo} options={PROMOS} onChange={(v) => set('promo', v)} className="w-40" />
+        <Pick label="排序" value={sort} options={SORTS} onChange={setSort} className="w-40" />
+        {list.length > 0 && (
+          <span className={`text-sm sm:ml-auto ${shown.length !== list.length ? 'text-warning' : 'text-muted'}`}>
+            {shown.length !== list.length ? `命中 ${shown.length} / ${list.length} 个模型` : `${list.length} 个模型`}
+          </span>
+        )}
+        {(filtered || sort !== 'default') && (
+          <Button size="sm" variant="ghost" onPress={() => { setFilter(EMPTY_MODEL_FILTER); setSort('default') }}>重置</Button>
+        )}
       </div>
       <Loaded query={models} rows={8}>
         {() => shown.length === 0 ? (

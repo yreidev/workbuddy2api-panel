@@ -153,7 +153,7 @@ function ThemeSwitch() {
   )
 }
 
-/** 从上游刷新全部账号余额（5 秒轮询只读内存，不打上游） */
+/** 从上游刷新全部账号余额，顺带同步昵称（改名后点一下即可，免重新登录；5 秒轮询只读内存，不打上游） */
 function RefreshBalance({ compact }: { compact: boolean }) {
   const qc = useQueryClient()
   const [busy, setBusy] = useState(false)
@@ -161,7 +161,7 @@ function RefreshBalance({ compact }: { compact: boolean }) {
     setBusy(true)
     try {
       await post('balance_all')
-      toast.success('余额已从上游刷新')
+      toast.success('余额与昵称已从上游刷新')
     } catch (e) {
       toastError(e, '刷新失败：')
     } finally {
@@ -171,7 +171,7 @@ function RefreshBalance({ compact }: { compact: boolean }) {
     }
   }
   return (
-    <BusyButton variant="secondary" busy={busy} isIconOnly={compact} aria-label="刷新余额" onPress={() => void run()}>
+    <BusyButton variant="secondary" busy={busy} isIconOnly={compact} aria-label="刷新余额与昵称" onPress={() => void run()}>
       {!busy && <ArrowsRotateRight />}{!compact && '刷新余额'}
     </BusyButton>
   )

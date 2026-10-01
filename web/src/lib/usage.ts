@@ -68,3 +68,16 @@ export function tickLabel(p: Pick<ChartPoint, 't' | 'scope'>): string {
     ? d.getMonth() + 1 + '-' + String(d.getDate()).padStart(2, '0')
     : String(d.getHours()).padStart(2, '0') + ':00'
 }
+
+/** 峰值点与均值（图上画均值参考线、标注峰值） */
+export function chartStats(pts: ChartPoint[]): { peak: ChartPoint; avg: number } | null {
+  if (!pts.length) return null
+  const peak = pts.reduce((a, b) => (b.total > a.total ? b : a))
+  return { peak, avg: pts.reduce((s, p) => s + p.total, 0) / pts.length }
+}
+
+/** 占比（0–100）；分母为 0 时 null（显示 —，不写成 0.0%） */
+export function share(part?: number | null, total?: number | null): number | null {
+  const t = Number(total || 0)
+  return t ? Math.max(0, Math.min(100, Number(part || 0) / t * 100)) : null
+}

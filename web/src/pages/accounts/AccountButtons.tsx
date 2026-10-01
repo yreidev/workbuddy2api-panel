@@ -11,10 +11,11 @@ export function AccountButtons({ a, frozen, busy, run, nowrap }: {
   busy: string | null
   run: (a: Account, action: AccountAction) => void
 }) {
-  const btn = (action: AccountAction, label: string, variant: 'ghost' | 'primary' = 'ghost', className?: string) => (
+  const btn = (action: AccountAction, label: string, variant: 'ghost' | 'primary' = 'ghost', className?: string, ariaLabel?: string) => (
     <Button
       size="sm"
       variant={variant}
+      aria-label={ariaLabel}
       className={`${nowrap ? 'px-2' : ''} ${className ?? ''}`}
       isPending={busy === a.uid + ':' + action}
       onPress={() => run(a, action)}
@@ -24,7 +25,8 @@ export function AccountButtons({ a, frozen, busy, run, nowrap }: {
   )
   return (
     <div className={`flex items-center ${nowrap ? 'flex-nowrap gap-0.5' : 'flex-wrap gap-1'}`}>
-      {btn('checkin', '签到')}
+      {/* 今日已签仍可点：重新签到会顺带刷新余额 */}
+      {a.checkin_done ? btn('checkin', '已签', 'ghost', 'text-muted', '今日已签到，点击重新签到并刷新余额') : btn('checkin', '签到')}
       {btn('balance', '余额')}
       {btn('tasks', '任务')}
       {frozen ? btn('revive', '解冻', 'primary') : btn('disable', '禁用')}

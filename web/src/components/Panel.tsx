@@ -27,14 +27,36 @@ export function Panel({ title, desc, actions, children, className = '', contentC
   )
 }
 
-/** 统计数字 */
-export function Stat({ label, value, tone }: { label: ReactNode; value: ReactNode; tone?: 'success' | 'warning' | 'danger' }) {
+/** 统计数字。sub 放「占比 / 成功率」这类解释性的小字，children 放卡片内的构成条 */
+export function Stat({ label, value, tone, sub, children, className = '' }: {
+  label: ReactNode
+  value: ReactNode
+  tone?: 'success' | 'warning' | 'danger'
+  sub?: ReactNode
+  children?: ReactNode
+  className?: string
+}) {
   const color = tone === 'success' ? 'text-success' : tone === 'warning' ? 'text-warning' : tone === 'danger' ? 'text-danger' : ''
   return (
-    <Card className="gap-1 p-4">
+    <Card className={`gap-1 p-4 ${className}`}>
       <span className={`text-2xl font-semibold tabular-nums ${color}`}>{value}</span>
       <span className="text-xs text-muted">{label}</span>
+      {children}
+      {sub && <span className="text-xs text-muted tabular-nums">{sub}</span>}
     </Card>
+  )
+}
+
+/** prompt / completion 构成条（宽度按百分比，随列宽伸缩） */
+export function MixBar({ prompt, completion, total, className = '' }: { prompt?: number; completion?: number; total?: number; className?: string }) {
+  const t = Number(total || 0)
+  if (!t) return null
+  const w = (v?: number) => Math.max(0, Math.min(100, Number(v || 0) / t * 100))
+  return (
+    <span className={`flex h-1.5 w-full overflow-hidden rounded-full bg-surface-secondary ${className}`} aria-hidden="true">
+      <span className="h-full bg-(--viz-1)" style={{ width: w(prompt) + '%' }} />
+      <span className="h-full bg-(--viz-2)" style={{ width: w(completion) + '%' }} />
+    </span>
   )
 }
 

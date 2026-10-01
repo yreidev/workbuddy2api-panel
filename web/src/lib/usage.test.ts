@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartPoints, dayBoundaries, minGap, nearestTicks, parsePointTime } from './usage'
+import { chartPoints, chartStats, dayBoundaries, minGap, nearestTicks, parsePointTime, share } from './usage'
 import type { UsagePoint } from './types'
 
 const pt = (t: string, scope: 'hour' | 'day', p: number, c: number): UsagePoint => ({
@@ -25,5 +25,15 @@ describe('usage chart', () => {
     expect(new Set(ticks).size).toBe(ticks.length)
     expect(minGap(pts)).toBe(3600_000)
     expect(dayBoundaries(pts)).toEqual([pts[3].t])
+  })
+
+  it('峰值与均值；占比无分母时不伪造 0%', () => {
+    const pts = chartPoints([pt('2026-09-30T09', 'hour', 35, 16), pt('2026-09-30T11', 'hour', 900, 100), pt('2026-09-30T13', 'hour', 10, 2)])
+    const st = chartStats(pts)!
+    expect(st.peak.raw).toBe('2026-09-30T11')
+    expect(st.avg).toBeCloseTo((51 + 1000 + 12) / 3)
+    expect(chartStats([])).toBeNull()
+    expect(share(1, 4)).toBe(25)
+    expect(share(1, 0)).toBeNull()
   })
 })

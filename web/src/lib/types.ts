@@ -51,6 +51,8 @@ export interface Account {
   soft_streak?: number
   rate_limited_models?: RateLimitedModel[]
   realm?: string
+  /** 本地今日已签到（签到成功或上游「今天已签到」都算；国际版没有签到，恒为 false） */
+  checkin_done?: boolean
   disabled: boolean
   disabled_reason?: string
   success_count?: number
@@ -138,6 +140,9 @@ export interface UsageAgg {
   /** 同时有积分和 token 的请求的 token 合计（积分 / 1M Token 的分母） */
   credit_tokens?: number
   credits_per_1m_tokens?: number
+  /** 上游前缀缓存命中 / 未命中 token（上游返回了这一项才累计） */
+  cache_hit_tokens?: number
+  cache_miss_tokens?: number
   avg_latency_ms: number
   avg_tokens_per_second: number
 }
@@ -153,6 +158,8 @@ export interface CreditUsage {
   credit_samples: number
   credit_tokens: number
   credits_per_1m_tokens: number
+  cache_hit_tokens?: number
+  cache_miss_tokens?: number
 }
 
 export interface KeyedUsage extends UsageAgg {
@@ -179,6 +186,9 @@ export interface UsageResp {
   buckets: number
   file_bytes: number
   since?: string
+  /** 显式区间（今天 / 自定义）时服务端实际生效的起止（本地时间 RFC3339）；滚动窗口和全部历史没有 */
+  window_from?: string
+  window_to?: string
   generated: string
 }
 
@@ -357,6 +367,11 @@ export interface RequestEvent {
   total_tokens?: number
   credit?: number
   credit_known: boolean
+  cache_hit_tokens?: number
+  cache_miss_tokens?: number
+  /** 调用来源（logging.request_client_info 关闭时为空） */
+  client_ip?: string
+  user_agent?: string
 }
 
 export interface RequestMetrics {

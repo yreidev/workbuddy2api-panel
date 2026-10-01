@@ -103,6 +103,7 @@ export const CONFIG_TABS: ConfigTab[] = [
           num('idle_weight_per_hour', ['pool', 'idle_weight_per_hour'], '闲置补偿 / 小时', '0.5', { step: 0.1 }),
           num('idle_weight_max', ['pool', 'idle_weight_max'], '闲置补偿上限', '5', { step: 0.1 }),
           duration('cost_explore_interval', ['pool', 'cost_explore_interval'], '成本探索窗口', '30m', '垄断破除：免费层垄断时定期搭车探索未知号；0 关停'),
+          num('credit_floor', ['pool', 'credit_floor'], '积分保底', '100', { min: 0, hint: '余额低于此值不再接实测收费模型（保住免费模型可用）；0 关闭' }),
           toggle('prefer_expiring', ['pool', 'prefer_expiring'], '快过期积分优先'),
           duration('expiring_soon', ['pool', 'expiring_soon'], '快过期路由窗口', '168h', '窗口内按最早到期优先；0 关闭'),
           duration('ttl', ['session_sticky', 'ttl'], '会话粘性 TTL', '30m', undefined, true),
@@ -140,8 +141,10 @@ export const CONFIG_TABS: ConfigTab[] = [
         ],
       },
       {
-        title: '请求日志归档',
+        title: '请求日志',
         fields: [
+          toggle('request_client_info', ['logging', 'request_client_info'], '记录调用来源（客户端 IP / User-Agent）',
+            '开启后运行日志页的请求记录显示每次调用来自哪个 IP、用什么客户端；关闭则归档与面板都不再出现来源信息'),
           toggle('request_archive_enabled', ['logging', 'request_archive_enabled'], '请求元数据 JSONL 归档',
             '只记录时间、状态、模型、账号、耗时、token、积分，不记录提示词、响应正文或密钥', true),
           num('request_retention_days', ['logging', 'request_retention_days'], '归档保留天数', '7', { min: 1, restart: true, hint: '超期文件在启动和定期清理时删除' }),
