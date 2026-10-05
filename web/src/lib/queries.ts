@@ -115,12 +115,12 @@ export function useUsage(range: TimeRange) {
   })
 }
 
-/** 积分包逐账号查上游（慢）：一分钟内切回来直接用缓存，页面上有「刷新」 */
+/** 积分包逐账号查上游（慢）：积分构成页与账号池页的到期提醒共用，两分钟内直接用缓存，页面上有「刷新」 */
 export function usePackages() {
   return useQuery({
     queryKey: qk.packages,
     queryFn: () => api<{ accounts: PackageAccount[] | null }>('packages'),
-    staleTime: 60_000,
+    staleTime: 2 * 60_000,
   })
 }
 

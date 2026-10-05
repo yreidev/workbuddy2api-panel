@@ -1,6 +1,6 @@
 // 从 Go 端 internal/panel/frontend_test.go 平移过来的两个用例（断言值原样保留）。
 import { describe, expect, it } from 'vitest'
-import { pkAccountColorMap, pkDetailGroups, pkDetailLimit, summarizeCreditDays } from './packages'
+import { expiryBatches, expiryReminder, pkAccountColorMap, pkDetailGroups, pkDetailLimit, summarizeCreditDays } from './packages'
 
 describe('pkDetailGroups', () => {
   it('同到期时间按面额降序；其余未用完包与零/负余额包分别聚合', () => {
@@ -65,5 +65,61 @@ describe('分类色', () => {
     expect(new Set([...colors.values()].filter((c) => c !== 'var(--viz-other)')).size).toBe(8)
     // 查询失败的账号不占槽位
     expect(pkAccountColorMap([{ uid: 'x', error: 'offline' }, { uid: 'y' }]).get('y')).toBe('var(--viz-1)')
+  })
+})
+
+describe('pkDetailGroups 按面额排序', () => {
+  it('面额降序，同面额按到期升序、无到期垫底；折叠组同一规则', () => {
+    const out = pkDetailGroups([
+      { id: 'small-early', size: 100, remain: 2, expires_at: 200 },
+      { id: 'large-unknown', size: 300, remain: 3, end_time: '' },
+      { id: 'large-late', size: 300, remain: 1, expires_at: 400 },
+      { id: 'large-early', size: 300, remain: 4, expires_at: 200 },
+      { id: 'zero-small', size: 50, remain: 0, expires_at: 100 },
+      { id: 'zero-large', size: 500, remain: 0, expires_at: 300 },
+    ], 2, 'size_desc')
+    expect(out.visible.map((p) => p.id)).toEqual(['large-early', 'large-late'])
+    expect(out.rest.map((p) => p.id)).toEqual(['large-unknown', 'small-early'])
+    expect(out.used.map((p) => p.id)).toEqual(['zero-large', 'zero-small'])
+  })
+})
+
+describe('积分到期提醒', () => {
+  // 北京时间 2026-10-05 10:00
+  const now = Date.parse('2026-10-05T10:00:00+08:00')
+  const at = (s: string) => Date.parse(s + '+08:00')
+
+  it('按北京时间到期日聚合、按自然日算剩余天数；跳过无余额、无到期、已过期的包', () => {
+    const bs = expiryBatches([
+      { remain: 30, expires_at: at('2026-10-08T23:59:59') },
+      { remain: 20, expires_at: at('2026-10-08T00:00:01') },
+      { remain: 10, end_time: '2026-10-05T23:00:00+08:00' },
+      { remain: 99, expires_at: at('2026-10-05T09:00:00') },
+      { remain: 0, expires_at: at('2026-10-06T00:00:00') },
+      { remain: 5, end_time: '' },
+      { remain: 40, expires_at: at('2026-10-20T12:00:00') },
+    ], now)
+    expect(bs).toEqual([
+      { date: '2026-10-05', days: 0, remain: 10 },
+      { date: '2026-10-08', days: 3, remain: 50 },
+      { date: '2026-10-20', days: 15, remain: 40 },
+    ])
+  })
+
+  it('日均需耗 = 最近一批 ÷ 距到期天数（向上取整，今天到期按 1 天）；7 天内合计与随后批次', () => {
+    const r = expiryReminder([
+      { remain: 100, expires_at: at('2026-10-08T12:00:00') },
+      { remain: 7, expires_at: at('2026-10-12T12:00:00') },
+      { remain: 3, expires_at: at('2026-10-13T12:00:00') },
+      { remain: 1, expires_at: at('2026-10-14T12:00:00') },
+      { remain: 1, expires_at: at('2026-10-15T12:00:00') },
+    ], now)!
+    expect(r.first).toEqual({ date: '2026-10-08', days: 3, remain: 100 })
+    expect(r.daily).toBe(34)
+    expect(r.week).toBe(107)
+    expect(r.next.map((b) => b.date)).toEqual(['2026-10-12', '2026-10-13', '2026-10-14'])
+    expect(r.count).toBe(5)
+    expect(expiryReminder([{ remain: 9, expires_at: at('2026-10-05T20:00:00') }], now)!.daily).toBe(9)
+    expect(expiryReminder([{ remain: 9, end_time: '' }], now)).toBeNull()
   })
 })

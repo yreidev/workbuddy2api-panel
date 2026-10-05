@@ -1,4 +1,4 @@
-// 账号池：统计（点一下按状态筛选）+ 搜索 + 账号表（可排序，点行看详情）+ 批量任务。窄屏把表格换成卡片列表。
+// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 搜索 + 账号表（可排序，点行看详情）+ 批量任务。窄屏把表格换成卡片列表。
 import { useMemo, useState } from 'react'
 import {
   Button, Card, SearchField, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type SortDescriptor,
@@ -14,6 +14,7 @@ import { Panel, Stat } from '../../components/Panel'
 import { AccountButtons } from './AccountButtons'
 import { AccountName, CreditsCell, StatusCell, UsageChips } from './AccountCells'
 import { AccountDrawer } from './AccountDrawer'
+import { ExpiryReminder } from './ExpiryReminder'
 import { TasksModal } from './TasksModal'
 import { useAccountActions } from './useAccountActions'
 
@@ -84,6 +85,8 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         <Stat label="积分剩余 / 总额" value={totSum > 0 ? `${remSum} / ${totSum}` : remSum} />
         <Stat label="粘性会话" value={data.sticky_sessions} />
       </div>
+
+      <ExpiryReminder />
 
       <Panel
         title="账号池"

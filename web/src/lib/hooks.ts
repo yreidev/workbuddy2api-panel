@@ -4,6 +4,27 @@ import { toast } from '@heroui/react'
 import { errorMessage } from './api'
 import type { LogChannel } from './logs'
 
+/** 记在 localStorage 里的选项（跨会话记住）；存的值不在可选范围内（选项改过）时回落默认 */
+export function useStoredChoice<T extends string>(key: string, choices: readonly T[], fallback: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const v = localStorage.getItem(key)
+      return choices.find((c) => c === v) ?? fallback
+    } catch {
+      return fallback
+    }
+  })
+  const set = (v: T) => {
+    setValue(v)
+    try {
+      localStorage.setItem(key, v)
+    } catch {
+      // 无痕模式等拿不到存储：只在本次会话生效
+    }
+  }
+  return [value, set] as const
+}
+
 /** 每隔 intervalMs 返回一次当前时间（冷却倒计时逐秒走） */
 export function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(() => Date.now())

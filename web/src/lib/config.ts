@@ -71,6 +71,13 @@ export const CONFIG_TABS: ConfigTab[] = [
           hours('growth_hours', 'growth_hours', '执行时点', '1', '每日到点自动「扫描 + 执行全部待办」（Sequential 任务链零点解锁后自动推进，建议零点后）'),
         ],
       },
+      {
+        title: '已禁用的账号',
+        fields: [
+          toggle('include_disabled_in_tasks', ['schedule', 'include_disabled_in_tasks'], '保号任务覆盖已禁用账号',
+            '禁用只关选号：打开后已禁用的账号仍会签到 / 活跃上报 / 保活 / 刷新余额（依旧不参与选号）。适合「一次只放开一个账号、用禁用做流量开关」的轮换养号用法。猫猫旅行、夜猫子、连登管家与成长任务仍跳过禁用账号'),
+        ],
+      },
     ],
   },
   {
@@ -104,8 +111,8 @@ export const CONFIG_TABS: ConfigTab[] = [
           num('idle_weight_max', ['pool', 'idle_weight_max'], '闲置补偿上限', '5', { step: 0.1 }),
           duration('cost_explore_interval', ['pool', 'cost_explore_interval'], '成本探索窗口', '30m', '垄断破除：免费层垄断时定期搭车探索未知号；0 关停'),
           num('credit_floor', ['pool', 'credit_floor'], '积分保底', '100', { min: 0, hint: '余额低于此值不再接实测收费模型（保住免费模型可用）；0 关闭' }),
-          toggle('prefer_expiring', ['pool', 'prefer_expiring'], '快过期积分优先'),
-          duration('expiring_soon', ['pool', 'expiring_soon'], '快过期路由窗口', '168h', '窗口内按最早到期优先；0 关闭'),
+          toggle('prefer_expiring', ['pool', 'prefer_expiring'], '快过期积分优先', '软偏好：弱于会话粘性与模型成本分层'),
+          duration('expiring_soon', ['pool', 'expiring_soon'], '快过期路由窗口', '168h', '窗口内有快过期批次的账号选号权重 ×3（不排序、与金额无关）；0 关闭'),
           duration('ttl', ['session_sticky', 'ttl'], '会话粘性 TTL', '30m', undefined, true),
         ],
       },
@@ -118,6 +125,8 @@ export const CONFIG_TABS: ConfigTab[] = [
       {
         title: '超时',
         fields: [
+          duration('read_timeout', ['server', 'read_timeout'], '入站请求读取上限', '300s',
+            '含请求体上传；大上下文经反代转发超时会报 400 read body: i/o timeout，调大即可；0 = 不限制', true),
           num('timeout_seconds', ['upstream', 'timeout_seconds'], '短请求超时（秒）', '120', { min: 1, restart: true }),
           num('header_timeout_seconds', ['upstream', 'header_timeout_seconds'], '聊天首字节超时（秒）', '120', { min: 1, restart: true }),
           num('idle_timeout_seconds', ['upstream', 'idle_timeout_seconds'], '流空闲超时（秒）', '300', { min: 1, restart: true }),
@@ -210,8 +219,8 @@ export function fromForm(values: FormValues): Record<string, unknown> {
 
 export const parseHours = (raw: string) => raw.split(/[,，\s]+/).filter(Boolean).map(Number)
 
-/** Go 时长语法（30m / 2h / 600s / 1h30m，可组合可带小数），与后端 time.ParseDuration 同口径 */
-export const DURATION_RE = /^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/
+/** Go 时长语法（30m / 2h / 600s / 1h30m，可组合可带小数；单写 0 也合法），与后端 time.ParseDuration 同口径 */
+export const DURATION_RE = /^(0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+)$/
 
 /** 字段校验：返回错误文案，合法返回 null。空值合法（= 沿用现值） */
 export function validateField(f: FieldDef, value: string | boolean): string | null {

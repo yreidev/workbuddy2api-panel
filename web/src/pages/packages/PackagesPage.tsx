@@ -1,14 +1,16 @@
 // 积分构成：积分到期分布（按剩余天数、账号分色）、账号对比卡片、单账号逐包明细。
-// 数据逐账号实时查上游（慢），一分钟内切回来直接用缓存，页面上有「刷新」。
+// 数据逐账号实时查上游（慢），与账号池页的到期提醒共用一份缓存，两分钟内切回来直接用，页面上有「刷新」。
 import { useMemo } from 'react'
-import { Accordion, Card, Table } from '@heroui/react'
+import { Accordion, Card, Label, ListBox, Select, Table } from '@heroui/react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ChevronDown } from '@gravity-ui/icons'
 import { fmtTok } from '../../lib/format'
+import { useStoredChoice } from '../../lib/hooks'
 import type { TipProps } from '../../lib/chart'
 import {
   pkAccountColorMap, pkAccountSegments, pkBySource, pkColor, pkCreditOpacity, pkDetailGroups, pkDetailLimit,
-  pkDetailLimitValue, pkExpiryDateTime, pkExpiryText, pkSourceKey, summarizeCreditDays, VIZ_OTHER, type CreditDayRow,
+  pkDetailLimitValue, pkExpiryDateTime, pkExpiryText, pkSourceKey, PK_SORT_OPTIONS, summarizeCreditDays, VIZ_OTHER, type CreditDayRow,
+  type PkSortMode,
 } from '../../lib/packages'
 import { useConfig, usePackages } from '../../lib/queries'
 import type { CreditPackage, PackageAccount } from '../../lib/types'
@@ -21,6 +23,7 @@ export function PackagesPage() {
   const limit = pkDetailLimit(cfg.data?.config)
   const list = useMemo(() => query.data?.accounts || [], [query.data])
   const colorOf = useMemo(() => sourceColors(list), [list])
+  const [sortMode, setSortMode] = useStoredChoice<PkSortMode>('wb2api.pkSort', PK_SORT_OPTIONS.map((o) => o.id), 'end_asc')
   return (
     <>
       <Panel title="积分到期分布" desc="按批次到期日聚合，颜色区分账号">
@@ -29,11 +32,24 @@ export function PackagesPage() {
       <Panel
         title="账号对比"
         desc={query.data ? list.length + ' 个账号 · 实时查询上游' : '逐账号向上游实时查询'}
-        actions={<BusyButton size="sm" variant="secondary" busy={query.isFetching} onPress={() => void query.refetch()}>刷新</BusyButton>}
+        actions={
+          <>
+            <Select aria-label="逐包明细排序" value={sortMode} onChange={(k) => k != null && setSortMode(k as PkSortMode)} className="w-32">
+              <Label className="sr-only">逐包明细排序</Label>
+              <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  {PK_SORT_OPTIONS.map((o) => <ListBox.Item key={o.id} id={o.id} textValue={o.label}>{o.label}<ListBox.ItemIndicator /></ListBox.Item>)}
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            <BusyButton size="sm" variant="secondary" busy={query.isFetching} onPress={() => void query.refetch()}>刷新</BusyButton>
+          </>
+        }
       >
         <Loaded query={query} rows={3}>{() => <Compare list={list} now={query.dataUpdatedAt} />}</Loaded>
       </Panel>
-      {query.data && list.filter((a) => !a.error).map((a) => <Detail key={a.uid} a={a} limit={limit} colorOf={colorOf} />)}
+      {query.data && list.filter((a) => !a.error).map((a) => <Detail key={a.uid} a={a} limit={limit} sortMode={sortMode} colorOf={colorOf} />)}
     </>
   )
 }
@@ -227,16 +243,16 @@ function PackTable({ packs, colorOf, label }: { packs: CreditPackage[]; colorOf:
   )
 }
 
-/** 单账号逐包明细：按最早到期默认展示 N 条，其余未用完的包和已用完的包各自折叠 */
-function Detail({ a, limit, colorOf }: { a: PackageAccount; limit: number; colorOf: (key: string) => string }) {
-  const g = pkDetailGroups(a.packages || [], limit)
+/** 单账号逐包明细：按排序规则（默认最早到期）展示前 N 条，其余未用完的包和已用完的包各自折叠 */
+function Detail({ a, limit, sortMode, colorOf }: { a: PackageAccount; limit: number; sortMode: PkSortMode; colorOf: (key: string) => string }) {
+  const g = pkDetailGroups(a.packages || [], limit, sortMode)
   const name = (a.nickname || a.uid.slice(0, 8)) + ' · ' + (a.realm || '')
   return (
     <Panel
       title={name}
       desc={
         '余额 ' + fmtTok(a.remain) + ' / 总额 ' + fmtTok(a.size) + ' · 可用 ' + (g.visible.length + g.rest.length) + ' 个包' +
-        (g.used.length ? ' / 已用完 ' + g.used.length + ' 个' : '') + ' · 默认展示最早到期 ' + pkDetailLimitValue(limit) + ' 条'
+        (g.used.length ? ' / 已用完 ' + g.used.length + ' 个' : '') + ' · 默认展示' + (sortMode === 'size_desc' ? '面额最大 ' : '最早到期 ') + pkDetailLimitValue(limit) + ' 条'
       }
       contentClassName="flex flex-col gap-2"
     >

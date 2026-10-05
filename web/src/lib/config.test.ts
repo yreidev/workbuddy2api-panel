@@ -22,12 +22,19 @@ describe('配置表单', () => {
     expect(body.pool.max_in_flight).toBe(3)
     expect('api_key' in body).toBe(false)
     expect(body.pool.prefer_expiring).toBe(false)
+    expect(body.schedule.include_disabled_in_tasks).toBe(false)
+    expect('server' in body).toBe(false)
   })
 
   it('时长、时点、数字校验', () => {
     expect(validateField(field('soft_rate'), '1h30m')).toBeNull()
     expect(validateField(field('soft_rate'), '30 分钟')).not.toBeNull()
     expect(validateField(field('soft_rate'), '')).toBeNull()
+    // 单写 0 是 Go 合法时长（「0 关闭 / 不限制」），其余数字必须带单位
+    expect(validateField(field('read_timeout'), '0')).toBeNull()
+    expect(validateField(field('expiring_soon'), '0')).toBeNull()
+    expect(validateField(field('read_timeout'), '300')).not.toBeNull()
+    expect(validateField(field('read_timeout'), '00')).not.toBeNull()
     expect(validateField(field('checkin_hours'), '9，21')).toBeNull()
     expect(validateField(field('checkin_hours'), '9, 24')).not.toBeNull()
     expect(validateField(field('max_in_flight_global'), '0')).not.toBeNull()

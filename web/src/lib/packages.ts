@@ -82,10 +82,24 @@ export function pkExpiryMs(p: Partial<CreditPackage> | null | undefined): number
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function pkDetailCompare(a: Partial<CreditPackage>, b: Partial<CreditPackage>): number {
+/**
+ * 逐包明细的排序规则：end_asc 到期升序（默认，快过期的在前，提醒优先消耗；没有到期时间的包统一垫底，
+ * 同到期按面额降序）；size_desc 面额降序（看「钱从哪来」，同面额按到期升序）。
+ */
+export type PkSortMode = 'end_asc' | 'size_desc'
+export const PK_SORT_OPTIONS: { id: PkSortMode; label: string }[] = [
+  { id: 'end_asc', label: '按到期时间' },
+  { id: 'size_desc', label: '按面额大小' },
+]
+
+function pkDetailCompare(a: Partial<CreditPackage>, b: Partial<CreditPackage>, mode: PkSortMode): number {
   const sizeOf = (p: Partial<CreditPackage>) => {
     const n = Number(p?.size)
     return Number.isFinite(n) ? n : 0
+  }
+  if (mode === 'size_desc') {
+    const d = sizeOf(b) - sizeOf(a)
+    if (d !== 0) return d
   }
   const ea = pkExpiryMs(a), eb = pkExpiryMs(b)
   if (ea == null && eb != null) return 1
@@ -103,8 +117,8 @@ export interface DetailGroups<P> {
   usedSize: number
 }
 
-/** 单账号逐包明细：正余额包按到期时间挑出默认展示项，其余正余额包与已用完包分别折叠；同一到期时间按面额降序 */
-export function pkDetailGroups<P extends Partial<CreditPackage>>(packs: P[] | null | undefined, limit: unknown): DetailGroups<P> {
+/** 单账号逐包明细：正余额包按排序规则挑出默认展示项，其余正余额包与已用完包分别折叠（折叠组内同一规则） */
+export function pkDetailGroups<P extends Partial<CreditPackage>>(packs: P[] | null | undefined, limit: unknown, mode: PkSortMode = 'end_asc'): DetailGroups<P> {
   const active: P[] = [], used: P[] = []
   let usedSize = 0, restSize = 0, restRemain = 0
   for (const p of packs || []) {
@@ -116,8 +130,9 @@ export function pkDetailGroups<P extends Partial<CreditPackage>>(packs: P[] | nu
     const size = Number(p?.size)
     if (Number.isFinite(size)) usedSize += size
   }
-  active.sort(pkDetailCompare)
-  used.sort(pkDetailCompare)
+  const cmp = (a: P, b: P) => pkDetailCompare(a, b, mode)
+  active.sort(cmp)
+  used.sort(cmp)
   const visible = active.slice(0, pkDetailLimitValue(limit))
   const rest = active.slice(visible.length)
   for (const p of rest) {
@@ -227,3 +242,61 @@ export function summarizeCreditDays(list: SegmentAccount[] | null | undefined, n
   }
   return { rows, accountCount: (list || []).length, unavailable }
 }
+
+// ── 积分到期提醒（账号池页卡片）──────────────────────────────────────────
+// 签到 / 任务发的裂变包约一个月失效，只看「剩余积分 ÷ 日消耗」会系统性偏乐观——用不完的部分到期直接蒸发。
+// 所以把「最近要过期的是哪批、有多少、到期前每天至少要消耗多少」顶到首页。上游扣包是 FEFO（按失效时刻先后）。
+
+export interface ExpiryBatch {
+  /** 到期日（北京时间） */
+  date: string
+  /** 距到期的自然日数：今天到期 = 0 */
+  days: number
+  remain: number
+}
+
+const bjDay = (ms: number) => new Date(ms + 8 * 3600_000).toISOString().slice(0, 10)
+
+/** 账号的包按到期日聚合成「到期日 → 该日作废积分」，升序。只算还有余额、有到期时间且还没过期的包 */
+export function expiryBatches(packs: Partial<CreditPackage>[] | null | undefined, now: number): ExpiryBatch[] {
+  const byDay = new Map<string, number>()
+  for (const p of packs || []) {
+    const remain = Number(p?.remain || 0)
+    const at = pkExpiryMs(p)
+    if (!(remain > 0) || at == null || at <= now) continue
+    const day = bjDay(at)
+    byDay.set(day, (byDay.get(day) ?? 0) + remain)
+  }
+  const today = Date.parse(bjDay(now))
+  return [...byDay.entries()]
+    .map(([date, remain]) => ({ date, remain, days: Math.round((Date.parse(date) - today) / PK_DAY_MS) }))
+    .sort((a, b) => a.days - b.days)
+}
+
+export interface ExpiryReminder {
+  first: ExpiryBatch
+  /** 最近一批到期前，日均至少要消耗多少才能用完（今天到期按 1 天算） */
+  daily: number
+  /** 7 天内到期的合计 */
+  week: number
+  /** 随后的 3 批 */
+  next: ExpiryBatch[]
+  /** 批次总数 */
+  count: number
+}
+
+export function expiryReminder(packs: Partial<CreditPackage>[] | null | undefined, now: number): ExpiryReminder | null {
+  const bs = expiryBatches(packs, now)
+  if (!bs.length) return null
+  const first = bs[0]
+  return {
+    first,
+    daily: Math.ceil(first.remain / Math.max(1, first.days)),
+    week: bs.filter((b) => b.days <= 7).reduce((s, b) => s + b.remain, 0),
+    next: bs.slice(1, 4),
+    count: bs.length,
+  }
+}
+
+/** 危险度：3 天内（不抓紧就真没了）、7 天内、更远 */
+export const expiryTone = (days: number) => (days <= 3 ? 'danger' : days <= 7 ? 'warning' : 'success')
