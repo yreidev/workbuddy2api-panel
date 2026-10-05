@@ -44,6 +44,15 @@ type Config struct {
 		RequestClientInfo bool `json:"request_client_info"`
 	} `json:"logging"`
 
+	Server struct {
+		// ReadTimeout 入站请求读取（含 body 上传）总时长上限（issue #100）。
+		// http.Server 的 ReadTimeout 覆盖整个请求读取：大上下文/文件块请求经
+		// 反代链转发时上传可超过旧固定值 60s，被掐后客户端拿到
+		// 400 "read body: ... i/o timeout"。缺省 "300s"；"0" = 不限制
+		//（慢速 body 可无限占用连接，自担风险）；改动需重启进程。
+		ReadTimeout string `json:"read_timeout"` // "300s"；"0" = 不限制
+	} `json:"server"`
+
 	Cooldown struct {
 		// hard_credit / err_threshold / err_cooldown 三个历史键已退役：
 		// 硬冷却固定为次日 04:00（CooldownUntilTomorrow4AM），连续错误语义并入熔断器。
@@ -76,6 +85,22 @@ type Config struct {
 		KeepaliveEnabled bool `json:"keepalive_enabled"` // 缺省 true；false = 关 token 保活
 		BlackcatEnabled  bool `json:"blackcat_enabled"`  // 缺省 true；false = 关夜猫子
 		GrowthEnabled    bool `json:"growth_enabled"`    // 缺省 true；false = 关成长任务自动排程
+
+		// IncludeDisabledInTasks 让「保号类」定时任务（签到 / 活跃上报 / token 保活 /
+		// 余额刷新）对**已禁用（disabled）**的账号也执行。
+		//
+		// 为什么需要它：面板「禁用」的语义是「不再参与选号」（见面板确认文案），但这四类
+		// 任务此前一律 `if st.Disabled { continue }`，等于把「停用流量」放大成「停止一切
+		// 上游保号行为」——被禁用的号拿不到签到积分、不续 token、余额也不再刷新；而
+		// ReenableIfCredits 明确不复活 disabled 账号（见 pool.state.go），于是签到这条唯一
+		// 的自动回血路径也断了，账号只能靠人工「解冻」回来。
+		//
+		// 对「一次只放开一个号、用禁用做流量开关」的轮换用法（同 IP 多号防风控），闲置
+		// 待命的号恰恰是最需要签到的那批——本开关即为该用法提供出口。
+		//
+		// 缺省 false = 保持既有行为，对老配置零影响。打开后禁用号仍会签到 / 保活，但
+		// **依旧不参与选号**：pool 选号侧的 disabled 过滤不受本开关影响。
+		IncludeDisabledInTasks bool `json:"include_disabled_in_tasks"`
 
 		// 余额后台周期刷新：两次签到时点之间 credits 也能保持新鲜（面板/状态观测用）。
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
@@ -160,11 +185,14 @@ type Config struct {
 		DegradeCooldownMax string  `json:"degrade_cooldown_max"` // 降权时长的上限钳制，默认 "2h"（仅当 cooldown 超该值才钳制）
 		IdleWeightPerHour  float64 `json:"idle_weight_per_hour"` // 闲置补偿：每小时未用 +0.5 权重
 		IdleWeightMax      float64 `json:"idle_weight_max"`      // 闲置补偿封顶，默认 5.0
-		// PreferExpiring 最早到期优先路由开关，默认 true。开启且 expiring_soon 窗口内
-		// 存在有效批次时，按最早到期时间排序；关闭后完全不使用到期信息选号。
+		// PreferExpiring 快过期积分加权开关，默认 true。开启且 expiring_soon 窗口内
+		// 存在有效批次时，该账号选号权重 ×3（虚拟实例，见 pool 路由加权）；
+		// 不按到期时间排序、与批次金额无关（issue #101 对齐实现口径）。
+		// 关闭后完全不使用到期信息选号。
 		PreferExpiring bool `json:"prefer_expiring"`
 		// ExpiringSoon 快过期积分窗口（如 "168h"=7天）：签到/余额刷新时，到期时间在
-		// 此窗口内的积分进入优先集，再按最早到期排序。空/0 = 禁用该路由门槛。
+		// 此窗口内的批次令账号命中上述 ×3 加权；窗口开大 → 命中账号变多、
+		// 偏好被稀释。空/0 = 禁用该加权门槛。
 		ExpiringSoon string `json:"expiring_soon"`
 		// CostExploreInterval costTier 条件探索窗口（issue #136 方案 a′）：tier 0
 		// 垄断层存在且 tier 1 有成员时，距上次探索 ≥ 窗口则本次 pick 生效层切
@@ -198,6 +226,8 @@ type Config struct {
 	ExpiringSoonDur        time.Duration `json:"-"`
 	// CostExploreIntervalDur 解析后的 costTier 探索窗口（issue #136）；0 = 关停。
 	CostExploreIntervalDur time.Duration `json:"-"`
+	// ServerReadTimeoutDur 解析后的入站请求读取上限（issue #100）；0 = 不限制。
+	ServerReadTimeoutDur time.Duration `json:"-"`
 }
 
 // Default 默认配置。
@@ -210,6 +240,7 @@ func Default() *Config {
 	}
 	c.Cooldown.SoftRate = "600s"
 	c.Cooldown.SoftRateMax = "2h"
+	c.Server.ReadTimeout = "300s"
 	c.Panel.PackageDetailLimit = 5
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
@@ -430,6 +461,17 @@ func (c *Config) normalize() error {
 	}
 	if c.Logging.RequestArchiveMaxMB <= 0 {
 		c.Logging.RequestArchiveMaxMB = 100
+	}
+	// 入站读取上限（issue #100）：空值回落默认 300s；"0" 合法（不限制）；
+	// 负值无语义，fail fast（静默钳 0 会把保护悄悄关掉）。
+	if c.Server.ReadTimeout == "" {
+		c.Server.ReadTimeout = "300s"
+	}
+	if c.ServerReadTimeoutDur, err = time.ParseDuration(c.Server.ReadTimeout); err != nil {
+		return fmt.Errorf("server.read_timeout: %w", err)
+	}
+	if c.ServerReadTimeoutDur < 0 {
+		return fmt.Errorf("server.read_timeout: 负时长 %q 无意义", c.Server.ReadTimeout)
 	}
 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
 		return fmt.Errorf("cooldown.soft_rate: %w", err)

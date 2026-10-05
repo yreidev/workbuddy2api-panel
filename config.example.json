@@ -3,6 +3,9 @@
   "api_key": "test_key",
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
+  "server": {
+    "read_timeout": "300s"
+  },
   "panel": {
     "package_detail_limit": 5
   },
@@ -30,7 +33,8 @@
     "keepalive_enabled": true,
     "blackcat_enabled": true,
     "balance_refresh_enabled": true,
-    "balance_refresh_minutes": 5
+    "balance_refresh_minutes": 5,
+    "include_disabled_in_tasks": false
   },
   "global": {
     "enabled": true,

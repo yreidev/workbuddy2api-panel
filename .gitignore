@@ -49,3 +49,4 @@ docs/
 /cmd/desktopverify*/
 *.zip
 server.exe
+.DS_Store

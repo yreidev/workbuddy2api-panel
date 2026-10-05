@@ -187,6 +187,8 @@ func main() {
 		KeepaliveDisabled:  !cfg.Schedule.KeepaliveEnabled,
 		BlackcatDisabled:   !cfg.Schedule.BlackcatEnabled,
 		GrowthDisabled:     !cfg.Schedule.GrowthEnabled,
+		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
+		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
 	})
 	switch {
 	case !cfg.Schedule.CheckinEnabled:
@@ -222,6 +224,9 @@ func main() {
 		log.Printf("余额后台刷新已禁用（schedule.balance_refresh_enabled=false）")
 	case cfg.BalanceRefreshInterval > 0:
 		log.Printf("余额后台刷新：每 %s（签到时点照常额外刷新）", cfg.BalanceRefreshInterval)
+	}
+	if cfg.Schedule.IncludeDisabledInTasks {
+		log.Printf("保号任务覆盖禁用账号（schedule.include_disabled_in_tasks=true）：禁用号仍签到 / 活跃 / 保活 / 刷新余额，但不参与选号")
 	}
 
 	// 管理面板日志镜像：标准 log（stderr）与 chat 表格日志（stdout）双路复制进
@@ -324,10 +329,12 @@ func main() {
 		Addr:              cfg.Listen,
 		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
-		// ReadTimeout 覆盖整个请求读取（含 body）：防慢速 body 拖死连接。
-		// 请求体已无网关侧上限（max_body_mb 移除），60s 按常规带宽的数十 MB
-		// 上传余量取值；超大 body 慢速上传若超时，由客户端重试。
-		ReadTimeout: 60 * time.Second,
+		// ReadTimeout 覆盖整个请求读取（含 body 上传）：防慢速 body 拖死连接。
+		// 请求体已无网关侧上限（max_body_mb 移除）。缺省 300s（issue #100：旧固定
+		// 60s 会掐掉大上下文/文件块经反代链的慢速上传，客户端收到
+		// 400 "read body: ... i/o timeout"）；server.read_timeout="0" 显式关闭。
+		// 改动需重启进程。
+		ReadTimeout: cfg.ServerReadTimeoutDur,
 		// IdleTimeout keep-alive 空闲连接回收：配合 chat 出站 ctx 传播防连接泄漏堆积。
 		// 注意：SSE 流式响应期间连接非空闲，不受此项掐断；不设全局 WriteTimeout
 		// （长流式生成合法时长可达数分钟，全局 WriteTimeout 会误杀在途 SSE）。
@@ -532,6 +539,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
 		!newCfg.Schedule.GrowthEnabled)
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
+	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 
 	return restartRequiredFields(newCfg), nil
 }
@@ -556,6 +564,7 @@ func restartRequiredFields(c *Config) []string {
 	}
 	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
 	out = append(out, "logging.request_archive_enabled", "logging.request_retention_days", "logging.request_archive_max_mb")
+	out = append(out, "server.read_timeout")
 	return out
 }
 

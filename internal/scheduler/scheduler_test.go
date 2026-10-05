@@ -484,3 +484,121 @@ func TestSetExpiringSoonWindowClearsSnapshot(t *testing.T) {
 		t.Fatalf("window change did not clear snapshot=%+v", st)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// schedule.include_disabled_in_tasks：保号类四任务是否覆盖「已禁用」账号
+// ---------------------------------------------------------------------------
+
+// poolWithDisabledAccount 建一个两账号池：u1 可用、u2 被人工禁用（终态）。
+func poolWithDisabledAccount() *pool.Pool {
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u2", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Disable("u2", "manual disable (test)")
+	return p
+}
+
+// TestRunCheckinSkipsDisabledByDefault 缺省（开关未开）下禁用账号不签到——锁定既有行为。
+func TestRunCheckinSkipsDisabledByDefault(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 500}
+	srv := f.server()
+	defer srv.Close()
+
+	p := poolWithDisabledAccount()
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up, CheckinHours: []int{9, 21}, KeepaliveHours: []int{22}})
+
+	s.RunCheckinNow()
+	if got := f.checkinCalls.Load(); got != 1 {
+		t.Errorf("checkin calls=%d want 1（仅 u1；禁用号默认跳过）", got)
+	}
+}
+
+// TestRunCheckinIncludesDisabledWhenConfigured 开关打开后禁用账号也签到，
+// 但**不被解冻**（ReenableIfCredits 对 disabled 是 no-op），且**仍不参与选号**。
+func TestRunCheckinIncludesDisabledWhenConfigured(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 500}
+	srv := f.server()
+	defer srv.Close()
+
+	p := poolWithDisabledAccount()
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{
+		Pool: p, Upstream: up,
+		CheckinHours:           []int{9, 21},
+		IncludeDisabledInTasks: true,
+	})
+
+	s.RunCheckinNow()
+	if got := f.checkinCalls.Load(); got != 2 {
+		t.Errorf("checkin calls=%d want 2（u1 + 禁用号 u2）", got)
+	}
+	if st, _ := p.Status("u2"); !st.Disabled {
+		t.Errorf("禁用号签到后不应被自动解冻: %+v", st)
+	}
+	// 选号侧不受本开关影响：禁用号依旧不可选。
+	if got := p.Pick(); got == nil || got.UID != "u1" {
+		t.Errorf("选号应仍只给 u1, got %+v", got)
+	}
+}
+
+// TestRunKeepaliveIncludesDisabledRenewsToken 开关打开后禁用账号也续期 token
+// （轮换用法下保持闲置号可用的关键）。
+func TestRunKeepaliveIncludesDisabledRenewsToken(t *testing.T) {
+	f := &fakeUpstream{}
+	srv := f.server()
+	defer srv.Close()
+
+	p := poolWithDisabledAccount()
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up, IncludeDisabledInTasks: true})
+
+	s.RunKeepaliveNow()
+	if got := f.refreshCalls.Load(); got != 2 {
+		t.Errorf("refresh calls=%d want 2（含禁用号续期 token）", got)
+	}
+}
+
+// TestRunBalanceRefreshIncludesDisabledUpdatesCredits 开关打开后禁用账号的积分也被刷新
+// （面板据此判断下一个该启用谁），但不会被解冻。
+func TestRunBalanceRefreshIncludesDisabledUpdatesCredits(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 700}
+	srv := f.server()
+	defer srv.Close()
+
+	p := poolWithDisabledAccount()
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up, IncludeDisabledInTasks: true})
+
+	s.RunBalanceRefreshNow()
+	st, _ := p.Status("u2")
+	if st.Credits != 700 {
+		t.Errorf("禁用号 credits=%d want 700（余额刷新应覆盖禁用号）", st.Credits)
+	}
+	if !st.Disabled {
+		t.Errorf("余额刷新不得解冻禁用号: %+v", st)
+	}
+}
+
+// TestSetIncludeDisabledInTasksHot setter 热更新立即生效（面板保存配置走这条路径）。
+func TestSetIncludeDisabledInTasksHot(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 500}
+	srv := f.server()
+	defer srv.Close()
+
+	p := poolWithDisabledAccount()
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+
+	s.RunCheckinNow()
+	if got := f.checkinCalls.Load(); got != 1 {
+		t.Fatalf("前置：缺省应只签 1 个，got %d", got)
+	}
+
+	s.SetIncludeDisabledInTasks(true)
+	s.RunCheckinNow()
+	if got := f.checkinCalls.Load(); got != 3 {
+		t.Errorf("热更新后 checkin calls=%d want 3（1 + u1 + u2）", got)
+	}
+}
+

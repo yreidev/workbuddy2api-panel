@@ -35,7 +35,7 @@ const (
 	ErrNotFound                      // 404 上游偶发 → 短冷却，不累计错误计数（防雪崩）
 	ErrServer                        // 5xx 上游故障
 	ErrContentBlocked                // 内容策略拦截（400 + 审核文案）→ 不罚账号，走降级重试
-	ErrBadParams                     // 请求体解析失败（400 + Unmarshal chat params failed / 11101）→ 不罚账号，仍轮转
+	ErrBadParams                     // 请求体解析失败（400 + Unmarshal chat params failed / 11101）→ 请求级错误：不罚号、不轮转，末端 400 透传原文
 	ErrAccountFault                  // 账号级授权/配额故障（11140 request illegal / 14017 trial not activated）→ 冷却轮换，不无限重试
 	ErrModelBlocked                  // 11102「该后端无此模型」→ (账号,模型) 负缓存避让，切模型/切账号
 	ErrWafBlock                      // 403 + 非业务信封体（APISIX WAF 拦截页/空体）→ 账号软冷却 + 抖动退避
@@ -584,8 +584,9 @@ func Classify(status int, body string) ErrKind {
 		// 请求体解析失败（HTTP 400 + Unmarshal chat params failed / code 11101）：
 		// 这是"发给上游的 body 有问题"。网关侧截断已由 413 消灭（issue #41 commit A），
 		// 剩余来源是客户端 JSON 本身畸形——换了账号照样 400，不该罚号（白白冷却好号）。
-		// 归 ErrBadParams：不冷却/不熔断/不计错，但**仍然轮转**（不同账号可能有不同的
-		// 模型权限，值得再试一次）。
+		// 归 ErrBadParams：不冷却/不熔断/不计错，且**不轮转**——11101 发生在上游解析
+		// 请求体阶段，还没走到模型路由，所以"不同账号可能有不同模型权限"其实是
+		// 11102（ErrModelBlocked）的理由，那里已有 (账号,模型) 负缓存避让。
 		if strings.Contains(body, badParamsMarkerMsg) || strings.Contains(body, badParamsMarkerCode) {
 			return ErrBadParams
 		}
@@ -688,11 +689,11 @@ type Client struct {
 func New() *Client {
 	tr := newTransport()
 	c := &Client{
-		HTTP:         &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:     &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
-		ChatBaseCN:   "https://copilot.tencent.com",
+		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP:      &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		ChatBaseCN:    "https://copilot.tencent.com",
 		BillingBaseCN: "https://www.codebuddy.cn",
-		WebBaseCN:    "https://www.workbuddy.cn",
+		WebBaseCN:     "https://www.workbuddy.cn",
 		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：
 		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。
 		GlobalEnabled: true,
@@ -1182,7 +1183,13 @@ func (m dynModelEntry) modelInfo() ModelInfo {
 // 来源：harness buddy.ts:547-555。三类规则：
 //   - id 前缀 nes-/completion-/codewise-：嵌入/补全/代码专用模型，选了报 code=11102。
 //   - maxOutputTokens ≤ 256：tiny 输出非对话模型。
-//   - tags 含 text-to-image：图片生成模型，非本网关用途。
+//   - tags 含生成类标签（图片/视频）：生成模型走各自专用端点，作为对话模型
+//     选上去只会报 11102，非本网关用途。
+//
+// 生成类标签随上游扩充：早期只有 text-to-image，桌面端目录（2026-10-02 实测）
+// 另有 text-to-video / image-to-video（seedance 系列）与 image-to-image
+// （gpt-image 系列）——后者已由 text-to-image 覆盖，此处补齐视频两类。
+// 注意本函数 CN 与 global 共用，新增标签对两域同时生效。
 func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 	id = strings.ToLower(strings.TrimSpace(id))
 	for _, p := range [...]string{"nes-", "completion-", "codewise-"} {
@@ -1194,7 +1201,8 @@ func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 		return true
 	}
 	for _, t := range tags {
-		if t == "text-to-image" {
+		switch t {
+		case "text-to-image", "image-to-image", "text-to-video", "image-to-video":
 			return true
 		}
 	}
@@ -1769,8 +1777,9 @@ type CreditPackage struct {
 	Remain int64  `json:"remain"`
 	Used   int64  `json:"used"`
 	Size   int64  `json:"size"`
-	// EndTime 该包的周期结束时间（上游 ExpiredTime / PackageEndTime / CycleEndTime
-	// 按优先级取首个有值字段）。
+	// EndTime 该包的失效时刻：优先 DeductionEndTime（可抵扣窗口结束，真「用不完
+	// 就没了」），缺失依次回落 ExpiredTime / PackageEndTime / CycleEndTime（周期
+	// 边界，仅兜底）。RFC3339 或上游墙钟字符串，前端取日期部分展示。
 	EndTime string `json:"end_time,omitempty"`
 	// ExpiresAt 与 EndTime 同源的 Unix 毫秒时间戳，供面板按精确剩余天数聚合。
 	ExpiresAt int64 `json:"expires_at,omitempty"`
@@ -1825,6 +1834,12 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 					ExpiredTime    string `json:"ExpiredTime"`
 					PackageEndTime string `json:"PackageEndTime"`
 					CycleEndTime   string `json:"CycleEndTime"`
+					// DeductionEndTime 可抵扣窗口结束（epoch 毫秒）——「这个包什么时候
+					// 不能再花」的真失效时刻。CycleEndTime 是周期边界（额度重置点），
+					// 两者语义不同：判「用不完就没了」以本字段为准，CycleEndTime 兜底
+					//（OkRoromori 分支实测结论：请求参数叫 PackageEndTimeRange*，但
+					// 响应里 ExpiredTime 恒空，真正的失效时刻只有这里下发）。
+					DeductionEndTime int64 `json:"DeductionEndTime"`
 					// 发放时刻（epoch 毫秒）。
 					CreateTime     int64  `json:"CreateTime"`
 					PackageCode    string `json:"PackageCode"`
@@ -1848,6 +1863,13 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 			SubProductName: p.SubProductName,
 		}
 		switch {
+		case p.DeductionEndTime > 0:
+			// 真失效时刻（可抵扣窗口结束），语义见上方字段注释：判「用不完就没了」
+			// 用它而不是周期边界。epoch 毫秒 → RFC3339，与 CycleEndTime 字符串口径
+			// 共存（前端统一 slice(0,10) 取日期）。ExpiresAt 直接用原始毫秒——
+			// RFC3339 不是 packageEndLayout 形态，交给下方解析会静默失败得 0。
+			cp.EndTime = time.UnixMilli(p.DeductionEndTime).Format(time.RFC3339)
+			cp.ExpiresAt = p.DeductionEndTime
 		case p.ExpiredTime != "":
 			cp.EndTime = p.ExpiredTime
 		case p.PackageEndTime != "":
@@ -1855,7 +1877,7 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 		default:
 			cp.EndTime = p.CycleEndTime
 		}
-		if cp.EndTime != "" {
+		if cp.ExpiresAt == 0 && cp.EndTime != "" {
 			if end, perr := time.ParseInLocation(packageEndLayout, cp.EndTime, softRateResetLoc); perr == nil {
 				cp.ExpiresAt = end.UnixMilli()
 			}
