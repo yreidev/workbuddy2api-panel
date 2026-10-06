@@ -1,4 +1,4 @@
-// 单个账号的运维动作（签到 / 刷新余额 / 查看任务 / 解冻 / 禁用 / 移除），账号表、手机卡片、详情抽屉共用。
+// 单个账号的运维动作（签到 / 刷新余额 / 查看任务 / 解冻 / 暂停与恢复选号 / 禁用 / 移除），账号表、手机卡片、详情抽屉共用。
 import { useState } from 'react'
 import { toast } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -8,7 +8,7 @@ import { qk } from '../../lib/queries'
 import type { Account } from '../../lib/types'
 import { useConfirm } from '../../components/useConfirm'
 
-export type AccountAction = 'checkin' | 'balance' | 'tasks' | 'revive' | 'disable' | 'remove'
+export type AccountAction = 'checkin' | 'balance' | 'tasks' | 'revive' | 'pause' | 'resume' | 'disable' | 'remove'
 
 interface CheckinResp { credits?: number; credits_total?: number; checkin_message?: string; balance_error?: string }
 
@@ -30,6 +30,12 @@ export function useAccountActions(openTasks: (uid: string) => void) {
       } else if (action === 'revive') {
         await post(acct(uid, 'revive'))
         toast.success('已解冻')
+      } else if (action === 'pause') {
+        await post(acct(uid, 'pause'))
+        toast.success('已暂停选号（签到 / 保活照常）')
+      } else if (action === 'resume') {
+        await post(acct(uid, 'resume'))
+        toast.success('已恢复选号')
       } else if (action === 'disable') {
         await post(acct(uid, 'disable'))
         toast.success('已禁用')
@@ -58,7 +64,7 @@ export function useAccountActions(openTasks: (uid: string) => void) {
     if (action === 'disable') {
       return ask({
         title: '禁用账号「' + (a.nickname || a.uid.slice(0, 12)) + '」？',
-        body: '禁用后该账号不再参与选号，需手动解冻才能恢复。',
+        body: '禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。',
         confirmLabel: '禁用',
         onConfirm: () => void exec(a.uid, 'disable'),
       })

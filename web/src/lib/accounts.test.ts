@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountHealth, activeRateLimits, creditPercent, filterAccounts, rateLimitInfo, sortAccounts } from './accounts'
+import { accountHealth, activeRateLimits, creditPercent, filterAccounts, isFrozen, rateLimitInfo, sortAccounts } from './accounts'
 import type { Account } from './types'
 
 const base: Account = {
@@ -14,6 +14,15 @@ describe('accountHealth', () => {
   })
   it('零值时间不算冷却', () => {
     expect(accountHealth({ ...base, breaker_until: '0001-01-01T00:00:00Z' }, now)).toEqual({ state: 'ok', coolEnd: null, kind: '可用' })
+  })
+  it('暂停选号：禁用优先；没冷却时只是暂停，冷却中照样带上冷却截止（按钮据此给「解冻」）', () => {
+    expect(accountHealth({ ...base, disabled: true, paused: true }, now).state).toBe('disabled')
+    expect(accountHealth({ ...base, paused: true }, now)).toEqual({ state: 'paused', coolEnd: null, kind: '已暂停选号' })
+    expect(accountHealth({ ...base, paused: true, cool_remaining_sec: 60 }, now)).toEqual({ state: 'paused', coolEnd: now + 60_000, kind: '限流冷却' })
+    expect(isFrozen(accountHealth({ ...base, paused: true }, now))).toBe(false)
+    expect(isFrozen(accountHealth({ ...base, paused: true, cool_remaining_sec: 60 }, now))).toBe(true)
+    expect(isFrozen(accountHealth({ ...base, disabled: true }, now))).toBe(true)
+    expect(isFrozen(accountHealth(base, now))).toBe(false)
   })
   it('取三种冷却里最晚的截止时刻，并按来源命名', () => {
     expect(accountHealth({ ...base, cool_remaining_sec: 60 }, now)).toEqual({ state: 'cooling', coolEnd: now + 60_000, kind: '限流冷却' })
@@ -39,6 +48,10 @@ describe('账号表辅助', () => {
       { ...base, uid: 'ccc', credits: 20, cool_remaining_sec: 30 },
     ]
     expect(filterAccounts(list, now, 'cooling', '').map((a) => a.uid)).toEqual(['ccc'])
+    // 「已禁用」一栏与后端 disabled 计数同口径：暂停选号的号（哪怕在冷却）也算进来
+    const withPaused = [...list, { ...base, uid: 'ddd', paused: true, cool_remaining_sec: 30 }]
+    expect(filterAccounts(withPaused, now, 'disabled', '').map((a) => a.uid)).toEqual(['bbb', 'ddd'])
+    expect(filterAccounts(withPaused, now, 'cooling', '').map((a) => a.uid)).toEqual(['ccc'])
     expect(filterAccounts(list, now, 'all', '乙').map((a) => a.uid)).toEqual(['bbb'])
     expect(sortAccounts(list, 'credits', true).map((a) => a.uid)).toEqual(['bbb', 'ccc', 'aaa'])
     expect(sortAccounts(list, null, false)).toBe(list)

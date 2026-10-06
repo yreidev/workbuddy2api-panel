@@ -1,4 +1,4 @@
-// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 搜索 + 账号表（可排序，点行看详情）+ 批量任务。窄屏把表格换成卡片列表。
+// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 搜索 + 账号表（可排序，点行看详情）+ 批量任务 + 模型锁池。窄屏把表格换成卡片列表。
 import { useMemo, useState } from 'react'
 import {
   Button, Card, SearchField, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type SortDescriptor,
@@ -15,6 +15,7 @@ import { AccountButtons } from './AccountButtons'
 import { AccountName, CreditsCell, StatusCell, UsageChips } from './AccountCells'
 import { AccountDrawer } from './AccountDrawer'
 import { ExpiryReminder } from './ExpiryReminder'
+import { ModelLocks } from './ModelLocks'
 import { TasksModal } from './TasksModal'
 import { useAccountActions } from './useAccountActions'
 
@@ -55,12 +56,14 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const byUid = (uid: string | null) => accounts.find((a) => a.uid === uid) ?? null
   const detailAcct = byUid(detail)
   const tasksAcct = byUid(tasksOf)
+  // 后端把暂停选号并进 disabled 计数（都是不参与选号），这里拆开说明
+  const paused = accounts.filter((a) => a.paused && !a.disabled).length
 
   const tiles: { id: StatusFilter; label: string; value: number; color?: string }[] = [
     { id: 'all', label: '账号总数', value: data.total },
     { id: 'ok', label: '可用', value: data.healthy, color: 'text-success' },
     { id: 'cooling', label: '冷却中', value: data.cooling, color: 'text-warning' },
-    { id: 'disabled', label: '已禁用', value: data.disabled, color: 'text-danger' },
+    { id: 'disabled', label: paused ? `禁用 ${data.disabled - paused} · 暂停选号 ${paused}` : '已禁用', value: data.disabled, color: 'text-danger' },
   ]
 
   return (
@@ -127,13 +130,15 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
                     </div>
                   </div>
                   <UsageChips a={a} />
-                  <AccountButtons a={a} frozen={health.state !== 'ok'} busy={busy} run={run} />
+                  <AccountButtons a={a} health={health} busy={busy} run={run} />
                 </Card>
               )
             })}
           </div>
         )}
       </Panel>
+
+      <ModelLocks rows={data.model_locks || []} now={now} />
 
       <AccountDrawer
         account={detailAcct}
@@ -170,7 +175,7 @@ function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, busy, run, 
       <Table.ScrollContainer>
         <Table.Content
           aria-label="账号池"
-          className="min-w-[1080px]"
+          className="min-w-[1140px]"
           sortDescriptor={sort}
           onSortChange={onSort}
           onRowAction={(key) => onOpen(String(key))}
@@ -202,7 +207,7 @@ function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, busy, run, 
                   </Table.Cell>
                   <Table.Cell><div className="w-36"><UsageChips a={a} /></div></Table.Cell>
                   <Table.Cell className="whitespace-nowrap text-muted">{ago(a.last_success, now)}</Table.Cell>
-                  <Table.Cell><div className="flex justify-end"><AccountButtons a={a} frozen={health.state !== 'ok'} busy={busy} run={run} nowrap /></div></Table.Cell>
+                  <Table.Cell><div className="flex justify-end"><AccountButtons a={a} health={health} busy={busy} run={run} nowrap /></div></Table.Cell>
                 </Table.Row>
               )
             })}

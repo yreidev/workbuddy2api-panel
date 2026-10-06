@@ -18,10 +18,19 @@ export function AccountName({ a }: { a: Account }) {
 
 export function HealthChip({ health, now }: { health: Health; now: number }) {
   if (health.state === 'disabled') return <Chip size="sm" variant="soft" color="danger">已禁用</Chip>
-  if (health.state === 'cooling') {
-    return <Chip size="sm" variant="soft" color="warning">{health.kind} · {dur(((health.coolEnd ?? now) - now) / 1000)}</Chip>
+  const cooling = health.coolEnd != null && (
+    <Chip size="sm" variant="soft" color="warning">{health.kind} · {dur((health.coolEnd - now) / 1000)}</Chip>
+  )
+  if (health.state === 'paused') {
+    // 暂停选号的号也可能同时在冷却，两个都标出来（不然只看到「解冻」按钮不知道为什么）
+    return (
+      <span className="inline-flex flex-wrap gap-1">
+        <Chip size="sm" variant="soft" color="default">已暂停选号</Chip>
+        {cooling}
+      </span>
+    )
   }
-  return <Chip size="sm" variant="soft" color="success">可用</Chip>
+  return cooling || <Chip size="sm" variant="soft" color="success">可用</Chip>
 }
 
 export function StatusCell({ a, health, now }: { a: Account; health: Health; now: number }) {

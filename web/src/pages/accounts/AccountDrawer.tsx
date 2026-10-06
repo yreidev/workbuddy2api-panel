@@ -79,6 +79,7 @@ function Body({ a, health, now, busy, run }: {
       <Drawer.Body className="flex flex-col gap-5">
         <Section title="状态">
           <Row label="当前"><HealthChip health={health} now={now} /></Row>
+          {a.paused && <Row label="暂停选号">不参与选号，签到 / 活跃上报 / 保活 / 刷新余额照常</Row>}
           {health.coolEnd != null && <Row label="恢复时间">{dateTime(health.coolEnd)}</Row>}
           {a.reason && <Row label={a.disabled ? '禁用原因' : '原因'}><span className="break-all">{a.reason}</span></Row>}
           <Row label="连续失败">{a.consecutive_fails}{degrade != null && degrade > now && <span className="text-warning">（降权至 {dateTime(degrade)}）</span>}</Row>
@@ -147,7 +148,7 @@ function Body({ a, health, now, busy, run }: {
         </Section>
       </Drawer.Body>
       <Drawer.Footer>
-        <AccountButtons a={a} frozen={health.state !== 'ok'} busy={busy} run={run} />
+        <AccountButtons a={a} health={health} busy={busy} run={run} />
       </Drawer.Footer>
     </>
   )

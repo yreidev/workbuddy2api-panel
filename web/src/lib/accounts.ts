@@ -2,19 +2,21 @@
 import { dur, fmtLocalDateTime, timeMs } from './format'
 import type { Account, RateLimitedModel } from './types'
 
-export type AccountState = 'ok' | 'cooling' | 'disabled'
-export type StatusFilter = 'all' | AccountState
+/** paused = 暂停选号：不参与选号，但签到 / 活跃上报 / 保活 / 刷新余额照常 */
+export type AccountState = 'ok' | 'cooling' | 'paused' | 'disabled'
+/** 「已禁用」一栏同时包含暂停选号的账号，与后端 disabled 计数同口径 */
+export type StatusFilter = 'all' | 'ok' | 'cooling' | 'disabled'
 
 export interface Health {
   state: AccountState
-  /** 冷却截止时刻（毫秒）；未冷却为 null */
+  /** 冷却截止时刻（毫秒）；未冷却为 null。暂停选号的账号也可能同时在冷却 */
   coolEnd: number | null
   /** 冷却类型：熔断 / 连败降权 / 积分冷却 / 限流冷却 */
   kind: string
 }
 
 /**
- * 账号健康：禁用优先；否则取「账号级冷却、熔断、连败降权」三者最晚的截止时刻。
+ * 账号健康：禁用优先，其次暂停选号；冷却取「账号级冷却、熔断、连败降权」三者最晚的截止时刻。
  * cool_remaining_sec 是接口返回时刻的剩余秒数，用 fetchedAt 换算成绝对时刻，页面才能逐秒倒数。
  */
 export function accountHealth(a: Account, fetchedAt: number): Health {
@@ -23,12 +25,18 @@ export function accountHealth(a: Account, fetchedAt: number): Health {
   const breaker = timeMs(a.breaker_until) ?? 0
   const degrade = timeMs(a.degrade_until) ?? 0
   const end = Math.max(soft, breaker, degrade)
-  if (end <= fetchedAt) return { state: 'ok', coolEnd: null, kind: '可用' }
+  if (end <= fetchedAt) return a.paused ? { state: 'paused', coolEnd: null, kind: '已暂停选号' } : { state: 'ok', coolEnd: null, kind: '可用' }
   const kind = breaker > Math.max(soft, degrade) ? '熔断'
     : degrade > soft ? '连败降权'
     : a.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'
-  return { state: 'cooling', coolEnd: end, kind }
+  return { state: a.paused ? 'paused' : 'cooling', coolEnd: end, kind }
 }
+
+/** 禁用或冷却中：操作按钮给「解冻」（解冻是全清，会一并解除暂停选号） */
+export const isFrozen = (h: Health) => h.state === 'disabled' || h.coolEnd != null
+
+const matchStatus = (state: AccountState, f: StatusFilter) =>
+  f === 'all' || state === f || (f === 'disabled' && state === 'paused')
 
 /** 暂时不能用的模型（后端只返回仍在冷却中的条目，这里只去掉缺模型名的脏数据） */
 export function activeRateLimits(a: Account) {
@@ -85,7 +93,7 @@ export type AccountSortKey = 'name' | 'credits' | 'errors' | 'last_success'
 export function filterAccounts(list: Account[], fetchedAt: number, status: StatusFilter, q: string): Account[] {
   const kw = q.trim().toLowerCase()
   return list.filter((a) => {
-    if (status !== 'all' && accountHealth(a, fetchedAt).state !== status) return false
+    if (!matchStatus(accountHealth(a, fetchedAt).state, status)) return false
     return !kw || a.uid.toLowerCase().includes(kw) || (a.nickname || '').toLowerCase().includes(kw)
   })
 }

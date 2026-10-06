@@ -12,6 +12,12 @@ export interface FieldDef {
   placeholder?: string
   /** 改动后要重启进程才生效 */
   restart?: boolean
+  /**
+   * 「覆盖型」文本字段：空串本身有意义（= 回落内置默认），清空也要提交（上游 issue #102）。
+   * 其余文本字段保持「空 = 不提交」——没填通常是没改，当成清空会静默抹掉配置。
+   * 刻意不给 api_key：清空它等于关掉整个鉴权，误触代价太大。
+   */
+  clearable?: boolean
   min?: number
   step?: number
   options?: { id: string; label: string }[]
@@ -75,7 +81,7 @@ export const CONFIG_TABS: ConfigTab[] = [
         title: '已禁用的账号',
         fields: [
           toggle('include_disabled_in_tasks', ['schedule', 'include_disabled_in_tasks'], '保号任务覆盖已禁用账号',
-            '禁用只关选号：打开后已禁用的账号仍会签到 / 活跃上报 / 保活 / 刷新余额（依旧不参与选号）。适合「一次只放开一个账号、用禁用做流量开关」的轮换养号用法。猫猫旅行、夜猫子、连登管家与成长任务仍跳过禁用账号'),
+            '禁用只关选号：打开后已禁用的账号仍会签到 / 活跃上报 / 保活 / 刷新余额（依旧不参与选号）。适合「一次只放开一个账号、用禁用做流量开关」的轮换养号用法。猫猫旅行、夜猫子、连登管家与成长任务仍跳过禁用账号。若只想让单个账号临时退出选号但保留保号，直接用账号行的「暂停选号」按钮（账号级，无需打开本开关）'),
         ],
       },
     ],
@@ -135,7 +141,7 @@ export const CONFIG_TABS: ConfigTab[] = [
       {
         title: '出站请求',
         fields: [
-          { name: 'user_agent', path: ['upstream', 'user_agent'], label: '出站 User-Agent', kind: 'text', placeholder: '留空 = CLI/2.63.2 CodeBuddy/2.63.2', hint: '影响官网积分记录「使用端」显示', restart: true },
+          { name: 'user_agent', path: ['upstream', 'user_agent'], label: '出站 User-Agent', kind: 'text', placeholder: '留空 = CLI/2.63.2 CodeBuddy/2.63.2', hint: '影响官网积分记录「使用端」显示', restart: true, clearable: true },
           {
             name: 'prompt_mode', path: ['prompt', 'mode'], label: '系统提示词模式', kind: 'select', restart: true,
             options: [
@@ -144,7 +150,7 @@ export const CONFIG_TABS: ConfigTab[] = [
               { id: 'passthrough', label: 'passthrough — 透传客户端原始 system' },
             ],
           },
-          { name: 'prompt_file', path: ['prompt', 'file'], label: '提示词文件路径', kind: 'text', placeholder: '留空 = 内置默认提示词', restart: true },
+          { name: 'prompt_file', path: ['prompt', 'file'], label: '提示词文件路径', kind: 'text', placeholder: '留空 = 内置默认提示词', restart: true, clearable: true },
           toggle('sanitize_blacklist_fingerprints', ['features', 'sanitize_blacklist_fingerprints'], '出站请求指纹脱敏'),
           toggle('session_sticky_enabled', ['session_sticky', 'enabled'], '会话粘性路由'),
         ],
@@ -199,7 +205,7 @@ export function toForm(cfg: Record<string, unknown>): FormValues {
   return out
 }
 
-/** 表单 → 提交体：空输入框 = 沿用现值（不提交该键） */
+/** 表单 → 提交体：空输入框 = 沿用现值（不提交该键）；覆盖型字段（clearable）空串照发 */
 export function fromForm(values: FormValues): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const f of ALL_FIELDS) {
@@ -209,7 +215,10 @@ export function fromForm(values: FormValues): Record<string, unknown> {
       continue
     }
     const raw = String(v ?? '').trim()
-    if (raw === '') continue
+    if (raw === '') {
+      if (f.clearable) put(out, f.path, '')
+      continue
+    }
     if (f.kind === 'number') put(out, f.path, Number(raw))
     else if (f.kind === 'hours') put(out, f.path, parseHours(raw))
     else put(out, f.path, raw)

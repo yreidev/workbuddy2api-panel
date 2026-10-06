@@ -55,6 +55,8 @@ export interface Account {
   checkin_done?: boolean
   disabled: boolean
   disabled_reason?: string
+  /** 暂停选号：不参与选号，保号任务照常（与 disabled 正交，总览计数里并入 disabled） */
+  paused?: boolean
   success_count?: number
   err_total?: number
   last_success?: string
@@ -80,6 +82,31 @@ export interface Overview {
   disabled: number
   in_flight_full: number
   accounts: Account[] | null
+  /** 模型锁池：有未过期模型级限流的「域 + 模型」，已按 locked → starved → partial 排好序；无锁时为 null */
+  model_locks?: ModelLockRow[] | null
+}
+
+/**
+ * 模型锁池的一行（internal/pool/modelview.go 的 ModelLockRow）。
+ * 只统计参与选号的账号（禁用、暂停选号的不算），只看真正拦路由的限流。
+ */
+export interface ModelLockRow {
+  model: string
+  /** cn / global */
+  realm: string
+  /** 该域参与选号的账号数 */
+  total: number
+  /** 此刻能服务该模型的账号数 */
+  servable: number
+  /** 被该模型限流挡住的账号数 */
+  locked: number
+  /** locked 整池不可用 / starved 没号可用（不是模型限流造成的）/ partial 部分限流 */
+  state: string
+  /** 第一个被锁账号恢复的时刻 */
+  unlock_at: string
+  /** 最后一个被锁账号恢复的时刻 */
+  fully_unlock_at: string
+  reason?: string
 }
 
 export interface LogEntry {
