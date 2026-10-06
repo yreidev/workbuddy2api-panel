@@ -193,6 +193,7 @@ func hasKind(kinds []taskKind, k taskKind) bool {
 type fakeUpstream struct {
 	checkinCalls   atomic.Int32
 	refreshCalls   atomic.Int32
+	travelCalls    atomic.Int32
 	resourceRemain int64
 	resourceEnd    string
 }
@@ -215,6 +216,13 @@ func (f *fakeUpstream) server() *httptest.Server {
 		case strings.HasSuffix(r.URL.Path, "/token/refresh"):
 			f.refreshCalls.Add(1)
 			w.Write([]byte(`{"code":0,"data":{"accessToken":"new","expiresIn":3600}}`))
+		case strings.HasSuffix(r.URL.Path, "/activity/growth/buddy/info"):
+			// 已领养（data.buddy 非空）：跳过领养前置，直接进旅行状态查询。
+			w.Write([]byte(`{"code":0,"data":{"buddy":{"id":1,"name":"cat"}}}`))
+		case strings.HasSuffix(r.URL.Path, "/activity/growth/buddy/travel/status"):
+			// daily_limit_reached=true：状态查询计一次调用即止，不发 depart/claim。
+			f.travelCalls.Add(1)
+			w.Write([]byte(`{"code":0,"data":{"state":"idle","daily_limit_reached":true}}`))
 		default:
 			http.Error(w, "not found", 404)
 		}
@@ -602,3 +610,88 @@ func TestSetIncludeDisabledInTasksHot(t *testing.T) {
 	}
 }
 
+// TestPausedAccountStillRunsKeepaliveTasks 暂停选号的账号**照常参与**保号任务
+// （签到 / 保活 / 余额刷新）——这是「暂停选号」与「禁用」的核心区别，也是本功能
+// 的存在理由：轮换用法下让位的号仍需养着，否则积分断档、token 过期要重新登录。
+// 注意：**不开** IncludeDisabledInTasks——paused 不依赖那个全局开关。
+func TestPausedAccountStillRunsKeepaliveTasks(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 700}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u2", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	if !p.Pause("u2") {
+		t.Fatal("Pause 失败")
+	}
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up}) // 有意不设 IncludeDisabledInTasks
+
+	s.RunCheckinNow()
+	if got := f.checkinCalls.Load(); got != 2 {
+		t.Errorf("checkin calls=%d want 2（暂停号也签到，且无需全局开关）", got)
+	}
+	s.RunKeepaliveNow()
+	if got := f.refreshCalls.Load(); got != 2 {
+		t.Errorf("refresh calls=%d want 2（暂停号也续期 token）", got)
+	}
+	s.RunBalanceRefreshNow()
+	if st, _ := p.Status("u2"); st.Credits != 700 {
+		t.Errorf("暂停号 credits=%d want 700（余额刷新应覆盖）", st.Credits)
+	}
+	// 保号任务不得改变暂停状态（签到解冻的是冷却，不是 paused）
+	if st, _ := p.Status("u2"); !st.Paused {
+		t.Errorf("保号任务后暂停状态应保持: %+v", st)
+	}
+	// 选号侧始终排除暂停号
+	if got := p.Pick(); got == nil || got.UID != "u1" {
+		t.Errorf("选号应只给 u1, got %+v", got)
+	}
+}
+
+// TestPausedVsDisabledTaskParticipation 固化二者对比：都退出选号，但禁用号默认
+// 跳过保号（除非开 include_disabled_in_tasks），暂停号**无条件**参与。
+func TestPausedVsDisabledTaskParticipation(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 700}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u2", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u3", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Pause("u2")
+	p.Disable("u3", "manual disable (test)")
+
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up}) // 全局开关有意保持关闭
+
+	s.RunCheckinNow()
+	// u1（正常）+ u2（暂停）签到；u3（禁用）跳过 ⇒ 2 次
+	if got := f.checkinCalls.Load(); got != 2 {
+		t.Errorf("checkin calls=%d want 2（正常 + 暂停参与；禁用跳过）", got)
+	}
+}
+
+
+// TestPausedStillTravels 暂停号照常跑旅行：旅行是纯 RPC（状态/派出/领奖 +
+// 领养前置上报），不发模型对话，与「让位防风控」不冲突——唯一被跳过的
+// 对话类任务只有夜猫子（RunNightChats 真实 ChatStream）。
+func TestPausedStillTravels(t *testing.T) {
+	f := &fakeUpstream{}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u2", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Pause("u2")
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+
+	s.RunTravelNow()
+	if got := f.travelCalls.Load(); got != 2 {
+		t.Errorf("travel status calls=%d want 2（u1 + 暂停号 u2 照常旅行）", got)
+	}
+}

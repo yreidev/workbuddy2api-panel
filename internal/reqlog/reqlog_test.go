@@ -65,6 +65,64 @@ func TestArchiveRotationReadAndFilter(t *testing.T) {
 	}
 }
 
+// ReadArchive 的契约是「按事件时间倒序返回最近记录」，与归档文件的 mtime 无关。
+// 快速轮转（FileMaxBytes 很小）时同一秒内会写出多个文件，Linux 下这些文件的 mtime
+// 可能完全相同；把归档目录整体拷贝 / 恢复备份也会打乱 mtime。此用例把所有归档文件的
+// mtime 改成与事件时间相反的顺序，钉住「只能按事件时间排序」。
+func TestReadArchiveOrdersByEventTimeNotFileMtime(t *testing.T) {
+	dir := t.TempDir()
+	r := New(Config{Enabled: true, Dir: dir, FileMaxBytes: 1, MaxBytes: 1 << 20, RetentionDays: 7})
+	base := time.Now().Add(-time.Hour)
+	const n = 5
+	for i := 0; i < n; i++ {
+		r.Record(Event{
+			Time:      base.Add(time.Duration(i) * time.Second),
+			RequestID: "ev-" + string(rune('a'+i)),
+			Model:     "glm-5.3",
+			Status:    200,
+			OK:        true,
+			Outcome:   OutcomeSuccess,
+		})
+	}
+	r.Close()
+
+	// FileMaxBytes=1 让每个事件独占一个归档文件：基准文件 requests-<day>.jsonl 装的是
+	// 最早的事件，字典序却排在 requests-<day>.N.jsonl 之后。按 os.ReadDir 顺序递增地
+	// 设置 mtime，最早事件所在文件就拿到最大 mtime、被放在最后读取。
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != n {
+		t.Fatalf("归档文件数 = %d, want %d", len(entries), n)
+	}
+	stamp := time.Unix(1700000000, 0)
+	for i, e := range entries {
+		ts := stamp.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(filepath.Join(dir, e.Name()), ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := r.ReadArchive(n, Filter{Model: "glm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(rows))
+	for _, e := range rows {
+		got = append(got, e.RequestID)
+	}
+	if len(rows) != n {
+		t.Fatalf("rows = %d, want %d", len(rows), n)
+	}
+	for i := range rows {
+		want := "ev-" + string(rune('a'+n-1-i))
+		if rows[i].RequestID != want {
+			t.Fatalf("rows[%d] = %s, want %s（须按事件时间倒序，与文件 mtime 无关）\n got %v", i, rows[i].RequestID, want, got)
+		}
+	}
+}
+
 // 来源字段随事件落盘并可被 client_ip / user_agent 过滤（包含匹配、大小写不敏感）。
 func TestArchiveFilterByClientInfo(t *testing.T) {
 	dir := t.TempDir()

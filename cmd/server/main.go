@@ -31,7 +31,7 @@ import (
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.11.11-panel"
+const appVersion = "1.12.0-panel"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -559,6 +559,10 @@ func restartRequiredFields(c *Config) []string {
 		out = append(out, "state_file")
 	}
 	out = append(out, "upstream.timeout_seconds", "upstream.header_timeout_seconds", "upstream.idle_timeout_seconds")
+	// upstream.user_agent 在装配期被写进出站 client（main.go 的 up.UserAgent = ...），
+	// 之后不再读取——不在 livecfg 热快照里，也无法热改。此前漏列，导致面板改完
+	// 显示"已保存"却不提示需要重启，用户以为没生效（issue #102 附带发现 2）。
+	out = append(out, "upstream.user_agent")
 	if c.Upstash.URL != "" || c.Upstash.Token != "" {
 		out = append(out, "upstash")
 	}

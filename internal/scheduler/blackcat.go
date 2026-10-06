@@ -18,7 +18,10 @@ func (s *Scheduler) RunBlackcatNow() {
 		return
 	}
 	for _, st := range s.cfg.Pool.List() {
-		if st.Disabled {
+		// 暂停选号（paused）账号跳过：夜猫子是全任务体系中唯一「整任务都是
+		// 真实模型对话」的（RunNightChats 逐条 ChatStream 发 glm-5.2 短对话），
+		// 与「让位防风控」正面冲突。旅行/成长任务都是纯上报或领奖 RPC，照常跑。
+		if st.Disabled || st.Paused {
 			continue
 		}
 		a := s.cfg.Pool.AuthByUID(st.UID)

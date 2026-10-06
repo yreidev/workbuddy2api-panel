@@ -51,7 +51,25 @@ func (e *entry) clearCoolingLocked() {
 func (p *Pool) disableLocked(e *entry, reason string) {
 	e.clearCoolingLocked()
 	e.disabled = true
+	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）
 	e.reason = reason
+	p.dirty.Store(true)
+}
+
+// pauseLocked 暂停选号迁移：置 paused 使账号退出选号候选（healthy 判否），
+// 但**不动任何惩罚域**——paused 是「临时让位」，账号本身健康，恢复后冷却/熔断
+// 观测仍有效。与 disableLocked 的对比：disabled 清冷却域且须人工 revive（终态），
+// paused 只置一个标志、随时可 resume（瞬时态）。
+// 保号任务（scheduler）遍历只按 Disabled 过滤，故 paused 号天然继续参与签到/
+// 活跃上报/保活/余额刷新——这正是「暂停选号但不掉保号」的实现基础。
+func (p *Pool) pauseLocked(e *entry) {
+	e.paused = true
+	p.dirty.Store(true)
+}
+
+// resumeLocked 解除暂停选号（幂等）：只清 paused，账号若不在其它惩罚期即恢复可选。
+func (p *Pool) resumeLocked(e *entry) {
+	e.paused = false
 	p.dirty.Store(true)
 }
 
