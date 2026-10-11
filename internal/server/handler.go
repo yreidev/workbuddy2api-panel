@@ -547,6 +547,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &peek)
 
+	// 工具名名单：上游在没有 tools 的请求里会把工具调用吐成原生标记文本
+	// （见 upstream/dsml.go），修复层用它做严格判定。名单来自「本请求声明的 tools」
+	// 与「会话历史里出现过的工具名」两个来源——实测 tools 声明会在中转环节丢失，
+	// 只认前者会让修复层在最需要它的场景下失效。
+	// 在提示词/模型名改写之前取（那些改写不动 tools / messages[].tool_calls 子树）。
+	declaredTools := upstream.ToolNameAllowlist(body)
+
 	// realm 前缀解析（D6）：model 名可能带 "[realm:]" 前缀。剥出 realm + bareModel，
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
@@ -978,9 +985,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 组装请求上下文做判定）。
 			// errFrame：上游 error 帧原文（观察者旁路采集），用于流尾的账号处置。
 			var errFrame string
+			// 标记修复：上游在没有 tools 的请求里会把工具调用吐成原生标记文本，
+			// 这里在透传前还原成 delta.tool_calls（见 upstream/dsml.go）。
+			// 第二个参数为 true = 名单为空时启用弱判定——tools 声明在链路上丢失是
+			// 实测最常见的泄漏成因，只做严格判定等于对主场景不设防。
+			repair := upstream.NewMarkupRepair(declaredTools, true)
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
 				return h.hintContext(bareModel, reqHasImage)
-			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }))
+			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
+				upstream.WithMarkupRepair(repair))
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
@@ -1034,6 +1047,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if st.hasCache {
 				cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
 			}
+			if n := repair.Converted(); n > 0 {
+				// 修复命中：上游本来会把工具调用吐成正文标记，这里已还原成 tool_calls。
+				// 打一行便于运维确认「这次不再空转」以及统计发生率。
+				log.Printf("INFO: [server] stream acct=%s model=%s: repaired %d native tool call(s) from assistant text (tool names known=%d)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, n, len(declaredTools))
+			} else if m := repair.Seen(); m > 0 {
+				// 识别到标记却没还原：说明判定没过（工具名不合规 / 块内夹带正文 /
+				// 参数畸形）。单独记一行，排障时能一眼区分「没识别到」与「识别到但拒绝」。
+				log.Printf("WARN: [server] stream acct=%s model=%s: saw %d native tool call block(s) but repaired none (tool names known=%d)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, m, len(declaredTools))
+			}
 			st.ttfb = stats.TTFB()
 			// usage 缺失时保留 chatStat.toks 的 -1 哨兵（观测缺失 → 显示 "-"），
 			// 不写入零值——否则「没观测到 usage」被伪造成「测得 0 token」，
@@ -1062,6 +1086,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.status = http.StatusBadGateway
 			st.outcome = reqlog.OutcomeHTTPError
 			return
+		}
+		// 标记修复（非流式）：把正文里的原生工具调用标记还原成 message.tool_calls。
+		// 只在「没有结构化 tool_calls」且「finish_reason 为 stop」时生效（见 dsml.go）；
+		// 名单为空时走弱判定（tools 声明在中转环节丢失是常态）。
+		mrepair := upstream.RepairAggregatedResponse(resp, declaredTools, true)
+		if n := mrepair.Converted(); n > 0 {
+			log.Printf("INFO: [server] non-stream model=%s: repaired %d native tool call(s) from assistant text (tool names known=%d)",
+				bareModel, n, len(declaredTools))
+		} else if m := mrepair.Seen(); m > 0 {
+			log.Printf("WARN: [server] non-stream model=%s: saw %d native tool call block(s) but repaired none (tool names known=%d)",
+				bareModel, m, len(declaredTools))
 		}
 		credit, total, hasCredit := usageCreditTotal(resp)
 		if usage, ok := resp["usage"].(map[string]any); ok {
@@ -1188,6 +1223,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 // 同理，ttfb 不小于总耗时时（时钟粒度、或 TTFB 落在计时终点之后）退回端到端耗时，
 // 避免零/负分母。token 数为负哨兵值（-1 = 观测缺失）时返回 false。
 //
+// 扣除后不足 minGenWindow 也退回端到端（issue #127）：ttfb 量的是「首个 SSE 帧
+// 到达」，当上游把整个响应攒到最后一次性下发（假流式/中间层攒批刷新——首帧与
+// 末帧几乎同时到）时，total−ttfb 只剩几毫秒，拿它当分母会把几百 token 除成
+// 上万 tok/s 的幻数。这种形态下「生成时长」根本不可测，诚实的分母只有端到端。
+//
 // 用量账本（handler）与控制台流水行（logging.go）都走这一个函数：两处各算一遍时
 // 口径漂移过一次（流水行漏扣 TTFB、与面板数字对不上），共用是防再次分叉的唯一办法。
 func tokensPerSecond(completionTokens int64, total, ttfb time.Duration) (float64, bool) {
@@ -1196,12 +1236,18 @@ func tokensPerSecond(completionTokens int64, total, ttfb time.Duration) (float64
 	}
 	gen := total
 	if ttfb > 0 {
-		if g := total - ttfb; g > 0 {
+		if g := total - ttfb; g >= minGenWindow {
 			gen = g
 		}
 	}
 	return float64(completionTokens) / gen.Seconds(), true
 }
+
+// minGenWindow 可信生成窗口的下限：扣除 TTFB 后剩余窗口不足该值即视为「生成
+// 时长不可测」，退回端到端耗时（见 tokensPerSecond 注释，issue #127）。
+// 真流式下首帧到末帧通常铺满剩余窗口，200ms 远低于正常生成时长，不影响真实
+// 快速输出（如缓存命中后的爆发）被如实报告。
+const minGenWindow = 200 * time.Millisecond
 
 // promptTooLongMessage 11115 透传 message：上游 body 原文（含真实 token 数/
 // 上限值/requestId，客户端自行排查）；空 body 兜底为可读分类短文案（不编造原文）。

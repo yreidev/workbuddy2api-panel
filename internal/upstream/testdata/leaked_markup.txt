@@ -1,0 +1,10 @@
+我先看一下仓库结构和图片内容，再定位价格同步逻辑。
+
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="exec_command">
+<｜｜DSML｜｜ parameter name="cmd" string="true">cd /Users/haocheng/ZoyProjects/zoy-digitalization-main && git status --short && ls -a | head -50 && ls -d .codegraph 2>/dev/null || echo "NO_CODEGRAPH"</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+<｜｜DSML｜｜ invoke name="exec_command">
+<｜｜DSML｜｜ parameter name="cmd" string="true">curl -sS -o /private/tmp/sync_price_question.png "https://static.dingtalk.com/media/lQLPKINDUV1D_VXNBS_NCKuwow1SQCoc1H8KlYUX26J0AA_2219_1327.png" && ls -la /private/tmp/sync_price_question.png</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>

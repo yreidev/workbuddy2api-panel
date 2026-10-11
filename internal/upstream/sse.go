@@ -477,11 +477,25 @@ func Stream(w http.ResponseWriter, r io.Reader) error {
 	return StreamHint(w, r, nil)
 }
 
-// StreamOption StreamHint 的可选行为开关（均不影响透传字节，只做旁路观测）。
+// StreamOption StreamHint 的可选行为开关。
+// WithErrorFrameObserver 只做旁路观测、不改透传字节；WithMarkupRepair 会改写出站
+// 帧（把正文里的原生工具调用标记还原成 delta.tool_calls，见 dsml.go）。
 type StreamOption func(*streamOptions)
 
 type streamOptions struct {
 	onErrorFrame func(payload string)
+	markup       *MarkupRepair
+}
+
+// WithMarkupRepair 注册「模型原生工具调用标记」修复器（见 dsml.go）。
+//
+// 上游在没有 tools 的请求里会把工具调用吐成标记文本，Codex 这类只执行结构化
+// function_call 的客户端于是把它当普通正文落进会话历史，回合直接结束、工具一次
+// 都没跑。挂上修复器后，这类标记在透传前被还原成 delta.tool_calls。
+//
+// 传 nil、或传入未启用的修复器（客户端没声明过 tools）→ 与 Stream 行为逐字节一致。
+func WithMarkupRepair(r *MarkupRepair) StreamOption {
+	return func(o *streamOptions) { o.markup = r }
 }
 
 // WithErrorFrameObserver 注册"上游以 error 帧报错"的观察者：透传该帧之前先用
@@ -520,15 +534,18 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	// 一律补 chatcmpl-wb2api 哨兵，造成同流 id 分裂）。全流无真实 id → 才出现哨兵。
 	firstID := ""
 
-	// writeRaw 原样写出一帧（绕过 normalizeFrame）并 flush。上游 error 帧（error-passthrough）
-	// 与空流错误帧需保留 error 字段，不能被白名单剥掉，故经此写出。
-	// gateway_hint：上游 error 帧透出前按 hintFn 附加 error.gateway_hint 字段
-	// （error 对象上加一个键，message/code/requestId 等原文不动；hintFn 为
-	// nil / 空串 / 非 JSON 帧 → 原样写出，零改写）。
-	writeRaw := func(payload string) error {
-		if hint := frameGatewayHint(hintFn, payload); hint != "" {
-			payload = attachHintToErrorFrame(payload, hint)
-		}
+	// 标记修复（见 dsml.go）：把上游正文里的原生工具调用标记还原成 delta.tool_calls。
+	// 客户端没声明过 tools 时 repair.Enabled() 为 false → 整条流零改写零分配。
+	//   - synthIdx：本流已还原的调用数（合成的 index 从上游最大 index 之后接续）；
+	//   - maxToolIdx：上游已用过的最大 tool_call index，避免合成的 index 与真实调用撞车；
+	//   - toolFinishSent：是否已发出过 finish_reason: tool_calls，供流尾兜底。
+	repair := o.markup
+	synthIdx := 0
+	maxToolIdx := -1
+	toolFinishSent := false
+
+	// writeSSE 原样写出一帧并 flush。
+	writeSSE := func(payload string) error {
 		if _, werr := io.WriteString(w, "data: "+payload+"\n\n"); werr != nil {
 			return werr
 		}
@@ -538,51 +555,156 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 		return nil
 	}
 
+	// writeRaw 原样写出一帧（绕过 normalizeFrame）。上游 error 帧（error-passthrough）
+	// 与空流错误帧需保留 error 字段，不能被白名单剥掉，故经此写出。
+	// gateway_hint：上游 error 帧透出前按 hintFn 附加 error.gateway_hint 字段
+	// （error 对象上加一个键，message/code/requestId 等原文不动；hintFn 为
+	// nil / 空串 / 非 JSON 帧 → 原样写出，零改写）。
+	writeRaw := func(payload string) error {
+		if hint := frameGatewayHint(hintFn, payload); hint != "" {
+			payload = attachHintToErrorFrame(payload, hint)
+		}
+		return writeSSE(payload)
+	}
+
+	// writeChunk 把一个 chunk 对象按规范白名单重建后写出并 flush，同时维护三件跨帧
+	// 状态：tool_calls name 收敛（每 index 仅首片带 name）、消息 id 续传、以及上游
+	// 已用过的最大 tool_call index（供标记修复接续编号）。
+	// fallback 是规范化失败时的兜底原文（与修复前「marshal 失败即原样透传」一致）。
+	writeChunk := func(obj map[string]any, fallback string) error {
+		// 先按 index 收敛 tool_calls name（每 index 仅首片保留，后续分片删 name 键），再规范化透传。
+		stripToolCallNames(obj, toolCallSeen)
+		// id 续传：首帧非空真实 id 缓存；后续帧缺 id / 空 id 一律用缓存值，
+		// 有自己 id 的帧保持原样（不同流分裂的帧允许各自 id）。
+		if firstID == "" {
+			if v, ok := obj["id"].(string); ok && v != "" {
+				firstID = v
+			}
+		} else if v, ok := obj["id"].(string); !ok || v == "" {
+			obj["id"] = firstID
+		}
+		if chs, ok := obj["choices"].([]any); ok {
+			for _, ci := range chs {
+				c, _ := ci.(map[string]any)
+				if c == nil {
+					continue
+				}
+				d, _ := c["delta"].(map[string]any)
+				if d == nil {
+					continue
+				}
+				tcs, _ := d["tool_calls"].([]any)
+				for _, tci := range tcs {
+					tc, _ := tci.(map[string]any)
+					if tc == nil {
+						continue
+					}
+					if v, ok := tc["index"].(float64); ok && int(v) > maxToolIdx {
+						maxToolIdx = int(v)
+					}
+				}
+			}
+		}
+		raw, err := json.Marshal(normalizeFrame(obj))
+		if err != nil {
+			return writeSSE(fallback)
+		}
+		return writeSSE(string(raw))
+	}
+
+	// repairFrame 在透传前跑标记修复，并把一帧展开成「可能多帧」：正文帧（标记被摘掉
+	// 后的可见文本）+ N 个 delta.tool_calls 帧 + 收尾 finish_reason 帧。没有命中标记
+	// 时原样返回入参帧（单元素），与修复前逐字节一致。
+	repairFrame := func(obj map[string]any) []map[string]any {
+		if !repair.Enabled() {
+			return []map[string]any{obj}
+		}
+		chs, ok := obj["choices"].([]any)
+		if !ok {
+			return []map[string]any{obj}
+		}
+		var calls []MarkupCall
+		for _, ci := range chs {
+			c, ok := ci.(map[string]any)
+			if !ok {
+				continue
+			}
+			d, ok := c["delta"].(map[string]any)
+			if !ok {
+				continue
+			}
+			txt, ok := d["content"].(string)
+			if !ok || txt == "" {
+				continue
+			}
+			emit, got := repair.Feed(txt)
+			calls = append(calls, got...)
+			if emit == "" {
+				delete(d, "content")
+			} else {
+				d["content"] = emit
+			}
+		}
+		if len(calls) == 0 {
+			// 本帧没命中标记；但本流此前还原过调用 → 把上游的 stop 收尾改写成
+			// tool_calls，客户端据此知道「回合以工具调用结束」而不是「模型只说了话」。
+			if synthIdx > 0 && rewriteFinishReason(obj, "tool_calls") {
+				toolFinishSent = true
+			}
+			return []map[string]any{obj}
+		}
+		// 命中：finish_reason 必须挪到工具调用帧之后，否则客户端在读到调用之前就
+		// 认为回合已经结束。注意「本帧本来没有 finish_reason」时**不得**补一帧收尾
+		// ——上游的收尾帧随后就到，补了会变成两个 finish_reason（后续那个由
+		// rewriteFinishReason 改写）。
+		fr := takeFinishReason(obj)
+		out := []map[string]any{obj}
+		for _, call := range calls {
+			idx := maxToolIdx + 1 + synthIdx
+			synthIdx++
+			out = append(out, markupCallFrame(obj, idx, call))
+		}
+		if fr != "" {
+			if fr == "stop" {
+				fr = "tool_calls"
+			}
+			out = append(out, finishOnlyFrame(obj, fr))
+			toolFinishSent = fr == "tool_calls"
+		}
+		return out
+	}
+
 	// writeFrame 把 payload 按规范白名单重建后以 data: 帧写出并 flush。
 	// 仅 JSON 解析成功时计数记为一次有效转发（JSON 解析失败照常降级原样写出，但不计数）。
 	writeFrame := func(payload string) (int, error) {
 		var obj map[string]any
-		valid := 0
-		if json.Unmarshal([]byte(payload), &obj) == nil {
-			// 上游错误帧透传（error-passthrough）：带 error 键的帧**原样写出**，不走
-			// normalizeFrame 白名单——白名单会剥掉 error 字段，客户端就看不到上游
-			// code/msg/requestId。error.message 即上游原文（如 6004 限流、审核拦截），
-			// 计入有效帧（避免误判空流补写 "empty upstream stream"）。
-			if _, hasErr := obj["error"]; hasErr {
-				// 旁路通知（账号处置用）：原始 payload 交给观察者，透传字节不变。
-				if o.onErrorFrame != nil {
-					o.onErrorFrame(payload)
-				}
-				if werr := writeRaw(payload); werr != nil {
-					return 0, werr
-				}
-				return 1, nil
+		if json.Unmarshal([]byte(payload), &obj) != nil {
+			// 非 JSON 帧：原样降级写出，不计数（与修复前一致）。
+			if werr := writeSSE(payload); werr != nil {
+				return 0, werr
 			}
-			// 先按 index 收敛 tool_calls name（每 index 仅首片保留，后续分片删 name 键），再规范化透传。
-			stripToolCallNames(obj, toolCallSeen)
-			// id 续传：首帧非空真实 id 缓存；后续帧缺 id / 空 id 一律用缓存值，
-			// 有自己 id 的帧保持原样（不同流分裂的帧允许各自 id）。
-			if firstID == "" {
-				if v, ok := obj["id"].(string); ok && v != "" {
-					firstID = v
-				}
-			} else {
-				if v, ok := obj["id"].(string); !ok || v == "" {
-					obj["id"] = firstID
-				}
+			return 0, nil
+		}
+		// 上游错误帧透传（error-passthrough）：带 error 键的帧**原样写出**，不走
+		// normalizeFrame 白名单——白名单会剥掉 error 字段，客户端就看不到上游
+		// code/msg/requestId。error.message 即上游原文（如 6004 限流、审核拦截），
+		// 计入有效帧（避免误判空流补写 "empty upstream stream"）。
+		if _, hasErr := obj["error"]; hasErr {
+			// 旁路通知（账号处置用）：原始 payload 交给观察者，透传字节不变。
+			if o.onErrorFrame != nil {
+				o.onErrorFrame(payload)
 			}
-			if raw, err := json.Marshal(normalizeFrame(obj)); err == nil {
-				payload = string(raw)
+			if werr := writeRaw(payload); werr != nil {
+				return 0, werr
 			}
-			valid = 1
+			return 1, nil
 		}
-		if _, werr := io.WriteString(w, "data: "+payload+"\n\n"); werr != nil {
-			return 0, werr
+		for _, ch := range repairFrame(obj) {
+			if werr := writeChunk(ch, payload); werr != nil {
+				return 0, werr
+			}
 		}
-		if fl != nil {
-			fl.Flush()
-		}
-		return valid, nil
+		return 1, nil
 	}
 
 	br := bufio.NewReaderSize(r, 64*1024)
@@ -617,6 +739,29 @@ readLoop:
 				break
 			}
 			return err
+		}
+	}
+	// 标记修复的尾部收尾：流结束时仍未判定的字节一律原文回吐（绝不吞字节，未闭合
+	// 的块连起始标记一起交还）；若本流还原过调用、但上游从未给出收尾帧，补一帧
+	// finish_reason: tool_calls，保证客户端不会把「工具调用回合」读成「模型只说了话」。
+	if repair.Enabled() {
+		if tail := repair.Flush(); tail != "" {
+			tailObj := map[string]any{
+				"object": "chat.completion.chunk",
+				"choices": []any{map[string]any{
+					"index": 0,
+					"delta": map[string]any{"content": tail},
+				}},
+			}
+			if werr := writeChunk(tailObj, ""); werr != nil {
+				return werr
+			}
+			validFrames++
+		}
+		if synthIdx > 0 && !toolFinishSent {
+			if werr := writeChunk(finishOnlyFrame(map[string]any{}, "tool_calls"), ""); werr != nil {
+				return werr
+			}
 		}
 	}
 	// 空流（0 有效帧）：先写一帧 error（绕过 normalizeFrame 原样保留 error 字段），
@@ -667,4 +812,81 @@ func attachHintToErrorFrame(payload, hint string) string {
 		return payload
 	}
 	return string(out)
+}
+
+// takeFinishReason 取出并删除所有 choice 的 finish_reason，返回第一个非空值。
+// 标记修复把一帧拆成多帧时需要它：finish_reason 必须落在工具调用帧之后，否则
+// 客户端在读到调用之前就认为回合结束了。
+func takeFinishReason(obj map[string]any) string {
+	fr := ""
+	chs, _ := obj["choices"].([]any)
+	for _, ci := range chs {
+		c, _ := ci.(map[string]any)
+		if c == nil {
+			continue
+		}
+		if v, ok := c["finish_reason"].(string); ok && v != "" && fr == "" {
+			fr = v
+		}
+		delete(c, "finish_reason")
+	}
+	return fr
+}
+
+// rewriteFinishReason 把 choice 上「已有且为 stop」的 finish_reason 改写成 want。
+// 本来就没有 finish_reason 的中间帧一律不动（绝不凭空造收尾），已有其他值
+// （length / content_filter 等）时也不动——那些收尾语义更需要被客户端看到。
+// 返回是否发生了改写。
+func rewriteFinishReason(obj map[string]any, want string) bool {
+	changed := false
+	chs, _ := obj["choices"].([]any)
+	for _, ci := range chs {
+		c, _ := ci.(map[string]any)
+		if c == nil {
+			continue
+		}
+		if v, ok := c["finish_reason"].(string); ok && v == "stop" {
+			c["finish_reason"] = want
+			changed = true
+		}
+	}
+	return changed
+}
+
+// markupCallFrame 以 src 帧为模板，构造一帧只带单个 delta.tool_calls 的 chunk。
+// id 不在这里写：交给 writeChunk 的 id 续传逻辑补齐（src 帧先写出，firstID 已就位）。
+func markupCallFrame(src map[string]any, idx int, call MarkupCall) map[string]any {
+	frame := map[string]any{
+		"object": "chat.completion.chunk",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"delta": map[string]any{
+				"tool_calls": markupToolCalls([]MarkupCall{call}, idx),
+			},
+		}},
+	}
+	for _, k := range []string{"created", "model"} {
+		if v, ok := src[k]; ok && v != nil {
+			frame[k] = v
+		}
+	}
+	return frame
+}
+
+// finishOnlyFrame 构造一帧只带 finish_reason 的收尾 chunk（空 delta）。
+func finishOnlyFrame(src map[string]any, finish string) map[string]any {
+	frame := map[string]any{
+		"object": "chat.completion.chunk",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{},
+			"finish_reason": finish,
+		}},
+	}
+	for _, k := range []string{"created", "model"} {
+		if v, ok := src[k]; ok && v != nil {
+			frame[k] = v
+		}
+	}
+	return frame
 }

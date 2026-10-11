@@ -932,3 +932,258 @@ func TestCreditPackagesExpiryTimestamp(t *testing.T) {
 		t.Fatalf("gift pack missing Unix-ms expiry: %+v", packs)
 	}
 }
+
+// --- 标记修复（流式端到端，见 dsml.go）-------------------------------------
+
+// upstreamSSEWithContent 用给定的正文分片拼一条上游 SSE：role 首帧 + N 个正文帧
+// + finish 收尾帧 + [DONE]。
+func upstreamSSEWithContent(chunks []string, finish string) string {
+	var sb strings.Builder
+	sb.WriteString(`data: {"id":"resp-1","object":"chat.completion.chunk","created":1,"model":"global:deepseek-v4.1-flash","choices":[{"index":0,"delta":{"role":"assistant"}}]}` + "\n\n")
+	for _, c := range chunks {
+		b, _ := json.Marshal(map[string]any{
+			"id": "resp-1", "object": "chat.completion.chunk", "created": 1,
+			"model": "global:deepseek-v4.1-flash",
+			"choices": []any{map[string]any{
+				"index": 0,
+				"delta": map[string]any{"content": c},
+			}},
+		})
+		sb.WriteString("data: " + string(b) + "\n\n")
+	}
+	b, _ := json.Marshal(map[string]any{
+		"id": "resp-1", "object": "chat.completion.chunk", "created": 1,
+		"model": "global:deepseek-v4.1-flash",
+		"choices": []any{map[string]any{
+			"index": 0, "delta": map[string]any{}, "finish_reason": finish,
+		}},
+	})
+	sb.WriteString("data: " + string(b) + "\n\n")
+	sb.WriteString("data: [DONE]\n\n")
+	return sb.String()
+}
+
+// sseFrameView 是测试侧对一帧的扁平视图。
+type sseFrameView struct {
+	content string
+	calls   []map[string]any
+	finish  string
+}
+
+// viewSSE 解析网关写出的 SSE 文本。
+func viewSSE(t *testing.T, body string) []sseFrameView {
+	t.Helper()
+	var out []sseFrameView
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(payload), &obj); err != nil {
+			t.Fatalf("帧不是合法 JSON: %q (%v)", payload, err)
+		}
+		chs, _ := obj["choices"].([]any)
+		if len(chs) == 0 {
+			continue
+		}
+		ch, _ := chs[0].(map[string]any)
+		v := sseFrameView{}
+		if d, ok := ch["delta"].(map[string]any); ok {
+			v.content, _ = d["content"].(string)
+			if tcs, ok := d["tool_calls"].([]any); ok {
+				for _, tci := range tcs {
+					if tc, ok := tci.(map[string]any); ok {
+						v.calls = append(v.calls, tc)
+					}
+				}
+			}
+		}
+		v.finish, _ = ch["finish_reason"].(string)
+		out = append(out, v)
+	}
+	return out
+}
+
+// TestStreamMarkupRepairEndToEnd 上游把工具调用吐成正文标记时，网关必须还原成
+// delta.tool_calls：正文里不再残留标记、调用帧带正确的 name/arguments、收尾帧
+// finish_reason 为 tool_calls 且出现在调用帧之后。
+func TestStreamMarkupRepairEndToEnd(t *testing.T) {
+	prose := "先读一遍控制器，把接口清单核实准确。\n\n"
+	content := prose + mkBlock(
+		mkInvoke("exec_command", mkParam("cmd", "ls -la")),
+		mkInvoke("exec_command", mkParam("cmd", "pwd")),
+	)
+	raw := upstreamSSEWithContent([]string{content}, "stop")
+
+	repair := NewMarkupRepair(testTools, false)
+	rec := httptest.NewRecorder()
+	if err := StreamHint(rec, strings.NewReader(raw), nil, WithMarkupRepair(repair)); err != nil {
+		t.Fatal(err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, markupPipe) {
+		t.Fatalf("透出内容里仍残留标记: %s", body)
+	}
+	if repair.Converted() != 2 {
+		t.Fatalf("Converted 应为 2，实际 %d", repair.Converted())
+	}
+
+	frames := viewSSE(t, body)
+	var text strings.Builder
+	var calls []map[string]any
+	lastCallIdx, finishIdx, finishCount := -1, -1, 0
+	for i, f := range frames {
+		text.WriteString(f.content)
+		for _, tc := range f.calls {
+			calls = append(calls, tc)
+			lastCallIdx = i
+		}
+		if f.finish != "" {
+			finishCount++
+			finishIdx = i
+		}
+	}
+	if text.String() != prose {
+		t.Fatalf("正文应只保留标记之外的部分\nwant %q\ngot  %q", prose, text.String())
+	}
+	if len(calls) != 2 {
+		t.Fatalf("应还原 2 个 tool_call，实际 %d（body=%s）", len(calls), body)
+	}
+	for i, want := range []string{"ls -la", "pwd"} {
+		tc := calls[i]
+		if tc["type"] != "function" {
+			t.Fatalf("第 %d 个 tool_call type=%v want function", i, tc["type"])
+		}
+		if id, _ := tc["id"].(string); id == "" {
+			t.Fatalf("第 %d 个 tool_call 缺 id", i)
+		}
+		if idx, ok := tc["index"].(float64); !ok || int(idx) != i {
+			t.Fatalf("第 %d 个 tool_call index=%v", i, tc["index"])
+		}
+		fn, _ := tc["function"].(map[string]any)
+		if fn == nil || fn["name"] != "exec_command" {
+			t.Fatalf("第 %d 个 tool_call 函数名错误: %#v", i, tc)
+		}
+		argsJSON, _ := fn["arguments"].(string)
+		var args map[string]any
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			t.Fatalf("第 %d 个 tool_call arguments 不是合法 JSON: %q", i, argsJSON)
+		}
+		if args["cmd"] != want {
+			t.Fatalf("第 %d 个 tool_call cmd=%#v want %q", i, args["cmd"], want)
+		}
+	}
+	if finishCount != 1 {
+		t.Fatalf("收尾帧应恰好 1 个，实际 %d（body=%s）", finishCount, body)
+	}
+	if frames[finishIdx].finish != "tool_calls" {
+		t.Fatalf("收尾 finish_reason=%q want tool_calls", frames[finishIdx].finish)
+	}
+	if finishIdx < lastCallIdx {
+		t.Fatalf("收尾帧（第 %d 帧）必须排在最后一个调用帧（第 %d 帧）之后", finishIdx, lastCallIdx)
+	}
+}
+
+// TestStreamMarkupRepairAcrossManyChunks 上游把标记切碎成多个正文帧时同样成立。
+func TestStreamMarkupRepairAcrossManyChunks(t *testing.T) {
+	content := "开头\n" + mkBlock(mkInvoke("exec_command", mkParam("cmd", "ls -la"))) + "\n结尾"
+	// 按 rune 边界切：真实上游的 JSON 字符串不可能把多字节字符劈成半个 rune，
+	// 字节级切分会在 json.Marshal 时把非法 UTF-8 替换成 U+FFFD，等于先改坏夹具。
+	runes := []rune(content)
+	chunks := make([]string, 0, len(runes)/5+1)
+	for i := 0; i < len(runes); i += 5 {
+		end := i + 5
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[i:end]))
+	}
+	raw := upstreamSSEWithContent(chunks, "stop")
+
+	repair := NewMarkupRepair(testTools, false)
+	rec := httptest.NewRecorder()
+	if err := StreamHint(rec, strings.NewReader(raw), nil, WithMarkupRepair(repair)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rec.Body.String(), markupPipe) {
+		t.Fatalf("透出内容里仍残留标记: %s", rec.Body.String())
+	}
+	if repair.Converted() != 1 {
+		t.Fatalf("Converted 应为 1，实际 %d", repair.Converted())
+	}
+	var text strings.Builder
+	var calls int
+	var finish string
+	for _, f := range viewSSE(t, rec.Body.String()) {
+		text.WriteString(f.content)
+		calls += len(f.calls)
+		if f.finish != "" {
+			finish = f.finish
+		}
+	}
+	if text.String() != "开头\n\n结尾" {
+		t.Fatalf("正文错误: %q", text.String())
+	}
+	if calls != 1 {
+		t.Fatalf("应还原 1 个 tool_call，实际 %d", calls)
+	}
+	if finish != "tool_calls" {
+		t.Fatalf("收尾 finish_reason=%q want tool_calls", finish)
+	}
+}
+
+// TestStreamMarkupRepairUnclosedFlushedVerbatim 未闭合的块在流尾原样回吐，不吞字节。
+func TestStreamMarkupRepairUnclosedFlushedVerbatim(t *testing.T) {
+	content := "说明\n" + markupOpen + mkInvoke("exec_command", mkParam("cmd", "pwd"))
+	raw := upstreamSSEWithContent([]string{content}, "stop")
+
+	repair := NewMarkupRepair(testTools, false)
+	rec := httptest.NewRecorder()
+	if err := StreamHint(rec, strings.NewReader(raw), nil, WithMarkupRepair(repair)); err != nil {
+		t.Fatal(err)
+	}
+	if repair.Converted() != 0 {
+		t.Fatalf("未闭合块不得转换，实际 %d", repair.Converted())
+	}
+	var text strings.Builder
+	var calls int
+	for _, f := range viewSSE(t, rec.Body.String()) {
+		text.WriteString(f.content)
+		calls += len(f.calls)
+	}
+	if calls != 0 {
+		t.Fatalf("不得产出 tool_call，实际 %d", calls)
+	}
+	if text.String() != content {
+		t.Fatalf("未闭合块应原样回吐\nwant %q\ngot  %q", content, text.String())
+	}
+}
+
+// TestStreamWithoutMarkupRepairIsUnchanged 修复器不启用时，流式输出必须与修复前
+// 逐字节一致（回归护栏：客户端没声明 tools、或没挂修复器）。
+func TestStreamWithoutMarkupRepairIsUnchanged(t *testing.T) {
+	content := mkBlock(mkInvoke("exec_command", mkParam("cmd", "ls -la")))
+	raw := upstreamSSEWithContent([]string{content}, "stop")
+
+	base := httptest.NewRecorder()
+	if err := StreamHint(base, strings.NewReader(raw), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(base.Body.String(), markupPipe) {
+		t.Fatal("基线流里本应还带着标记（上游原样透传）")
+	}
+
+	disabled := httptest.NewRecorder()
+	if err := StreamHint(disabled, strings.NewReader(raw), nil,
+		WithMarkupRepair(NewMarkupRepair(nil, false))); err != nil {
+		t.Fatal(err)
+	}
+	if base.Body.String() != disabled.Body.String() {
+		t.Fatalf("未声明 tools 时输出被改动\nbase=%s\ngot =%s", base.Body.String(), disabled.Body.String())
+	}
+}

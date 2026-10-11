@@ -25,6 +25,11 @@ func TestTokensPerSecond(t *testing.T) {
 		{"TTFB 占总耗时一半", 50, time.Second, 500 * time.Millisecond, 100, true, 0.01},
 		{"TTFB 超过总耗时 → 退回端到端，不得负/零分母", 100, 100 * time.Millisecond, 500 * time.Millisecond, 1000, true, 0.01},
 		{"TTFB 恰好等于总耗时 → 退回端到端", 100, 100 * time.Millisecond, 100 * time.Millisecond, 1000, true, 0.01},
+		// issue #127：假流式/攒批下发形态——首帧（=ttfb 观测点）与末帧几乎同时到，
+		// total−ttfb 只剩毫秒级。不得拿它当分母除出上万 tok/s 的幻数，退回端到端。
+		{"扣除后只剩 50ms（攒批下发）→ 退回端到端", 500, 5 * time.Second, 4950 * time.Millisecond, 100, true, 0.01},
+		{"扣除后不足 200ms 下限 → 退回端到端", 100, time.Second, 950 * time.Millisecond, 100, true, 0.01},
+		{"恰好达到 200ms 下限 → 照常扣除", 100, time.Second, 800 * time.Millisecond, 500, true, 0.01},
 		{"token 为负哨兵（观测缺失）", -1, time.Second, 100 * time.Millisecond, 0, false, 0},
 		{"零耗时", 10, 0, 0, 0, false, 0},
 		{"零 token 但有效耗时", 0, time.Second, 0, 0, true, 0.01},

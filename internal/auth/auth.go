@@ -190,6 +190,25 @@ func BackfillRealmFor(a *Auth, realm string) (bool, error) {
 // IsGlobal 报告账号是否属于 global realm（= Realm() == "global"）。
 func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 
+// IsEnterprise 报告账号是否为企业版（auth 文件带非空 enterpriseId）。
+//
+// 企业版**没有个人成长体系**：签到 / 成长任务 / 连登管家 / 猫猫旅行 / 夜猫子
+// 在上游一律被拒——实测（2026-10-07，同一时刻 A/B 对照）：
+//   - POST /v2/billing/meter/daily-checkin                → 400 code 10001「企业账号不支持该操作」
+//   - POST /billing/meter/claim-gift / claim-compensation → 400 code 10001 同上
+//   - GET  /activity/growth/{streak,buddy/info,heatmap,lottery/summary}
+//     与 GET /v2/activity/growth/tasks                    → 403「growth system is only available for personal users」
+//
+// 因此引用处（scheduler 五类任务 + panel 成长任务/签到入口）必须与 IsGlobal 门控
+// 并列跳过，避免每日对注定失败的端点空发请求、面板按钮必然报错。
+//
+// 不受影响的能力：选号派发、保活（token 刷新）、额度查询（企业额度改走
+// /v2/billing/meter/get-enterprise-user-usage，见 upstream.enterpriseResource）。
+//
+// 直读字段（EnterpriseID 自 Parse 后不再改写，与 upstream 读取方式一致），
+// 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
+func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
+
 // isGlobalDomain 判定 domain 是否指向 www.workbuddy.ai 家族。
 // 同时接受裸域 workbuddy.ai 与任意子域（HasSuffix("www.workbuddy.ai") 或裸域本身）。
 func isGlobalDomain(d string) bool {
