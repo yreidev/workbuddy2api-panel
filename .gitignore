@@ -34,11 +34,11 @@ backups/
 LOOP.md
 PLAN.md
 SPEC.md
-docs/
 
-# 设计/计划文档（但 README.md 必须进版本库）
+# 设计/计划文档（但 README.md 与 docs/ 下的使用文档必须进版本库）
 *.md
 !README.md
+!/docs/*.md
 
 # Windows binaries
 /wb2api.exe
