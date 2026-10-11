@@ -2,7 +2,8 @@ name: go-binaries
 
 # 可运行二进制构建/发布：
 #   - 先构建面板前端（web/ → internal/panel/dist，含类型检查 / ESLint / 单元测试），产物供后续任务 go:embed
-#   - PR / push main → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
+#   - PR             → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
+#   - push main      → 同上 + 覆盖固定的「最新构建」Release（tag latest 跟随 main 移动，不必手动打 tag）
 #   - push v* tag    → 同上 + 打包上传到 GitHub Release（zip/tar.gz + checksums）
 # 固化的发布纪律（曾两次人祸，见仓库 HANDOFF）：-s -w 剥离、二进制版本串 == 源码
 # appVersion、tag 版本 == 源码版本（-ci 后缀的测试 tag 豁免，用于演练发布线）。
@@ -139,6 +140,68 @@ jobs:
           name: ${{ env.name }}
           path: ${{ env.name }}
           retention-days: 7
+
+  # 仅 push main：把五平台包覆盖到固定的「最新构建」Release，与 Docker 的 latest 镜像同步。
+  # 文件名去掉版本号（wb2api-panel-linux-amd64.tar.gz），releases/download/latest/<文件名> 链接长期不变。
+  rolling:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # 连续推送时排队执行，不并发改同一个 Release
+    concurrency:
+      group: rolling-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: 跳过已过时的构建
+        id: fresh
+        run: |
+          HEAD=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [[ "$HEAD" != "$GITHUB_SHA" ]]; then
+            echo "main 已前进到 $HEAD，本次（$GITHUB_SHA）不再覆盖，留给更新的运行"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.fresh.outputs.ok == 'true'
+        with:
+          pattern: wb2api-panel-*
+          path: dist
+          merge-multiple: true
+      - name: 去掉文件名里的版本号 + checksums
+        if: steps.fresh.outputs.ok == 'true'
+        run: |
+          cd dist
+          for f in wb2api-panel-v*; do mv "$f" "wb2api-panel-${f#wb2api-panel-v*-}"; done
+          sha256sum *.zip *.tar.gz > checksums.txt
+          ls -la
+      - name: 移动 latest 标签并覆盖 Release
+        if: steps.fresh.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
+          SHORT=${GITHUB_SHA::7}
+          BUILT=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
+          TITLE="最新构建 v${V}（${SHORT}）"
+          NOTES=$(printf '%s\n' \
+            "随 main 分支自动更新的构建，与 Docker 镜像 \`latest\` 同步，下一次推送会覆盖这里的文件。" \
+            "" \
+            "- 版本：\`${V}\`" \
+            "- 提交：https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
+            "- 构建时间：${BUILT}（UTC+8）" \
+            "- 校验：\`sha256sum -c --ignore-missing checksums.txt\`")
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin refs/tags/latest
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "$TITLE" --notes "$NOTES" --prerelease=false --latest
+            gh release upload latest dist/* --clobber
+          else
+            gh release create latest dist/* --title "$TITLE" --notes "$NOTES" --latest --verify-tag
+          fi
 
   # 仅 tag 触发：校验 tag == 源码版本（-ci 演练 tag 豁免）→ 汇总资产 → 建 Release
   publish:
