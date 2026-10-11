@@ -5,6 +5,7 @@ import {
   Alert, Button, Description, Label, Modal, Radio, RadioGroup, Spinner, Tabs, toast,
 } from '@heroui/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { creditsText } from '../lib/accounts'
 import { api, errorMessage, post, upload } from '../lib/api'
 import { copyText } from '../lib/clipboard'
 import { qk } from '../lib/queries'
@@ -82,8 +83,7 @@ function LoginPanel({ onClose }: { onClose: () => void }) {
   }
 
   if (done) {
-    const credits = done.credits != null && done.credits >= 0
-      ? ' · 积分 ' + done.credits + (done.credits_total ? '/' + done.credits_total : '') : ''
+    const credits = done.credits != null && done.credits >= 0 ? ' · 积分 ' + creditsText(done.credits, done.credits_total) : ''
     return (
       <Alert status="success">
         <Alert.Indicator />

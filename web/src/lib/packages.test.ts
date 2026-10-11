@@ -1,6 +1,9 @@
 // 从 Go 端 internal/panel/frontend_test.go 平移过来的两个用例（断言值原样保留）。
 import { describe, expect, it } from 'vitest'
-import { expiryBatches, expiryReminder, pkAccountColorMap, pkDetailGroups, pkDetailLimit, summarizeCreditDays } from './packages'
+import {
+  expiryBatches, expiryReminder, pkAccountColorMap, pkDetailGroups, pkDetailLimit, sortExpiryRows, summarizeCreditDays,
+} from './packages'
+import type { PackageAccount } from './types'
 
 describe('pkDetailGroups', () => {
   it('同到期时间按面额降序；其余未用完包与零/负余额包分别聚合', () => {
@@ -121,5 +124,29 @@ describe('积分到期提醒', () => {
     expect(r.count).toBe(5)
     expect(expiryReminder([{ remain: 9, expires_at: at('2026-10-05T20:00:00') }], now)!.daily).toBe(9)
     expect(expiryReminder([{ remain: 9, end_time: '' }], now)).toBeNull()
+  })
+})
+
+// 从上游 internal/panel/frontend_test.go 的 TestAppJSExpirySortedByExpiry 平移（期望值原样保留）。
+describe('sortExpiryRows', () => {
+  it('按最近到期升序、不分域；没有会到期积分的与查询失败的排最后', () => {
+    const now = Date.now()
+    const day = (n: number) => {
+      const d = new Date(now)
+      d.setHours(0, 0, 0, 0)
+      d.setDate(d.getDate() + n)
+      const p = (x: number) => String(x).padStart(2, '0')
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' 00:00:00'
+    }
+    const pack = (days: number, remain: number) => ({ end_time: day(days), remain })
+    // 模拟后端顺序：余额降序 → 国内高余额在前且到期最晚，国际版最少且最快到期
+    const list = [
+      { uid: 'a', nickname: 'cn-late', realm: 'cn', packages: [pack(16, 900)] },
+      { uid: 'b', nickname: 'cn-mid', realm: 'cn', packages: [pack(12, 700)] },
+      { uid: 'c', nickname: 'gl-soon', realm: 'global', packages: [pack(2, 500)] },
+      { uid: 'd', nickname: 'no-expiry', realm: 'cn', packages: [pack(-3, 100)] },
+      { uid: 'e', nickname: 'broken', realm: 'cn', error: 'offline' },
+    ] as PackageAccount[]
+    expect(sortExpiryRows(list, now).map((x) => x.a.nickname)).toEqual(['gl-soon', 'cn-mid', 'cn-late', 'no-expiry', 'broken'])
   })
 })

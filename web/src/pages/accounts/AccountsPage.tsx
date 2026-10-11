@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import {
   Button, Card, SearchField, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type SortDescriptor,
 } from '@heroui/react'
-import { accountHealth, filterAccounts, sortAccounts, type AccountSortKey, type StatusFilter } from '../../lib/accounts'
+import { accountHealth, filterAccounts, poolCredits, sortAccounts, type AccountSortKey, type StatusFilter } from '../../lib/accounts'
 import { post } from '../../lib/api'
 import { ago } from '../../lib/format'
 import { toastError, useNow, useStartedToast } from '../../lib/hooks'
@@ -46,29 +46,31 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const { busy, run, confirmEl } = useAccountActions(setTasksOf)
 
   const accounts = useMemo(() => data.accounts || [], [data])
-  const poolMax = Math.max(1, ...accounts.map((a) => a.credits || 0))
+  const pool = useMemo(() => poolCredits(accounts), [accounts])
+  const poolMax = pool.max
   const rows = useMemo(
     () => sortAccounts(filterAccounts(accounts, fetchedAt, status, q), (sort?.column as AccountSortKey) ?? null, sort?.direction === 'descending'),
     [accounts, fetchedAt, status, q, sort],
   )
-  const remSum = accounts.reduce((s, a) => s + (a.credits || 0), 0)
-  const totSum = accounts.reduce((s, a) => s + (a.credits_total || 0), 0)
   const byUid = (uid: string | null) => accounts.find((a) => a.uid === uid) ?? null
   const detailAcct = byUid(detail)
   const tasksAcct = byUid(tasksOf)
-  // 后端把暂停选号并进 disabled 计数（都是不参与选号），这里拆开说明
-  const paused = accounts.filter((a) => a.paused && !a.disabled).length
 
+  // 暂停选号单独一栏（上游 issue #125）：它只关选号、照常签到保活，和禁用是两种状态
   const tiles: { id: StatusFilter; label: string; value: number; color?: string }[] = [
     { id: 'all', label: '账号总数', value: data.total },
     { id: 'ok', label: '可用', value: data.healthy, color: 'text-success' },
     { id: 'cooling', label: '冷却中', value: data.cooling, color: 'text-warning' },
-    { id: 'disabled', label: paused ? `禁用 ${data.disabled - paused} · 暂停选号 ${paused}` : '已禁用', value: data.disabled, color: 'text-danger' },
+    { id: 'disabled', label: '已禁用', value: data.disabled, color: 'text-danger' },
+    { id: 'paused', label: '已暂停选号', value: data.paused },
   ]
+  // 企业版不限量的号没有可加的数，合计里不算，另外注明
+  const creditSum = pool.total > 0 ? `${pool.remain} / ${pool.total}` : pool.remain
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+      {/* 宽屏一行放下：五张状态卡均分，积分合计、粘性会话按内容定宽（积分合计数字长，均分会折行） */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
         <ToggleButtonGroup
           aria-label="按状态筛选"
           isDetached
@@ -85,7 +87,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-        <Stat label="积分剩余 / 总额" value={totSum > 0 ? `${remSum} / ${totSum}` : remSum} />
+        <Stat label="积分剩余 / 总额" value={creditSum} sub={pool.unlimited ? `另有 ${pool.unlimited} 个企业版不限量` : undefined} />
         <Stat label="粘性会话" value={data.sticky_sessions} />
       </div>
 

@@ -1,6 +1,6 @@
 // 账号的各个展示单元（名称、状态、积分、用量），账号表、手机卡片、详情抽屉共用。
 import { Chip, ProgressBar } from '@heroui/react'
-import { activeRateLimits, creditPercent, rateLimitInfo, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditPercent, isUnlimited, rateLimitInfo, type Health } from '../../lib/accounts'
 import { dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import type { Account } from '../../lib/types'
 
@@ -9,10 +9,20 @@ export function AccountName({ a }: { a: Account }) {
     <div className="min-w-0">
       <div className="flex items-center gap-1.5">
         <span className={`truncate font-medium ${a.nickname ? '' : 'text-muted'}`}>{a.nickname || '未命名'}</span>
-        {a.realm === 'global' && <Chip size="sm" variant="soft" color="accent">国际版</Chip>}
+        <RealmChips a={a} />
       </div>
       <div className="truncate font-mono text-xs text-muted">{a.uid.length > 16 ? a.uid.slice(0, 16) + '…' : a.uid}</div>
     </div>
+  )
+}
+
+/** 国际版 / 企业版标签（账号名旁边、详情抽屉标题） */
+export function RealmChips({ a }: { a: Account }) {
+  return (
+    <>
+      {a.realm === 'global' && <Chip size="sm" variant="soft" color="accent">国际版</Chip>}
+      {a.enterprise && <Chip size="sm" variant="soft" color="default">企业版</Chip>}
+    </>
   )
 }
 
@@ -75,15 +85,18 @@ export function EarliestExpiry({ a, now }: { a: Account; now: number }) {
 }
 
 export function CreditsCell({ a, poolMax, now }: { a: Account; poolMax: number; now: number }) {
-  if (a.credits == null) return <span className="text-muted">—</span>
+  const unlimited = isUnlimited(a)
+  if (a.credits == null && !unlimited) return <span className="text-muted">—</span>
   const pct = creditPercent(a, poolMax)
+  // 企业版的总额是分配给这个号的额度（企业池总额成员号查不到），悬停说明一下
+  const tip = unlimited ? '企业版不限量' : a.enterprise ? '企业版：剩余额度 / 分配额度（按周期重置）' : undefined
   return (
-    <div className="flex min-w-28 flex-col gap-1">
+    <div className="flex min-w-28 flex-col gap-1" title={tip}>
       <span className="font-mono text-sm tabular-nums">
-        {a.credits}
-        {!!a.credits_total && <span className="text-xs text-muted">/{a.credits_total}</span>}
+        {unlimited ? '不限' : a.credits}
+        {!unlimited && !!a.credits_total && <span className="text-xs text-muted">/{a.credits_total}</span>}
       </span>
-      <ProgressBar aria-label={a.credits_total ? `剩余 ${pct}%` : '积分（相对池内最高）'} value={pct} size="sm" className="max-w-28">
+      <ProgressBar aria-label={unlimited ? '不限量' : a.credits_total ? `剩余 ${pct}%` : '积分（相对池内最高）'} value={pct} size="sm" className="max-w-28">
         <ProgressBar.Track><ProgressBar.Fill /></ProgressBar.Track>
       </ProgressBar>
       <EarliestExpiry a={a} now={now} />

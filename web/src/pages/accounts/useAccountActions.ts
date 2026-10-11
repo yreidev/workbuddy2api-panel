@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { toast } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
+import { creditsText } from '../../lib/accounts'
 import { acct, post } from '../../lib/api'
 import { toastError } from '../../lib/hooks'
 import { qk } from '../../lib/queries'
@@ -17,22 +18,22 @@ export function useAccountActions(openTasks: (uid: string) => void) {
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmEl, ask] = useConfirm()
 
-  const exec = async (uid: string, action: Exclude<AccountAction, 'tasks'>) => {
+  const exec = async (uid: string, action: Exclude<AccountAction, 'tasks'>, enterprise = false) => {
     setBusy(uid + ':' + action)
     try {
       if (action === 'checkin') {
         const r = await post<CheckinResp>(acct(uid, 'checkin'))
-        const credits = r.credits != null ? '，积分 ' + r.credits + (r.credits_total ? '/' + r.credits_total : '') : ''
+        const credits = r.credits != null ? '，积分 ' + creditsText(r.credits, r.credits_total) : ''
         toast.success('签到完成' + credits + (r.checkin_message ? '（' + r.checkin_message + '）' : ''))
       } else if (action === 'balance') {
         const r = await post<CheckinResp>(acct(uid, 'balance'))
-        toast.success('余额已更新：' + r.credits + (r.credits_total ? ' / ' + r.credits_total : ''))
+        toast.success((enterprise ? '额度已更新：' : '余额已更新：') + creditsText(r.credits, r.credits_total))
       } else if (action === 'revive') {
         await post(acct(uid, 'revive'))
         toast.success('已解冻')
       } else if (action === 'pause') {
         await post(acct(uid, 'pause'))
-        toast.success('已暂停选号（签到 / 保活照常）')
+        toast.success(enterprise ? '已暂停选号（保活照常）' : '已暂停选号（签到 / 保活照常）')
       } else if (action === 'resume') {
         await post(acct(uid, 'resume'))
         toast.success('已恢复选号')
@@ -69,7 +70,7 @@ export function useAccountActions(openTasks: (uid: string) => void) {
         onConfirm: () => void exec(a.uid, 'disable'),
       })
     }
-    void exec(a.uid, action)
+    void exec(a.uid, action, !!a.enterprise)
   }
 
   return { busy, run, confirmEl }

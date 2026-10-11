@@ -2,11 +2,11 @@
 // 最早到期批次、连败 / 熔断计数、最近一次请求。数据取自总览（随 5 秒轮询实时更新）。
 import type { ReactNode } from 'react'
 import { Chip, Drawer, Separator, useMediaQuery } from '@heroui/react'
-import { activeRateLimits, rateLimitInfo, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditsText, rateLimitInfo, type Health } from '../../lib/accounts'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import type { Account } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
-import { HealthChip } from './AccountCells'
+import { HealthChip, RealmChips } from './AccountCells'
 import type { AccountAction } from './useAccountActions'
 
 function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
@@ -72,14 +72,14 @@ function Body({ a, health, now, busy, run }: {
       <Drawer.Header>
         <Drawer.Heading className="flex flex-wrap items-center gap-2">
           {a.nickname || '未命名'}
-          {a.realm === 'global' && <Chip size="sm" variant="soft" color="accent">国际版</Chip>}
+          <RealmChips a={a} />
         </Drawer.Heading>
         <p className="select-all break-all font-mono text-xs text-muted">{a.uid}</p>
       </Drawer.Header>
       <Drawer.Body className="flex flex-col gap-5">
         <Section title="状态">
           <Row label="当前"><HealthChip health={health} now={now} /></Row>
-          {a.paused && <Row label="暂停选号">不参与选号，签到 / 活跃上报 / 保活 / 刷新余额照常</Row>}
+          {a.paused && <Row label="暂停选号">{a.enterprise ? '不参与选号，保活 / 刷新额度照常' : '不参与选号，签到 / 活跃上报 / 保活 / 刷新余额照常'}</Row>}
           {health.coolEnd != null && <Row label="恢复时间">{dateTime(health.coolEnd)}</Row>}
           {a.reason && <Row label={a.disabled ? '禁用原因' : '原因'}><span className="break-all">{a.reason}</span></Row>}
           <Row label="连续失败">{a.consecutive_fails}{degrade != null && degrade > now && <span className="text-warning">（降权至 {dateTime(degrade)}）</span>}</Row>
@@ -115,7 +115,8 @@ function Body({ a, health, now, busy, run }: {
 
         <Separator />
         <Section title="积分">
-          <Row label="剩余 / 总额">{a.credits ?? '—'}{a.credits_total ? ' / ' + a.credits_total : ''}</Row>
+          <Row label={a.enterprise ? '剩余 / 分配额度' : '剩余 / 总额'}>{creditsText(a.credits, a.credits_total)}</Row>
+          {a.enterprise && <p className="text-xs text-muted">企业版额度按周期重置，未用完即作废；这里只能看到分配给这个号的额度，企业池总额只有管理员可见。</p>}
           {earliest != null && earliest > now && (
             <Row label="最早到期">{fmtTok(a.credits_earliest_remaining)} 分 · {until(earliest, now)}（{dateTime(earliest)}）</Row>
           )}

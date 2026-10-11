@@ -12,10 +12,11 @@ describe('时间范围', () => {
     expect(q.has('to')).toBe(false)
   })
 
-  it('滚动预设：用量发 hours，请求记录折算成 from；全部历史都不发', () => {
+  it('滚动预设：用量发 hours，请求记录折算成 from；全部历史用量发 hours=0、请求记录不发', () => {
     expect(rangeQuery(r('24'), true).toString()).toBe('hours=24')
     expect(rangeQuery(r('72'), true).toString()).toBe('hours=72')
-    expect(rangeQuery(r('0'), true).toString()).toBe('')
+    // 空串会被后端的 72 小时缺省接管，「全部历史」显示成「近 3 天」（上游 issue #121）
+    expect(rangeQuery(r('0'), true).toString()).toBe('hours=0')
     expect(rangeQuery(r('0'), false).toString()).toBe('')
     const now = Date.now()
     const log24 = rangeQuery(r('24'), false, now)

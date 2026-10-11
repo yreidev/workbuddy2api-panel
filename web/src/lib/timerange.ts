@@ -44,7 +44,9 @@ const sec = (d: Date) => String(Math.floor(d.getTime() / 1000))
 
 /**
  * 当前选择 → 查询参数。rolling=true：滚动预设发 hours，今天 / 自定义发 from/to；
- * rolling=false：一律发 from/to。「全部历史」都不发。
+ * rolling=false：一律发 from/to。
+ * 「全部历史」：用量（rolling）必须显式发 hours=0——后端什么都不给时按 72 小时算，
+ * 空参数会显示成「近 3 天」（上游 issue #121）；请求记录没有缺省窗口，不发即不限起点。
  */
 export function rangeQuery(r: TimeRange, rolling: boolean, now = Date.now()): URLSearchParams {
   const q = new URLSearchParams()
@@ -53,7 +55,9 @@ export function rangeQuery(r: TimeRange, rolling: boolean, now = Date.now()): UR
     if (r.to) q.set('to', sec(r.to))
   } else if (r.preset === 'today') {
     q.set('from', sec(midnight(new Date(now))))
-  } else if (r.preset !== '0') {
+  } else if (r.preset === '0') {
+    if (rolling) q.set('hours', '0')
+  } else {
     if (rolling) q.set('hours', r.preset)
     else q.set('from', sec(new Date(now - Number(r.preset) * 3600_000)))
   }

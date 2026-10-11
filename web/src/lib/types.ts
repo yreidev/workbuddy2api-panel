@@ -51,11 +51,13 @@ export interface Account {
   soft_streak?: number
   rate_limited_models?: RateLimitedModel[]
   realm?: string
+  /** 企业版（auth 带 enterpriseId）：没有签到 / 成长任务；credits_total 是分配额度，-1 = 不限量 */
+  enterprise?: boolean
   /** 本地今日已签到（签到成功或上游「今天已签到」都算；国际版没有签到，恒为 false） */
   checkin_done?: boolean
   disabled: boolean
   disabled_reason?: string
-  /** 暂停选号：不参与选号，保号任务照常（与 disabled 正交，总览计数里并入 disabled） */
+  /** 暂停选号：不参与选号，保号任务照常（与 disabled 正交；总览里单独计 paused，禁用优先） */
   paused?: boolean
   success_count?: number
   err_total?: number
@@ -80,6 +82,8 @@ export interface Overview {
   healthy: number
   cooling: number
   disabled: number
+  /** 暂停选号（不含已禁用的） */
+  paused: number
   in_flight_full: number
   accounts: Account[] | null
   /** 模型锁池：有未过期模型级限流的「域 + 模型」，已按 locked → starved → partial 排好序；无锁时为 null */

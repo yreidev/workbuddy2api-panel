@@ -115,12 +115,18 @@ export function useUsage(range: TimeRange) {
   })
 }
 
-/** 积分包逐账号查上游（慢）：积分构成页与账号池页的到期提醒共用，两分钟内直接用缓存，页面上有「刷新」 */
-export function usePackages() {
+/**
+ * 积分包逐账号查上游（慢，账号一多打开页面就卡）：积分构成页与账号池页的到期提醒共用一份缓存，
+ * 只在显式要求时查（同上游 8391a05）。积分构成页没有缓存时自动查一次，有缓存就一直用、标出数据年龄；
+ * 到期提醒（auto=false）从不自动查，只由「检查」按钮触发。两处的「刷新 / 检查」都是实时查。
+ */
+export function usePackages(auto = true) {
   return useQuery({
     queryKey: qk.packages,
     queryFn: () => api<{ accounts: PackageAccount[] | null }>('packages'),
-    staleTime: 2 * 60_000,
+    enabled: auto,
+    staleTime: Infinity,
+    gcTime: Infinity,
   })
 }
 

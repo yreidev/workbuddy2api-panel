@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { accountHealth, activeRateLimits, creditPercent, filterAccounts, isFrozen, rateLimitInfo, sortAccounts } from './accounts'
+import {
+  accountHealth, activeRateLimits, creditPercent, creditsText, filterAccounts, isFrozen, poolCredits, rateLimitInfo, sortAccounts,
+} from './accounts'
 import type { Account } from './types'
 
 const base: Account = {
@@ -41,6 +43,16 @@ describe('账号表辅助', () => {
     expect(creditPercent({ ...base, credits: 25, credits_total: 100 }, 999)).toBe(25)
     expect(creditPercent({ ...base, credits: 25 }, 50)).toBe(50)
   })
+  it('企业版不限量（credits_total=-1）：显示「不限」、进度满，不计入池内合计和最高余额', () => {
+    const unlimited = { ...base, uid: 'ent', enterprise: true, credits: 2 ** 40, credits_total: -1 }
+    expect(creditPercent(unlimited, 50)).toBe(100)
+    expect(creditsText(unlimited.credits, unlimited.credits_total)).toBe('不限')
+    expect(creditsText(120, 500)).toBe('120 / 500')
+    expect(creditsText(120, 0)).toBe('120')
+    expect(creditsText(null, undefined)).toBe('—')
+    const pool = poolCredits([{ ...base, credits: 30, credits_total: 100 }, { ...base, credits: 80 }, unlimited])
+    expect(pool).toEqual({ remain: 110, total: 100, unlimited: 1, max: 80 })
+  })
   it('按状态和关键字筛选、按列排序', () => {
     const list = [
       { ...base, uid: 'aaa', nickname: '甲', credits: 10, err_total: 3 },
@@ -48,9 +60,10 @@ describe('账号表辅助', () => {
       { ...base, uid: 'ccc', credits: 20, cool_remaining_sec: 30 },
     ]
     expect(filterAccounts(list, now, 'cooling', '').map((a) => a.uid)).toEqual(['ccc'])
-    // 「已禁用」一栏与后端 disabled 计数同口径：暂停选号的号（哪怕在冷却）也算进来
-    const withPaused = [...list, { ...base, uid: 'ddd', paused: true, cool_remaining_sec: 30 }]
-    expect(filterAccounts(withPaused, now, 'disabled', '').map((a) => a.uid)).toEqual(['bbb', 'ddd'])
+    // 与后端总览计数同口径（上游 issue #125）：暂停选号单独一栏（哪怕在冷却），又禁用又暂停的算禁用
+    const withPaused = [...list, { ...base, uid: 'ddd', paused: true, cool_remaining_sec: 30 }, { ...base, uid: 'eee', paused: true, disabled: true }]
+    expect(filterAccounts(withPaused, now, 'disabled', '').map((a) => a.uid)).toEqual(['bbb', 'eee'])
+    expect(filterAccounts(withPaused, now, 'paused', '').map((a) => a.uid)).toEqual(['ddd'])
     expect(filterAccounts(withPaused, now, 'cooling', '').map((a) => a.uid)).toEqual(['ccc'])
     expect(filterAccounts(list, now, 'all', '乙').map((a) => a.uid)).toEqual(['bbb'])
     expect(sortAccounts(list, 'credits', true).map((a) => a.uid)).toEqual(['bbb', 'ccc', 'aaa'])

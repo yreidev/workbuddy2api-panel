@@ -298,5 +298,16 @@ export function expiryReminder(packs: Partial<CreditPackage>[] | null | undefine
   }
 }
 
+/**
+ * 到期提醒的行序：最快到期的排前面、不分域（后端按余额降序返回，看上去像按域分组，上游 issue #125），
+ * 同一天到期的余额多的在前；没有会到期积分的其次，查询失败的垫底。
+ */
+export function sortExpiryRows(list: PackageAccount[], now: number) {
+  const rank = (a: PackageAccount, r: ExpiryReminder | null) => (a.error ? 2 : r ? 0 : 1)
+  return list
+    .map((a) => ({ a, r: a.error ? null : expiryReminder(a.packages, now) }))
+    .sort((x, y) => rank(x.a, x.r) - rank(y.a, y.r) || (x.r && y.r ? x.r.first.days - y.r.first.days || y.r.first.remain - x.r.first.remain : 0))
+}
+
 /** 危险度：3 天内（不抓紧就真没了）、7 天内、更远 */
 export const expiryTone = (days: number) => (days <= 3 ? 'danger' : days <= 7 ? 'warning' : 'success')

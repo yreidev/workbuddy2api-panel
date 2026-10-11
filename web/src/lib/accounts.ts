@@ -4,8 +4,8 @@ import type { Account, RateLimitedModel } from './types'
 
 /** paused = 暂停选号：不参与选号，但签到 / 活跃上报 / 保活 / 刷新余额照常 */
 export type AccountState = 'ok' | 'cooling' | 'paused' | 'disabled'
-/** 「已禁用」一栏同时包含暂停选号的账号，与后端 disabled 计数同口径 */
-export type StatusFilter = 'all' | 'ok' | 'cooling' | 'disabled'
+/** 与后端总览计数同口径：禁用优先，其次暂停选号（暂停中的号哪怕在冷却也算暂停），再次冷却 */
+export type StatusFilter = 'all' | 'ok' | 'cooling' | 'paused' | 'disabled'
 
 export interface Health {
   state: AccountState
@@ -35,8 +35,7 @@ export function accountHealth(a: Account, fetchedAt: number): Health {
 /** 禁用或冷却中：操作按钮给「解冻」（解冻是全清，会一并解除暂停选号） */
 export const isFrozen = (h: Health) => h.state === 'disabled' || h.coolEnd != null
 
-const matchStatus = (state: AccountState, f: StatusFilter) =>
-  f === 'all' || state === f || (f === 'disabled' && state === 'paused')
+const matchStatus = (state: AccountState, f: StatusFilter) => f === 'all' || state === f
 
 /** 暂时不能用的模型（后端只返回仍在冷却中的条目，这里只去掉缺模型名的脏数据） */
 export function activeRateLimits(a: Account) {
@@ -81,8 +80,34 @@ export function rateLimitInfo(row: RateLimitedModel, now: number): RateLimitInfo
   return { model, unavailable: false, deadline, detail, short: remaining ? dur(remaining) + '后解封' : '解封时间未知' }
 }
 
-/** 积分进度百分比：有总额按 剩余/总额；旧数据没有总额时按池内最高 = 100% */
+/**
+ * 企业版不限量：上游 limitNum = -1，网关透出 credits_total = -1、credits 填一个极大值（让选号权重和
+ * credit_floor 都不受限），所以这个 credits 不能拿来展示或求和。
+ */
+export const isUnlimited = (a: Pick<Account, 'credits_total'>) => a.credits_total === -1
+
+/** 积分的文字口径（toast、详情）：「120 / 500」「120」「不限」 */
+export function creditsText(credits: number | null | undefined, total: number | null | undefined): string {
+  if (total === -1) return '不限'
+  if (credits == null) return '—'
+  return total && total > 0 ? credits + ' / ' + total : String(credits)
+}
+
+/** 池内合计（统计卡）与最高余额（没有总额的号按它算进度）：不限量的号不计入，单独计数 */
+export function poolCredits(list: Account[]) {
+  let remain = 0, total = 0, unlimited = 0, max = 1
+  for (const a of list) {
+    if (isUnlimited(a)) { unlimited++; continue }
+    remain += a.credits || 0
+    total += a.credits_total || 0
+    max = Math.max(max, a.credits || 0)
+  }
+  return { remain, total, unlimited, max }
+}
+
+/** 积分进度百分比：不限量为满；有总额按 剩余/总额；旧数据没有总额时按池内最高 = 100% */
 export function creditPercent(a: Account, poolMax: number): number {
+  if (isUnlimited(a)) return 100
   const c = a.credits || 0
   if (a.credits_total && a.credits_total > 0) return Math.min(100, Math.round((c / a.credits_total) * 100))
   return Math.round((c / Math.max(1, poolMax)) * 100)

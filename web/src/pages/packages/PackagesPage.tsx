@@ -1,11 +1,12 @@
 // 积分构成：积分到期分布（按剩余天数、账号分色）、账号对比卡片、单账号逐包明细。
-// 数据逐账号实时查上游（慢），与账号池页的到期提醒共用一份缓存，两分钟内切回来直接用，页面上有「刷新」。
+// 数据逐账号实时查上游（慢），与账号池页的到期提醒共用一份缓存：第一次进来自动查，之后切回来直接用缓存
+// 并标出数据年龄，点「刷新」才实时查（同上游 8391a05）。
 import { useMemo } from 'react'
 import { Accordion, Card, Label, ListBox, Select, Table } from '@heroui/react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ChevronDown } from '@gravity-ui/icons'
 import { fmtTok } from '../../lib/format'
-import { useStoredChoice } from '../../lib/hooks'
+import { useNow, useStoredChoice } from '../../lib/hooks'
 import type { TipProps } from '../../lib/chart'
 import {
   pkAccountColorMap, pkAccountSegments, pkBySource, pkColor, pkCreditOpacity, pkDetailGroups, pkDetailLimit,
@@ -24,6 +25,8 @@ export function PackagesPage() {
   const list = useMemo(() => query.data?.accounts || [], [query.data])
   const colorOf = useMemo(() => sourceColors(list), [list])
   const [sortMode, setSortMode] = useStoredChoice<PkSortMode>('wb2api.pkSort', PK_SORT_OPTIONS.map((o) => o.id), 'end_asc')
+  const now = useNow(60_000)
+  const age = query.dataUpdatedAt ? Math.floor((now - query.dataUpdatedAt) / 60_000) : 0
   return (
     <>
       <Panel title="积分到期分布" desc="按批次到期日聚合，颜色区分账号">
@@ -31,7 +34,7 @@ export function PackagesPage() {
       </Panel>
       <Panel
         title="账号对比"
-        desc={query.data ? list.length + ' 个账号 · 实时查询上游' : '逐账号向上游实时查询'}
+        desc={query.data ? list.length + ' 个账号 · ' + (age > 0 ? age + ' 分钟前的数据，点「刷新」更新' : '实时查询上游') : '逐账号向上游实时查询'}
         actions={
           <>
             <Select aria-label="逐包明细排序" value={sortMode} onChange={(k) => k != null && setSortMode(k as PkSortMode)} className="w-32">
