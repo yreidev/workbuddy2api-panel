@@ -449,6 +449,40 @@ func (h *Handler) modelList() []map[string]any {
 			}
 			out = append(out, entry)
 		}
+		// 跨域负载均衡打开时，再列一份不带前缀的名字放在最前：客户端从列表里选到的
+		// 就是会在两域合池选号的名字；带前缀的条目照旧保留，用来钉死某一域。
+		if h.loadLive().CrossRealm {
+			out = append(bareModelEntries(out), out...)
+		}
+	}
+	return out
+}
+
+// bareModelEntries 由带前缀的条目生成不带前缀的条目（两域并集，按名字去重）。
+// 元数据取先出现的那条（国内版排在前面）；realms 标出这个名字会分到哪些域；
+// is_default 不带过来，免得列表里出现两个默认模型。
+func bareModelEntries(prefixed []map[string]any) []map[string]any {
+	idx := map[string]int{}
+	out := make([]map[string]any, 0, len(prefixed))
+	for _, e := range prefixed {
+		id, _ := e["id"].(string)
+		realm, bare := resolveModel(id)
+		if bare == id {
+			continue
+		}
+		if i, ok := idx[bare]; ok {
+			out[i]["realms"] = append(out[i]["realms"].([]string), realm)
+			continue
+		}
+		c := make(map[string]any, len(e)+1)
+		for k, v := range e {
+			c[k] = v
+		}
+		c["id"] = bare
+		c["realms"] = []string{realm}
+		delete(c, "is_default")
+		idx[bare] = len(out)
+		out = append(out, c)
 	}
 	return out
 }
@@ -558,6 +592,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(peek.Model)
+	// 跨域负载均衡（pool.cross_realm，热生效）：只管不带前缀的模型名，带前缀的照旧钉死该域。
+	// 改写 realm 为目录里有这个模型的域；两域都有时为 ""，下方选号即在两域合池里挑。
+	crossRouted := false
+	if bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && h.loadLive().CrossRealm {
+		realm = crossRealmFor(bareModel, h.cfg.Upstream.RealmHasModel)
+		crossRouted = true
+	}
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
@@ -679,6 +720,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if a, ok := h.cfg.Pool.Status(uid); ok && a.Realm != "" {
 				realm = a.Realm
 			}
+			// 合池选号时同一模型名两域倍率不同，按实际服务的号所在域取
+			rate := modelRate
+			if crossRouted && h.cfg.Upstream != nil {
+				rate = h.cfg.Upstream.ModelRate(realm, bareModel)
+			}
 			h.cfg.Usage.Add(time.Now(), realm, uid, delta.Model, usage.Delta{
 				PromptTokens:     delta.PromptTokens,
 				HasPromptTokens:  delta.HasPromptTokens,
@@ -691,7 +737,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				HasCacheTokens:   st.hasCache,
 				CacheHitTokens:   st.cacheHit,
 				CacheMissTokens:  st.cacheMiss,
-				ModelRate:        modelRate,
+				ModelRate:        rate,
 				LatencyMs:        delta.LatencyMs,
 				HasLatency:       delta.HasLatencyMs,
 				TokensPerSecond:  delta.TokensPerSecond,
@@ -782,6 +828,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.uid = acct.UID
 		// 同步昵称：请求流水行只写 uid8 时无法直观看是哪一号，昵称随本次选号带入日志行。
 		st.nick = acct.Nickname
+		if crossRouted {
+			// 跨域选号：日志与请求记录写实际服务的域，看得出这次落在国内版还是国际版
+			st.model = acct.Realm() + ":" + bareModel
+		}
 		tried[acct.UID] = true
 
 		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。

@@ -385,3 +385,46 @@ func TestCreditFloorStickyBlockedByCatalogRate(t *testing.T) {
 		t.Fatal("回血越过 floor 后粘性号应恢复可选，got nil")
 	}
 }
+
+// TestCreditFloorCrossRealmUsesAccountRealmRate 跨域合池选号（realm 为空）时，保底按账号自己所在域的
+// 目录倍率判收费：同名模型国内版收费、国际版免费，两号都触底 → 只能选国际版号；反过来只能选国内版号。
+// 随机源恒取 0（必选积分最高者），并让「本该被拦的号」积分更高：倍率查错域时会选到它，测试即失败。
+func TestCreditFloorCrossRealmUsesAccountRealmRate(t *testing.T) {
+	withNoPickGap(t)
+	cases := []struct {
+		name     string
+		cnRate   string
+		glRate   string
+		cnCredit int64
+		glCredit int64
+		want     string
+	}{
+		{"国内版收费、国际版免费", "1.00", "0.00", 50, 30, "g"},
+		{"国内版免费、国际版收费", "0.00", "1.00", 30, 50, "c"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := New("")
+			p.SetCostExploreInterval(0)
+			p.SetRandomSource(func(n int64) int64 { return 0 })
+			p.SetCreditFloor(100)
+			p.SetModelRateOf(rates(map[string]map[string]string{
+				"cn":     {"m": tc.cnRate},
+				"global": {"m": tc.glRate},
+			}))
+			c := &auth.Auth{UID: "c"}
+			auth.BackfillRealmFor(c, "cn")
+			g := &auth.Auth{UID: "g"}
+			auth.BackfillRealmFor(g, "global")
+			p.Add(c)
+			p.Add(g)
+			p.SetCredits("c", tc.cnCredit, 0)
+			p.SetCredits("g", tc.glCredit, 0)
+
+			a := p.PickExcludingForRealm(nil, "m", "")
+			if a == nil || a.UID != tc.want {
+				t.Fatalf("got %v want %s", a, tc.want)
+			}
+		})
+	}
+}

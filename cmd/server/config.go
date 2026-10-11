@@ -205,6 +205,11 @@ type Config struct {
 		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
 		// 默认 0 = 关闭；负值钳 0。
 		CreditFloor int64 `json:"credit_floor"`
+		// CrossRealm 跨域负载均衡，默认 false（= 现状：不带前缀的模型名只走国内版）。
+		// 打开后，不带 cn: / global: 前缀的模型请求在「模型目录里有这个模型」的各域账号
+		// 合成的一个池里选号，规则不变（实测免费优先，再按积分 / 闲置等权重加权随机）；
+		// 带前缀的照旧只走该域。/v1/models 同时列出不带前缀的模型名。热生效。
+		CrossRealm bool `json:"cross_realm"`
 	} `json:"pool"`
 
 	SessionSticky struct {

@@ -150,6 +150,9 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 		merged = append(merged, id)
 	}
 
+	// 名单是多路探测的并集（比带倍率的 infos 全），跨域选号按它判断 global 有没有这个模型。
+	c.storeRealmModels("global", merged)
+
 	c.globalModels.Lock()
 	c.globalModels.names = merged
 	c.globalModels.infos = infos

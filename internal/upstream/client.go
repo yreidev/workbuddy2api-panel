@@ -629,6 +629,9 @@ type Client struct {
 	// modelRates 缓存各模型当前生效积分倍率（规范化数值，如 "0.5"）。
 	// 与 efforts 共用 realm 分层和锁；每次成功刷新模型目录时整体替换对应域。
 	modelRates map[string]map[string]string
+	// realmModels 各域模型目录里出现过的模型名（跨域选号判断「这个域有没有这个模型」）。
+	// 与 modelRates 同口径整体替换，但不要求有可解析倍率；某域从未成功拉到目录时没有该键。
+	realmModels map[string]map[string]bool
 
 	// globalModels 缓存 global 模型名目录探测结果（成功 ∩ 静态 overlay；
 	// 1h TTL + 5min 负缓存），见 global_models.go。按实例持有，测试新建 Client 即隔离。
@@ -1267,6 +1270,11 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("models api returned empty list")
 	}
 	c.storeModelRates(a.Realm(), out)
+	ids := make([]string, 0, len(out))
+	for _, mi := range out {
+		ids = append(ids, mi.ID)
+	}
+	c.storeRealmModels(a.Realm(), ids)
 	// 刷新 effort 能力缓存（供请求体降级；无 supportedEfforts 的模型不入桶）。
 	// 空桶时跳过写：避免「某探测无档位数据」清掉既有桶。
 	cache := make(map[string][]string, len(out))
@@ -1622,6 +1630,34 @@ func (c *Client) storeModelRates(realm string, infos []ModelInfo) {
 		c.modelRates = make(map[string]map[string]string)
 	}
 	c.modelRates[realmKey(realm)] = rates
+}
+
+// storeRealmModels 按 realm 整体替换该域的模型名集合（空名跳过）。只在目录成功刷新时调用，
+// 拉取失败不清空：沿用上次成功的目录，免得一次偶发失败把跨域选号退回单域。
+func (c *Client) storeRealmModels(realm string, ids []string) {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			set[id] = true
+		}
+	}
+	c.effortsMu.Lock()
+	defer c.effortsMu.Unlock()
+	if c.realmModels == nil {
+		c.realmModels = make(map[string]map[string]bool)
+	}
+	c.realmModels[realmKey(realm)] = set
+}
+
+// RealmHasModel 报告该域最近一次成功拉到的模型目录里有没有这个模型。
+// 目录从未拉到（启动预热失败、该域没有账号）时返回 false——宁可不往那个域分流。
+func (c *Client) RealmHasModel(realm, model string) bool {
+	if c == nil || model == "" {
+		return false
+	}
+	c.effortsMu.RLock()
+	defer c.effortsMu.RUnlock()
+	return c.realmModels[realmKey(realm)][model]
 }
 
 // ModelRate 返回最近成功刷新的指定域模型生效倍率；未知返回空串。

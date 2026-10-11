@@ -262,8 +262,12 @@ func (p *Pool) floorBlockedForModel(e *entry, model string, now time.Time) bool 
 }
 
 // floorBlockedForRealmModel 同上，但带 realm 上下文（倍率按 (realm, 模型) 分桶，
-// 同名模型在 CN / global 两域倍率可不同）。realm 为空时按倍率表的空域键查。
+// 同名模型在 CN / global 两域倍率可不同）。realm 为空（跨域合池选号）时按账号自己的域查：
+// 同一个模型名，国内版号要看国内版的倍率，国际版号看国际版的。
 func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time.Time) bool {
+	if realm == "" {
+		realm = e.a.Realm()
+	}
 	if p.creditFloor <= 0 || model == "" || e.credits >= p.creditFloor {
 		return false
 	}

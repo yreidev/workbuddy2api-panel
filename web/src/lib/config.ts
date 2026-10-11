@@ -113,6 +113,8 @@ export const CONFIG_TABS: ConfigTab[] = [
       {
         title: '选号权重',
         fields: [
+          toggle('cross_realm', ['pool', 'cross_realm'], '跨域负载均衡',
+            '不带 cn: / global: 前缀的模型名在国内版 + 国际版合池选号（只进模型目录里有它的域）；带前缀的照旧钉死一域。需启用国际版'),
           num('idle_weight_per_hour', ['pool', 'idle_weight_per_hour'], '闲置补偿 / 小时', '0.5', { step: 0.1 }),
           num('idle_weight_max', ['pool', 'idle_weight_max'], '闲置补偿上限', '5', { step: 0.1 }),
           duration('cost_explore_interval', ['pool', 'cost_explore_interval'], '成本探索窗口', '30m', '垄断破除：免费层垄断时定期搭车探索未知号；0 关停'),
