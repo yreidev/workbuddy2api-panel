@@ -11,6 +11,8 @@ services:
     #   2) sudo chown -R 10001:10001 ./auths ./data ./config.json
     #   3) user: "0:0" 以 root 运行（省事但容器逃逸面更大，自担）
     user: "${PUID:-10001}:${PGID:-10001}"
+    # 镜像默认读 /app/data/config.json；compose 沿用挂载根目录 config.json 的做法
+    command: ["-config", "/app/config.json"]
     environment:
       - TZ=Asia/Shanghai
     ports:
