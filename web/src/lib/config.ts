@@ -143,7 +143,7 @@ export const CONFIG_TABS: ConfigTab[] = [
       {
         title: '出站请求',
         fields: [
-          { name: 'user_agent', path: ['upstream', 'user_agent'], label: '出站 User-Agent', kind: 'text', placeholder: '留空 = CLI/2.63.2 CodeBuddy/2.63.2', hint: '影响官网积分记录「使用端」显示', restart: true, clearable: true },
+          { name: 'user_agent', path: ['upstream', 'user_agent'], label: '出站 User-Agent', kind: 'text', placeholder: '留空 = WorkBuddy/5.5.4 WorkBuddy/5.5.4 CLI/2.137.1', hint: '影响官网积分记录「使用端」显示', restart: true, clearable: true },
           {
             name: 'prompt_mode', path: ['prompt', 'mode'], label: '系统提示词模式', kind: 'select', restart: true,
             options: [
