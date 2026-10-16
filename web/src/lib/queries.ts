@@ -30,6 +30,7 @@ export const qk = {
   tasks: (uid: string) => ['tasks', uid] as const,
   queue: ['tasks-queue'] as const,
   vouchers: ['vouchers'] as const,
+  compensation: ['compensation'] as const,
 }
 
 /** 总览（账号池）：账号池页 5 秒一刷，其余页面只给侧栏状态用，30 秒一刷 */

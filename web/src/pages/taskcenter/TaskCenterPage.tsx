@@ -13,6 +13,7 @@ import { BusyButton, Empty } from '../../components/Feedback'
 import { Panel } from '../../components/Panel'
 import { useConfirm } from '../../components/useConfirm'
 import { VouchersModal } from './VouchersModal'
+import { CompensationPanel } from './CompensationPanel'
 
 interface Row { kind: string; code: string; prog: string; status: string; message?: string }
 interface Group { uid: string; nick: string; rows: Row[] }
@@ -112,6 +113,7 @@ export function TaskCenterPage() {
 
   return (
     <>
+      <CompensationPanel />
       <Panel
         title={<>成长任务队列{total > 0 && <span className="ml-2 text-sm font-normal text-muted">{total} 项</span>}</>}
         actions={

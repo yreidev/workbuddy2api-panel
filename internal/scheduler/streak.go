@@ -44,8 +44,18 @@ func (s *Scheduler) streakBonusAccount(a *auth.Auth) {
 	if credit, err := s.cfg.Upstream.ClaimGift(a); err == nil {
 		log.Printf("streak-bonus %s: 🎊 新手礼包 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
 	}
-	if credit, err := s.cfg.Upstream.ClaimCompensation(a); err == nil {
-		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
+	if result, err := s.cfg.Upstream.ClaimAvailableCompensation(a); err != nil {
+		log.Printf("streak-bonus %s: 补偿检查/领取失败: %v", logfmt.Label(a.UID, a.Nickname), err)
+	} else if result.NewlyClaimed {
+		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc", logfmt.Label(a.UID, a.Nickname), result.Credit)
+		// 签到的余额查询在连登管家之前；补偿到账后再读一次，立即更新余额与解冻状态。
+		remain, total, expiring, earliestAt, earliestRemaining, balanceErr := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, s.ExpiringSoonWindow())
+		if balanceErr != nil {
+			log.Printf("streak-bonus %s: 补偿已领取，余额刷新失败: %v", logfmt.Label(a.UID, a.Nickname), balanceErr)
+		} else {
+			s.cfg.Pool.ReenableIfCredits(a.UID, remain, total)
+			s.cfg.Pool.SetCreditsDetailed(a.UID, remain, total, expiring, earliestAt, earliestRemaining)
+		}
 	}
 
 	full, err := s.cfg.Upstream.GrowthStreakFull(a)

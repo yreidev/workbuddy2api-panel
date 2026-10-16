@@ -86,6 +86,7 @@ curl -s http://127.0.0.1:7863/healthz
 | `billing/meter/daily-checkin` | POST | 每日签到 |
 | `billing/meter/get-user-resource` | POST | 余额查询 |
 | `billing/meter/get-enterprise-user-usage` | POST | 企业版额度查询 |
+| `/billing/meter/compensation-status` · `/billing/meter/claim-compensation` | POST | 国内版个人账号补偿状态与领取（完整路径，不加 `/v2`） |
 | `report` | POST | 行为与活跃上报 |
 | `activity/growth/buddy/*` | GET / POST | 猫猫旅行：协议、领养、状态、派出、领奖 |
 | `activity/growth/streak` · `redeem` | GET / POST | 连登天数、档位兑换 |

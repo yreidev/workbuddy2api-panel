@@ -425,3 +425,24 @@ export interface RequestMetrics {
     last_error?: string
   }
 }
+
+export interface CompensationStatus {
+  active: boolean
+  claimed: boolean
+  credit_num: number
+  end_time?: string
+}
+
+export interface CompensationAccount {
+  uid: string
+  nickname: string
+  status?: CompensationStatus
+  newly_claimed: boolean
+  credit: number
+  error?: string
+  balance_error?: string
+}
+
+export interface CompensationResp {
+  accounts: CompensationAccount[]
+}

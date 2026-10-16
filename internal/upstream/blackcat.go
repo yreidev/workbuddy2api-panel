@@ -81,19 +81,6 @@ func (c *Client) ClaimGift(a *auth.Auth) (int64, error) {
 	return resp.Credit, nil
 }
 
-// ClaimCompensation 领取活动补偿（有则领，无则业务错误）。
-func (c *Client) ClaimCompensation(a *auth.Auth) (int64, error) {
-	data, err := c.billingJSON(a, http.MethodPost, "/billing/meter/claim-compensation", map[string]any{})
-	if err != nil {
-		return 0, err
-	}
-	var resp struct {
-		Credit int64 `json:"credit"`
-	}
-	_ = json.Unmarshal(data, &resp)
-	return resp.Credit, nil
-}
-
 // HeatmapYesterdayMissed 检查昨日是否漏签（heatmap cell score==0）。
 func (c *Client) HeatmapYesterdayMissed(a *auth.Auth) (bool, error) {
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
