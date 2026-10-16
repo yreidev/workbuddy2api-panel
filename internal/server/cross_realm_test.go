@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -271,11 +272,21 @@ func TestModelsCrossRealmBareEntries(t *testing.T) {
 		return ids
 	}
 	prefixed := []string{"cn:m-both", "cn:m-cn", "global:m-both", "global:m-global"}
-	if got := list(false); !reflect.DeepEqual(got, prefixed) {
+	got := list(false)
+	// 上游目录的域内顺序不固定；这里只约束条目集合，以及裸名整体位于前缀条目前。
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, prefixed) {
 		t.Errorf("关闭时 ids=%v want %v", got, prefixed)
 	}
-	want := append([]string{"m-both", "m-cn", "m-global"}, prefixed...)
-	if got := list(true); !reflect.DeepEqual(got, want) {
+	bare := []string{"m-both", "m-cn", "m-global"}
+	want := append(bare, prefixed...)
+	got = list(true)
+	if len(got) != len(want) {
+		t.Fatalf("打开时 ids=%v want %v", got, want)
+	}
+	sort.Strings(got[:len(bare)])
+	sort.Strings(got[len(bare):])
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("打开时 ids=%v want %v", got, want)
 	}
 }
