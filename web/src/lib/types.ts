@@ -448,3 +448,55 @@ export interface CompensationAccount {
 export interface CompensationResp {
   accounts: CompensationAccount[]
 }
+
+/** 更新日志里的一个版本（网关解析 docs/CHANGELOG.md 得到） */
+export interface ReleaseGroup {
+  title: string
+  items: string[] | null
+}
+
+export interface Release {
+  version: string
+  date?: string
+  summary?: string
+  groups: ReleaseGroup[] | null
+}
+
+/** GET /panel/api/version：本机版本、更新检查结果与「本次更新」 */
+export interface VersionResp {
+  version: string
+  update_check: boolean
+  latest?: string
+  update_available: boolean
+  updates: Release[] | null
+  release_url?: string
+  checked_at?: string
+  check_error?: string
+  whats_new: Release[] | null
+  /** 一键更新的状态；网关没有接入时没有这一项 */
+  self_update?: SelfUpdateStatus
+}
+
+/** 一键更新进行到哪一步 */
+export type SelfUpdatePhase = 'idle' | 'downloading' | 'verifying' | 'restarting' | 'failed'
+
+export interface SelfUpdateStatus {
+  supported: boolean
+  /** 不支持一键更新的原因 */
+  reason?: string
+  /** 程序自带的版本 */
+  base: string
+  /** 正在跑面板装到数据目录的版本 */
+  override: boolean
+  phase: SelfUpdatePhase
+  /** 正在更新到 / 退回到的版本 */
+  target?: string
+  done?: number
+  total?: number
+  /** 上一次更新失败的原因 */
+  error?: string
+  /** 面板装的版本没能稳定运行、已自动退回的说明 */
+  rolled_back?: string
+  /** 优雅停机最长等待（秒） */
+  grace_sec: number
+}

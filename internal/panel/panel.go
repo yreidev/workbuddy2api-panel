@@ -24,11 +24,13 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/changelog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/selfupdate"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
@@ -41,7 +43,14 @@ type Config struct {
 	AuthDir   string               // OAuth 登录完成后凭证落盘目录
 	APIKey    string               // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
 	RedisMode string               // "upstash" / "noop"，仅观测透出
-	Version   string               // 面板版本号（展示用）
+	Version   string               // 网关版本号（语义化版本，不带 v）
+
+	// Changelog 内嵌的更新日志原文（docs/CHANGELOG.md），「本次更新」弹窗从这里取条目。
+	Changelog string
+	// UpdateURL 更新检查读取的远端更新日志地址；空 = GitHub 上 main 分支的 docs/CHANGELOG.md（测试可替换）。
+	UpdateURL string
+	// Updater 一键更新（下载新版到数据目录并原地重启）；nil = 面板不提供一键更新。
+	Updater *selfupdate.Updater
 
 	// Live 运行期可变配置（在线改配置立即生效）。
 	Live *livecfg.Holder
@@ -97,6 +106,10 @@ type Panel struct {
 	// gzipped 是按文件名缓存的压缩结果（index.go）。
 	assets  fs.FS
 	gzipped sync.Map
+
+	// releases 内嵌更新日志的解析结果；upd 后台更新检查的最近结果（update.go）。
+	releases []changelog.Release
+	upd      updateState
 }
 
 // tryLockAccount 尝试锁定账号的任务执行；已在执行返回 false。
@@ -140,12 +153,13 @@ func New(cfg Config) *Panel {
 		cfg.RedisMode = "noop"
 	}
 	p := &Panel{
-		cfg:     cfg,
-		mux:     http.NewServeMux(),
-		started: time.Now(),
-		logs:    NewRing(500),
-		logins:  map[string]loginSession{},
-		assets:  embeddedDist(),
+		cfg:      cfg,
+		mux:      http.NewServeMux(),
+		started:  time.Now(),
+		logs:     NewRing(500),
+		logins:   map[string]loginSession{},
+		assets:   embeddedDist(),
+		releases: changelog.Parse(cfg.Changelog),
 	}
 	p.routes()
 	return p
@@ -159,6 +173,10 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/theme-init.js", p.themeInit)
 	p.mux.HandleFunc("GET /panel/assets/{file}", p.asset)
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
+	p.mux.HandleFunc("GET /panel/api/version", p.withAuth(p.version))
+	p.mux.HandleFunc("POST /panel/api/version/check", p.withAuth(p.versionCheck))
+	p.mux.HandleFunc("POST /panel/api/update", p.withAuth(p.selfUpdate))
+	p.mux.HandleFunc("POST /panel/api/update/rollback", p.withAuth(p.selfUpdateRollback))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))
 	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuth(p.requestMetrics))
 	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuth(p.requestLogs))

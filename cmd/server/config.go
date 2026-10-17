@@ -25,6 +25,9 @@ type Config struct {
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
 		PackageDetailLimit int `json:"package_detail_limit"`
+		// UpdateCheck 每 6 小时读取一次 GitHub 上的更新日志，有新版本时面板提醒；缺省 true。
+		// 热生效（经 livecfg 快照）。
+		UpdateCheck bool `json:"update_check"`
 	} `json:"panel"`
 
 	Logging struct {
@@ -247,6 +250,7 @@ func Default() *Config {
 	c.Cooldown.SoftRateMax = "2h"
 	c.Server.ReadTimeout = "300s"
 	c.Panel.PackageDetailLimit = 5
+	c.Panel.UpdateCheck = true
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100

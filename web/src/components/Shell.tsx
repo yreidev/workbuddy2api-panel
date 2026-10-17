@@ -17,6 +17,7 @@ import { qk, useOverview } from '../lib/queries'
 import { AddAccountModal } from './AddAccountModal'
 import { BusyButton } from './Feedback'
 import { KeyGate } from './KeyGate'
+import { UpdateBadge, UpdateNotice, type ManualPanel } from './UpdateNotice'
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -38,6 +39,7 @@ export function Shell() {
   const isDesktop = useMediaQuery('(min-width: 1024px)')
   const [drawer, setDrawer] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [manualPanel, setManualPanel] = useState<ManualPanel>(null)
   const overview = useOverview()
   const matches = useMatches()
   const title = matches.map((m) => m.staticData.title).filter(Boolean).pop() ?? ''
@@ -54,12 +56,12 @@ export function Shell() {
     >
       <div className="flex min-h-dvh">
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-separator lg:flex">
-          <Sidebar />
+          <Sidebar onShow={setManualPanel} />
         </aside>
         <Drawer.Backdrop isOpen={drawer && !isDesktop} onOpenChange={setDrawer}>
           <Drawer.Content placement="left">
             <Drawer.Dialog aria-label="导航菜单" className="w-64 p-0">
-              <Sidebar onNavigate={() => setDrawer(false)} />
+              <Sidebar onNavigate={() => setDrawer(false)} onShow={(m) => { setDrawer(false); setManualPanel(m) }} />
             </Drawer.Dialog>
           </Drawer.Content>
         </Drawer.Backdrop>
@@ -86,12 +88,13 @@ export function Shell() {
       </div>
       <AddAccountModal open={adding} onClose={() => setAdding(false)} />
       <KeyGate />
+      <UpdateNotice manual={manualPanel} onManualChange={setManualPanel} />
       <Toast.Provider placement={isDesktop ? 'bottom end' : 'top'} />
     </RouterProvider>
   )
 }
 
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+function Sidebar({ onNavigate, onShow }: { onNavigate?: () => void; onShow: (m: ManualPanel) => void }) {
   const { pathname } = useLocation()
   const { data } = useOverview()
   const state = !data ? { text: '连接中', dot: 'bg-default' }
@@ -103,7 +106,12 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     <>
       <div className="px-5 pb-3 pt-5">
         <div className="font-semibold">WorkBuddy2API</div>
-        <div className="mt-0.5 text-xs text-muted">{data ? 'v' + data.version : '控制台'}</div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+          {data
+            ? <button type="button" title="版本信息" onClick={() => onShow('about')} className="hover:text-foreground">v{data.version}</button>
+            : '控制台'}
+          <UpdateBadge onPress={() => onShow('update')} />
+        </div>
       </div>
       <ScrollShadow hideScrollBar className="flex-1 px-3">
         <ListBox aria-label="导航" selectionMode="none" onAction={onNavigate}>

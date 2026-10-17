@@ -10,6 +10,8 @@
 - [视图一览](#视图一览)
 - [时间范围](#时间范围)
 - [调用来源](#调用来源)
+- [更新提醒](#更新提醒)
+- [一键更新](#一键更新)
 - [面板接口](#面板接口)
 - [安全](#安全)
 
@@ -50,18 +52,56 @@
 
 IP 属于个人信息，所以由 `logging.request_client_info` 控制，默认开启、热生效，可在「配置 → 上游与高级 → 请求日志」里关掉。关闭后归档与面板都不再出现来源字段。
 
+## 更新提醒
+
+- **有新版本**：网关每 6 小时从 GitHub 读取一次本仓库的[更新日志](CHANGELOG.md)，发现比自己新的版本时，面板弹窗列出新版本的变更、升级方法和 Release 链接，能[一键更新](#一键更新)时还有「更新到 vX」按钮。每个新版本只自动弹一次；没升级前，侧栏版本号旁一直显示「有新版本」，点开可以再看；出了更新的版本会再弹。跑正式版时不提醒预发布版本。
+- **本次更新**：升级后第一次打开面板，弹窗列出这次升级包含的变更，内容取自二进制内嵌的更新日志，不联网。某个浏览器里没有看过的记录时（新装，或从还没有更新提醒的 1.13.0-panel 及更早版本升上来），也会弹一次，只列当前这一版。
+- 弹过哪些提醒记在浏览器的 localStorage 里，换浏览器或清除站点数据后会再弹一次。
+- 检查只是一个 GET 请求，不带任何本机信息。读不到（例如服务器访问不了 GitHub）就在运行日志里记一行，6 小时后再试，不影响其他功能。
+- 在「配置 → 服务」关掉「检查更新」（`panel.update_check`）即停止联网检查，立即生效；「本次更新」不受影响。
+
+版本号规则与发版流程见[发版与版本号](releasing.md)。
+
+## 一键更新
+
+「有新版本」弹窗里点「更新到 vX」并确认后：
+
+1. 网关从本仓库的 GitHub Release 下载 `checksums.txt` 和当前平台的安装包，核对 sha256；
+2. 解出 `wb2api` 试运行一次（`wb2api -version`），确认能在这台机器上执行、版本也对；
+3. 放进数据目录（`state_file` 所在的目录，Docker 里是 `/app/data`）的 `bin/wb2api`，旁边的 `bin/current.json` 记下版本和校验值；
+4. 优雅停机：和收到停止信号一样，在途请求最多等 `WB2A_SHUTDOWN_TIMEOUT`（默认 5 秒）。然后原地重启到新版，进程号不变，不依赖 Docker 的重启策略或 systemd。
+
+面板显示进度，新版上线后自动刷新并弹出「本次更新」。前两步失败不会影响正在运行的网关，弹窗里会给出原因。
+
+程序自带的那份（镜像里的 `/app/wb2api`，或你自己放的二进制）始终不变：
+
+- 每次启动先由自带程序检查 `bin/` 里有没有比自己新的版本，有就切过去。新版放在数据卷里，所以 `docker compose up -d` 重建容器也不会退回旧版。
+- 以后拉了更新的镜像，自带版本不比 `bin/` 里的旧时，以自带版本为准，并删掉 `bin/` 里那份。
+- 新版启动后要稳定运行 30 秒才算成功；没满 30 秒但被正常停掉（`docker restart`、`docker compose up -d` 重建）也算。连续 3 次都没做到（启动就崩、端口被占、被 `kill -9`……）时，自带程序不再切过去，「版本信息」里会提示，可以删掉那份。这一条要靠重启策略把崩溃的进程拉起来，裸跑二进制时就是下次手动启动时生效。
+- 点侧栏的版本号打开「版本信息」：可以看到当前运行的是面板安装的版本还是程序自带的版本，能立即检查更新，也能「退回 vX」到程序自带的版本（删掉 `bin/` 里那份后重启）。
+
+限制：
+
+- 只支持 Linux 与 macOS（amd64 / arm64）。Windows 不能原地重启，弹窗里只给手动升级方法。
+- 只更新网关本身。镜像里的 `login`、`signin_bin`、`credit` 等命令行工具和脚本仍是镜像自带的版本，要更新它们得拉新镜像。
+- 数据目录必须可写，而且不能挂载成 `noexec`（试运行时会报出来）。
+- 下载走 `github.com`，认 `HTTPS_PROXY` 环境变量。服务器访问不了 GitHub 时一键更新会失败，按弹窗里的方法手动升级即可。
+- 没有单独的开关，跟着「检查更新」（`panel.update_check`）走：关掉检查就不会出现「更新到 vX」按钮，但「版本信息」里仍然可以退回。
+- 多实例或 Kubernetes 部署时，一键更新只更新当前这一个实例，建议改镜像标签统一升级。
+
 ## 面板接口
 
 面板的所有操作都是 `/panel/api/*` 接口，与页面使用同一个 Bearer 鉴权，可以直接写脚本调用：
 
 | 分组 | 端点 |
 |---|---|
-| 只读 | `GET overview` · `usage`（`hours` 或 `from`/`to`）· `packages` · `models` · `model_probes` · `logs` · `request_metrics` · `request_logs`（`limit` / `outcome` / `account` / `model` / `client_ip` / `user_agent` / `from` / `to`）· `config` · `tasks/queue` · `school/vouchers` |
+| 只读 | `GET overview` · `version`（`since` = 上次看过的版本，返回之后到当前版本的更新日志，`none` 表示没看过、只返回当前这一版；更新检查开着时另有远端最新版本和比本机新的各版本条目；`self_update` 是一键更新的状态与进度）· `usage`（`hours` 或 `from`/`to`）· `packages` · `models` · `model_probes` · `logs` · `request_metrics` · `request_logs`（`limit` / `outcome` / `account` / `model` / `client_ip` / `user_agent` / `from` / `to`）· `config` · `tasks/queue` · `school/vouchers` |
 | 账号运维 | `POST accounts/{uid}/checkin` · `balance` · `revive` · `pause` · `resume` · `disable` · `remove`<br>`POST checkin_all` · `travel_all` · `activity_all` · `keepalive_all` · `balance_all` |
 | 任务 | `GET accounts/{uid}/tasks`<br>`POST accounts/{uid}/tasks/accept` · `accept_all` · `claim` · `auto` · `auto_all`<br>`POST tasks/scan_all` · `tasks/run_queue` |
 | 积分补偿 | `GET compensation`（逐账号查询官方状态，含已禁用账号，带 `disabled` 标记）<br>`POST accounts/{uid}/compensation/claim` · `POST compensation/claim_all`（先查状态再领取，已禁用账号只查不领；批量结果逐账号返回） |
 | 添加账号 | `POST login/start` · `GET login/poll` · `GET login/regions` · `POST import/cockpit` |
 | 写入 | `POST config`（校验 → 落盘 → 热应用，返回需重启的字段）· `POST usage/save`（立即把内存里的用量落盘） |
+| 更新 | `POST version/check`（立即检查更新，返回同 `version`；30 秒内重复调用直接返回上次结果）<br>`POST update`（`{"version":"x.y.z"}`，必须是检查到的、比本机新的版本；在后台下载校验后重启，进度看 `version` 返回的 `self_update`）<br>`POST update/rollback`（删掉面板安装的版本；正在运行它时重启回程序自带的版本） |
 
 ## 安全
 

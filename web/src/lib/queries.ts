@@ -1,11 +1,12 @@
 // 所有读接口的查询（TanStack Query）。打上游的接口（模型、积分包、任务、券码、补偿）不随窗口聚焦自动重查，
-// 只读网关内存的接口（总览、日志、队列）按页面需要轮询；标签页切到后台时轮询自动暂停。
+// 只读网关内存的接口（总览、日志、队列、版本）按页面需要轮询；标签页切到后台时轮询自动暂停。
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ApiError, acct, api, errorMessage } from './api'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
+import { SEEN_VERSION_KEY, readStored, updateBusy } from './update'
 import type {
   CompensationResp, ConfigResp, LogEntry, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent, RequestMetrics, Task, UsageResp,
-  VoucherAccount,
+  VersionResp, VoucherAccount,
 } from './types'
 
 export const queryClient = new QueryClient({
@@ -31,6 +32,7 @@ export const qk = {
   queue: ['tasks-queue'] as const,
   vouchers: ['vouchers'] as const,
   compensation: ['compensation'] as const,
+  version: ['version'] as const,
 }
 
 /** 总览（账号池）：账号池页 5 秒一刷，其余页面只给侧栏状态用，30 秒一刷 */
@@ -169,5 +171,22 @@ export function useCompensation(enabled: boolean) {
     queryKey: qk.compensation,
     queryFn: () => api<CompensationResp>('compensation'),
     enabled,
+  })
+}
+
+/**
+ * 版本与更新信息：30 分钟取一次网关的检查结果（网关自己 6 小时才读一次 GitHub）。
+ * 带上本浏览器上次看过的版本（没有记录时带 none），网关据此返回升级后的「本次更新」；在发请求时才读，
+ * 弹窗关掉后下一次就不再带旧版本。
+ */
+export function useVersion() {
+  return useQuery({
+    queryKey: qk.version,
+    queryFn: () => {
+      const since = readStored(SEEN_VERSION_KEY) || 'none'
+      return api<VersionResp>('version?since=' + encodeURIComponent(since))
+    },
+    // 一键更新进行中（含重启时连不上）每 1.5 秒看一次进度，平时 30 分钟一次
+    refetchInterval: (q) => (updateBusy(q.state.data?.self_update) ? 1500 : 30 * 60_000),
   })
 }

@@ -52,6 +52,7 @@ export const CONFIG_TABS: ConfigTab[] = [
         { name: 'listen', path: ['listen'], label: '监听地址', kind: 'text', placeholder: ':7863', restart: true },
         { name: 'api_key', path: ['api_key'], label: 'API 密钥', kind: 'password', placeholder: '留空 = 不鉴权', hint: '立即生效（含面板自身）' },
         num('package_detail_limit', ['panel', 'package_detail_limit'], '单账号明细默认展示条数', '5', { min: 1, hint: '积分构成页按最早到期展示，其余未用完包聚合' }),
+        toggle('update_check', ['panel', 'update_check'], '检查更新', '每 6 小时从 GitHub 读取一次更新日志，有新版本时在面板提醒；关闭后不再联网检查'),
       ],
     }],
   },

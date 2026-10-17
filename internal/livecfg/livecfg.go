@@ -20,6 +20,7 @@ type Snapshot struct {
 	SanitizeFingerprints bool          // 出站请求体指纹脱敏
 	RecordClientInfo     bool          // 请求日志是否记录调用来源（客户端 IP / UA）
 	CrossRealm           bool          // 跨域负载均衡：不带前缀的模型名在国内版 + 国际版合池选号
+	UpdateCheck          bool          // 面板定时检查新版本（读 GitHub 上的更新日志）
 }
 
 // Holder 原子持有当前快照。

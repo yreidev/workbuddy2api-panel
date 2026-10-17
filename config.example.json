@@ -7,7 +7,8 @@
     "read_timeout": "300s"
   },
   "panel": {
-    "package_detail_limit": 5
+    "package_detail_limit": 5,
+    "update_check": true
   },
   "logging": {
     "request_archive_enabled": true,

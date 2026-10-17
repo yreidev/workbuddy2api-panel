@@ -2,21 +2,22 @@ name: go-binaries
 
 # 可运行二进制构建/发布：
 #   - 先构建面板前端（web/ → internal/panel/dist，含类型检查 / ESLint / 单元测试），产物供后续任务 go:embed
-#   - PR             → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
-#   - push main      → 同上 + 覆盖固定的「最新构建」Release（tag latest 跟随 main 移动，不必手动打 tag）
-#   - push v* tag    → 同上 + 打包上传到 GitHub Release（zip/tar.gz + checksums）
-# 固化的发布纪律（曾两次人祸，见仓库 HANDOFF）：-s -w 剥离、二进制版本串 == 源码
-# appVersion、tag 版本 == 源码版本（-ci 后缀的测试 tag 豁免，用于演练发布线）。
+#   - PR        → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
+#   - push main → 同上 + 覆盖固定的「最新构建」Release（tag latest 跟随 main 移动）；
+#                 这次推送升了版本号（appVersion 对应的 vX.Y.Z 标签还不存在）时，再打标签、建正式 Release
+# 版本号规则见 docs/releasing.md：有使用者看得到的改动就在推送前升版本号、写好 docs/CHANGELOG.md，
+# 不手动打 tag。发布纪律：-s -w 剥离、二进制必须带上这一版的更新日志与面板前端。
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     paths:
       - "go.mod"
       - "go.sum"
+      - "*.go"
       - "cmd/**"
       - "internal/**"
+      - "docs/CHANGELOG.md"
       - "config.example.json"
       - "web/**"
       - ".github/workflows/go-binaries.yml"
@@ -99,12 +100,13 @@ jobs:
           CGO_ENABLED: 0
         run: go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
 
-      # 版本串断言：二进制必须含源码 appVersion（防交叉编译矩阵里编错树/漏 ldflags）
-      - name: 断言二进制版本串
+      # 版本断言：二进制内嵌的更新日志必须有这一版（防交叉编译矩阵里编错树）。版本号本身太短，
+      # 直接 grep 容易误中；更新日志最新一版 == appVersion 由 go test 保证。
+      - name: 断言二进制版本
         run: |
           BIN="wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}"
-          if ! grep -qa "${{ steps.ver.outputs.v }}" "$BIN"; then
-            echo "::error::binary missing version string ${{ steps.ver.outputs.v }}"
+          if ! grep -qaF "## [${{ steps.ver.outputs.v }}]" "$BIN"; then
+            echo "::error::binary does not embed the changelog entry for ${{ steps.ver.outputs.v }}"
             exit 1
           fi
           echo "version assert OK: ${{ steps.ver.outputs.v }}"
@@ -122,7 +124,6 @@ jobs:
       - name: 打包（windows=zip 三件套，其余=tar.gz）
         run: |
           V="${{ steps.ver.outputs.v }}"
-          V="${V%-panel}"   # 文件名不带 -panel 后缀（wb2api-panel-v1.2.3-... 既有惯例）
           case "${{ matrix.goos }}" in
             windows)
               NAME="wb2api-panel-v${V}-windows-amd64.zip"
@@ -143,6 +144,7 @@ jobs:
 
   # 仅 push main：把五平台包覆盖到固定的「最新构建」Release，与 Docker 的 latest 镜像同步。
   # 文件名去掉版本号（wb2api-panel-linux-amd64.tar.gz），releases/download/latest/<文件名> 链接长期不变。
+  # 「Latest」标记留给正式版本的 Release，这里不抢。
   rolling:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -188,7 +190,7 @@ jobs:
           BUILT=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
           TITLE="最新构建 v${V}（${SHORT}）"
           NOTES=$(printf '%s\n' \
-            "随 main 分支自动更新的构建，与 Docker 镜像 \`latest\` 同步，下一次推送会覆盖这里的文件。" \
+            "随 main 分支自动更新的构建，与 Docker 镜像 \`latest\` 同步，下一次推送会覆盖这里的文件。正式版本见带版本号的 Release。" \
             "" \
             "- 版本：\`${V}\`" \
             "- 提交：https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
@@ -197,53 +199,88 @@ jobs:
           git tag -f latest "$GITHUB_SHA"
           git push -f origin refs/tags/latest
           if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "$TITLE" --notes "$NOTES" --prerelease=false --latest
+            gh release edit latest --title "$TITLE" --notes "$NOTES" --prerelease=false --latest=false
             gh release upload latest dist/* --clobber
           else
-            gh release create latest dist/* --title "$TITLE" --notes "$NOTES" --latest --verify-tag
+            gh release create latest dist/* --title "$TITLE" --notes "$NOTES" --latest=false --verify-tag
           fi
 
-  # 仅 tag 触发：校验 tag == 源码版本（-ci 演练 tag 豁免）→ 汇总资产 → 建 Release
-  publish:
+  # 仅 push main：appVersion 对应的 vX.Y.Z 标签还不存在（这次推送升了版本号）时，打标签并建正式 Release，
+  # 说明取 docs/CHANGELOG.md 里这一版的条目，附五平台包（文件名带版本号）和 checksums。标签已在更早的提交上
+  # （版本号没变）就跳过。不受 rolling 的「过时跳过」影响：每个版本都要有自己的 Release。
+  # 上一次发版中途失败、标签没打上时，下一次推送会补发（标签落在那次推送的提交上）。
+  release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: version-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 取历史 tag 算 compare 链接
-      - name: tag 与源码版本一致性断言
+          fetch-depth: 0   # 取已有的版本标签，算对比链接
+      - name: 判断是否新版本
+        id: ver
         run: |
-          SRC=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
-          SRC="${SRC%-panel}"   # appVersion 带 -panel 后缀，比对前剥掉
-          TAG="${GITHUB_REF_NAME#v}"
-          if [[ "$GITHUB_REF_NAME" != *-ci ]]; then
-            if [[ "$TAG" != "$SRC" ]]; then
-              echo "::error::tag $GITHUB_REF_NAME 与源码 appVersion=$SRC 不一致（先提交版本号再打 tag）"
-              exit 1
-            fi
+          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          TAGGED=$(git ls-remote origin "refs/tags/v$V" "refs/tags/v$V^{}" | tail -1 | cut -f1)
+          if [[ -n "$TAGGED" && "$TAGGED" != "$GITHUB_SHA" ]]; then
+            echo "v$V 已在 $TAGGED 发布，这次推送没有升版本号，跳过"
+            echo "new=false" >> "$GITHUB_OUTPUT"
           else
-            echo "演练 tag（-ci 后缀）跳过一致性断言：tag=$TAG src=$SRC"
+            echo "new=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/download-artifact@v4
+        if: steps.ver.outputs.new == 'true'
         with:
+          pattern: wb2api-panel-*
           path: dist
           merge-multiple: true
-      - name: checksums
-        run: cd dist && sha256sum *.zip *.tar.gz > checksums.txt && ls -la
-      - name: 上一版 tag（compare 链接用）
-        id: prev
+      - name: 本版说明 + checksums
+        if: steps.ver.outputs.new == 'true'
         run: |
-          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-          echo "prev=${PREV}" >> "$GITHUB_OUTPUT"
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}-panel
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            CI 自动构建发布（五平台二进制 + checksums）。
-
-            完整变更：https://github.com/${{ github.repository }}/compare/${{ steps.prev.outputs.prev }}...${{ github.ref_name }}
-          files: dist/*
+          V="${{ steps.ver.outputs.v }}"
+          # 取「## [V]」到下一个「## 」之间的内容；指向 docs/ 里其他文档的相对链接补成这一版标签下的地址
+          awk -v h="## [$V]" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' docs/CHANGELOG.md \
+            | sed -E "s#\]\(([^):]+\.md[^)]*)\)#](https://github.com/${GITHUB_REPOSITORY}/blob/v${V}/docs/\1)#g" > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::docs/CHANGELOG.md 里没有 $V 这一版的条目"
+            exit 1
+          fi
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [[ "$V" == *-* ]]; then
+            DOCKER="\`${IMAGE}:${V}\`"
+          else
+            DOCKER="\`${IMAGE}:${V}\`（同一镜像还有 \`${V%.*}\`、\`${V%%.*}\` 标签）"
+          fi
+          PREV=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "v$V" | head -1 || true)
+          {
+            echo
+            echo "---"
+            echo
+            echo "- Docker 镜像：${DOCKER}"
+            echo "- 升级方法：见[部署与运维](https://github.com/${GITHUB_REPOSITORY}/blob/v${V}/docs/deployment.md#升级备份与停机)"
+            echo "- 校验：\`sha256sum -c --ignore-missing checksums.txt\`"
+            if [[ -n "$PREV" ]]; then
+              echo "- 完整变更：https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...v${V}"
+            fi
+          } >> notes.md
+          cat notes.md
+          cd dist && sha256sum *.zip *.tar.gz > checksums.txt && ls -la
+      - name: 打标签并建 Release
+        if: steps.ver.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.ver.outputs.v }}"
+          if gh release view "v$V" >/dev/null 2>&1; then
+            gh release upload "v$V" dist/* --clobber
+          elif [[ "$V" == *-* ]]; then
+            gh release create "v$V" dist/* --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md --prerelease --latest=false
+          else
+            gh release create "v$V" dist/* --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md --latest
+          fi

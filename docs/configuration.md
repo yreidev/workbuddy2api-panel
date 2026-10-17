@@ -35,6 +35,7 @@
 | `state_file` | `./data/state.json` | 账号池状态文件；用量统计、请求归档、模型探测结果都放在同一目录 |
 | `server.read_timeout` | `300s` | 读取一个入站请求（含上传请求体）的总时长上限。大上下文请求经反代转发超时会报 400 `read body: i/o timeout`，可调大；`0` = 不限制 |
 | `panel.package_detail_limit` | `5` | 积分构成页单个账号默认展开的最早到期积分包数，其余折叠 |
+| `panel.update_check` | `true` | 每 6 小时从 GitHub 读取一次更新日志，有新版本时面板提醒，并可[一键更新](panel.md#一键更新)；`false` = 不联网检查，也不出现一键更新按钮。见[更新提醒](panel.md#更新提醒) |
 
 ### 日志
 
@@ -165,7 +166,7 @@
 
 ## 热生效与写回规则
 
-- **立即生效**：`api_key`、`cooldown.soft_rate`、`features.*`、`logging.request_client_info`、`pool.*`、`schedule.*`。
+- **立即生效**：`api_key`、`cooldown.soft_rate`、`features.*`、`logging.request_client_info`、`panel.*`、`pool.*`、`schedule.*`。
 - **需要重启**：`listen`、`auth_dir`、`state_file`、`server.read_timeout`、`upstream.*`、`prompt.*`、`upstash.*`、`session_sticky.*`，以及请求归档的开关、保留天数与容量。面板在保存后会提示具体是哪几项。
 - 面板写回配置时做**深合并 + 原子替换**：只更新表单里出现的键，你手写的其他键（包括程序不认识的键）原样保留。
 - 时长字段使用 Go 的写法，如 `600s`、`30m`、`2h`、`168h`。

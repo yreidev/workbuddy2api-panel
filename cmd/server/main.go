@@ -14,9 +14,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	wb2api "github.com/linguo2625469/workbuddy2api-panel"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/panel"
@@ -24,14 +26,17 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/selfupdate"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
 
-// appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.13.0-panel"
+// appVersion 网关版本，按语义化版本独立编号（不带 v）：有使用者看得到的改动就在推送前升版本号，
+// 并在 docs/CHANGELOG.md 顶部写好这一版的条目（测试会核对两者一致）；推送到 main 后 CI 自动打
+// vX.Y.Z 标签、建 Release、给镜像打版本标签。规则见 docs/releasing.md。
+const appVersion = "1.0.0"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -48,8 +53,24 @@ func stateSibling(stateFile, name string) string {
 }
 
 func main() {
+	// 面板一键更新：run 优雅停机返回后原地换成自带程序（它再决定是否切到数据目录里的新版），
+	// 放在 run 之外，让 run 里的 defer（池状态落盘、用量与请求日志收尾）先跑完。
+	if upd, restart := run(); restart {
+		log.Printf("重启中……")
+		if err := upd.Reexec(); err != nil {
+			log.Fatalf("重启失败：%v", err)
+		}
+	}
+}
+
+func run() (upd *selfupdate.Updater, restart bool) {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
+	showVersion := flag.Bool("version", false, "打印版本号后退出（一键更新用它试运行新程序）")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(appVersion)
+		os.Exit(0)
+	}
 
 	cfg, err := Load(*cfgPath)
 	if err != nil {
@@ -71,6 +92,9 @@ func main() {
 			log.Fatalf("load config: %v", err)
 		}
 	}
+
+	// 数据目录里有面板装好的新版就 exec 过去（不返回）：放在读取账号、恢复状态之前，什么都还没动。
+	upd = selfupdate.Launch(filepath.Dir(cfg.StateFile), appVersion)
 
 	auths, err := auth.LoadDir(cfg.AuthDir)
 	if err != nil {
@@ -241,6 +265,7 @@ func main() {
 		SanitizeFingerprints: cfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
 		CrossRealm:           cfg.Pool.CrossRealm,
+		UpdateCheck:          cfg.Panel.UpdateCheck,
 	})
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
@@ -277,6 +302,8 @@ func main() {
 		RedisMode:   redisMode,
 		StickyCount: sessCount,
 		Version:     appVersion,
+		Changelog:   wb2api.Changelog,
+		Updater:     upd,
 		Live:        live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
@@ -316,10 +343,19 @@ func main() {
 		GlobalEnabled: cfg.Global.Enabled,
 	})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// 面板一键更新 / 退回走和停止信号同一条优雅停机路径，停完由 main 原地重启。
+	ctx, requestRestart := context.WithCancel(sigCtx)
+	defer requestRestart()
+	var restarting atomic.Bool
+	upd.Restart = func() {
+		restarting.Store(true)
+		requestRestart()
+	}
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
+	pn.StartUpdateCheck(ctx)
 
 	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
 	// 填充（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，
@@ -348,6 +384,7 @@ func main() {
 	if graceErr != nil {
 		log.Printf("WB2A_SHUTDOWN_TIMEOUT 无效（%v），优雅停机沿用默认 %s", graceErr, grace)
 	}
+	upd.Grace = grace
 	// 优雅停机：收到 SIGTERM/SIGINT 后 /readyz 立刻转 503（编排系统据此摘流量），
 	// 先落盘，再 Shutdown——停止接新连接，等在途请求（含流式对话）结束，最多等 grace。
 	shutdownDone := make(chan struct{})
@@ -356,13 +393,21 @@ func main() {
 		<-ctx.Done()
 		server.SetDraining()
 		p.Flush() // 信号触发：先落盘再做优雅停机
-		log.Printf("收到停止信号：/readyz 已转 503，停止接新连接，最多等 %s 让在途请求结束", grace)
+		if restarting.Load() {
+			log.Printf("准备重启：/readyz 已转 503，停止接新连接，最多等 %s 让在途请求结束", grace)
+		} else {
+			log.Printf("收到停止信号：/readyz 已转 503，停止接新连接，最多等 %s 让在途请求结束", grace)
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("等待 %s 后仍有请求未结束，强制退出：%v", grace, err)
 		}
 	}()
+
+	// 面板装的新版稳定跑满 30 秒（或走完优雅停机）才算成功；没做到就退出的，连续 3 次后自带程序不再切过去。
+	stable := time.AfterFunc(selfupdate.StableAfter, upd.MarkStable)
+	defer stable.Stop()
 
 	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -372,7 +417,13 @@ func main() {
 	// 必须等 Shutdown 返回再退出 main，否则进程立刻结束，等待时间形同虚设，
 	// 后面的 defer（池状态最后一次落盘、用量与请求日志收尾）也会和在途请求抢跑。
 	<-shutdownDone
+	// 能走完优雅停机说明这一版能正常运行：没跑满 30 秒就被正常停掉（如重建容器）不算启动失败
+	upd.MarkStable()
+	if restarting.Load() {
+		return upd, true
+	}
 	log.Printf("bye")
+	return upd, false
 }
 
 // defaultShutdownGrace 优雅停机默认最长等待（未设置 WB2A_SHUTDOWN_TIMEOUT 时，与历史行为一致）。
@@ -448,7 +499,7 @@ func panelListenPath(listen string) string {
 // saveConfig 面板保存配置：校验 → 落盘 → 热应用 → 返回需重启的字段列表。
 //
 // 热生效范围（设计取舍）：
-//   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints / pool.cross_realm → livecfg 快照
+//   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints / pool.cross_realm / panel.update_check → livecfg 快照
 //   - pool.* → pool.SetBreaker/SetMaxInFlight/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor
 //   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetExpiringSoonWindow
 //
@@ -524,6 +575,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		SanitizeFingerprints: newCfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
 		CrossRealm:           newCfg.Pool.CrossRealm,
+		UpdateCheck:          newCfg.Panel.UpdateCheck,
 	})
 	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
 	p.SetBreaker(newCfg.Pool.BreakerThreshold, newCfg.BreakerCooldownDur, newCfg.BreakerCooldownMaxD)

@@ -1,19 +1,21 @@
 name: docker-ghcr
 
 # 镜像（只构建 linux/amd64）自动构建并发布到 ghcr.io：
-#   - push 到 main / 打 v* tag / 手动触发 → 构建并推送
+#   - push 到 main / 手动触发 → 构建并推送
 #   - PR 触碰构建相关文件 → 仅构建验证，不推送
-# tag 说明：main 推 latest + main + sha-xxxxxx；v1.2.3 推 1.2.3 / 1.2 / 1
+# 镜像标签：每次推送都有 latest + main + sha-xxxxxxx；这次推送升了版本号（见 docs/releasing.md）时
+# 再加 1.2.3 / 1.2 / 1（预发布版本只加 1.2.3-rc.1 这一个）
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     paths:
       - "Dockerfile"
       - ".dockerignore"
       - "go.mod"
       - "go.sum"
+      - "*.go"
+      - "docs/CHANGELOG.md"
       - "cmd/**"
       - "internal/**"
       - "scripts/**"
@@ -23,7 +25,7 @@ on:
       - ".github/workflows/docker-ghcr.yml"
   workflow_dispatch:
 
-# 并发组：PR 取消过时构建；main/tag 按引用串行——发版时 main+tag 同推不再双跑同一份代码的构建。
+# 并发组：PR 取消过时构建；main 上的推送按顺序构建。
 # 只构建 amd64：部署机都是 x64；arm64 要在 QEMU 里模拟编译，曾占整次构建的大部分时间（约 5 分钟）。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,6 +46,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # appVersion 对应的 vX.Y.Z 标签还不存在、或刚由 go-binaries 打在这次提交上，说明这次推送升了版本号，
+      # 镜像才打版本标签；版本号没变的推送不碰已发布版本的镜像标签。
+      - name: 版本标签
+        id: ver
+        if: github.event_name != 'pull_request'
+        run: |
+          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
+          TAGGED=$(git ls-remote origin "refs/tags/v$V" "refs/tags/v$V^{}" | tail -1 | cut -f1)
+          if [[ -z "$TAGGED" || "$TAGGED" == "$GITHUB_SHA" ]]; then
+            echo "v=$V" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$V 已在 $TAGGED 发布，这次不打版本标签"
+          fi
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -63,8 +79,9 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ steps.ver.outputs.v }},enable=${{ steps.ver.outputs.v != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.v }},enable=${{ steps.ver.outputs.v != '' }}
+            type=semver,pattern={{major}},value=${{ steps.ver.outputs.v }},enable=${{ steps.ver.outputs.v != '' }}
             type=sha,format=short
 
       - name: Build and push

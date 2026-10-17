@@ -4,6 +4,8 @@ data/
 .git/
 .gitignore
 docs/
+# 更新日志要 go:embed 进二进制（根目录 changelog.go），放回构建上下文
+!docs/CHANGELOG.md
 scripts/__pycache__/
 # 根目录已提交/未提交的二进制产物不进构建上下文（与 .gitignore 对齐）
 /login

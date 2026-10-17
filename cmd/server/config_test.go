@@ -48,6 +48,24 @@ func TestPanelPackageDetailLimit(t *testing.T) {
 	}
 }
 
+func TestPanelUpdateCheck(t *testing.T) {
+	// 更新检查缺省开启：键缺席时保持 true，只有显式 false 才关闭。
+	c, err := ParseConfig([]byte(`{"panel":{"package_detail_limit":5}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Panel.UpdateCheck {
+		t.Fatal("update_check should default to true")
+	}
+	off, err := ParseConfig([]byte(`{"panel":{"update_check":false}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Panel.UpdateCheck {
+		t.Fatal("explicit update_check=false should disable it")
+	}
+}
+
 func TestLoggingDefaults(t *testing.T) {
 	c := Default()
 	if err := c.normalize(); err != nil {

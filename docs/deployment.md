@@ -44,7 +44,7 @@ docker run -d --name workbuddy2api --restart unless-stopped \
 - **`--user "$(id -u):$(id -g)"`**：让容器以你自己的身份运行，刚建的 `auths/`、`data/` 就是你的，不会遇到写入权限问题。不加这一项时容器默认以 uid 10001 运行，见[常见问题](faq.md#docker-部署登录后报写入-auths-失败-permission-denied)。
 - 账号为空时 `/healthz` 返回 503，容器状态会显示 `unhealthy`，添加账号后自动恢复。
 
-镜像标签：`latest`（同 `main`）是 `main` 分支最新提交；每次提交另有一个 `sha-xxxxxxx` 标签，想固定版本就用它。
+镜像标签：`latest`（同 `main`）是 `main` 分支最新提交；每个正式版本有 `x.y.z`、`x.y`、`x` 三个标签（如 `1.0.0`、`1.0`、`1`），想固定版本或只跟随某个主版本就用它们；每次提交另有一个 `sha-xxxxxxx` 标签。各版本的变更见[更新日志](CHANGELOG.md)。
 
 ## Docker Compose
 
@@ -90,6 +90,8 @@ tar xzf wb2api-panel-linux-amd64.tar.gz
 # 首次启动在当前目录生成 config.json（含随机 api_key，日志里打印一次）
 # 浏览器打开 http://127.0.0.1:7863/panel/
 ```
+
+想固定版本，到 [Releases](https://github.com/yreidev/workbuddy2api-panel/releases) 下载带版本号的包（如 `wb2api-panel-v1.0.0-linux-amd64.tar.gz`），每个版本的变更写在它的 Release 说明里。
 
 每个包里是 `wb2api`、`config.example.json` 和 `README.md`；同一个 Release 里的 `checksums.txt` 可用 `sha256sum -c --ignore-missing checksums.txt` 校验。二进制没有签名，在 macOS 上用浏览器下载后运行可能被系统拦截，执行 `xattr -d com.apple.quarantine wb2api` 解除即可（用上面的 `curl` 下载不会被标记）。
 
@@ -149,6 +151,10 @@ docker rm -f workbuddy2api
 ```
 
 Compose 部署：`git pull && docker compose up -d --build`。
+
+二进制部署：下载新版本的包，替换 `wb2api` 后重启；`config.json`、`auths/`、`data/` 原样保留。
+
+有新版本时面板会弹窗提醒（见[更新提醒](panel.md#更新提醒)），各版本的变更见[更新日志](CHANGELOG.md)。在 Linux 和 macOS 上还可以直接在弹窗里[一键更新](panel.md#一键更新)：新程序放在 `data/bin/`，重建容器也保留；以后拉了更新的镜像，会自动以镜像里的版本为准。
 
 > [!NOTE]
 > 旧版镜像默认读取镜像里自带的样例配置（`api_key` 为公开的 `test_key`）。如果你以前用 `docker run` 部署时没加 `-config`，升级后会在 `data/config.json` 生成新配置和新密钥，客户端里的密钥要换成新的；以前在面板里改过的配置也要重新设置一次。
