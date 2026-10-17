@@ -13,6 +13,7 @@ import (
 type compensationAccountItem struct {
 	UID          string                       `json:"uid"`
 	Nickname     string                       `json:"nickname"`
+	Disabled     bool                         `json:"disabled,omitempty"`
 	Status       *upstream.CompensationStatus `json:"status,omitempty"`
 	NewlyClaimed bool                         `json:"newly_claimed"`
 	Credit       int64                        `json:"credit"`
@@ -64,20 +65,22 @@ func (p *Panel) compensationAll(w http.ResponseWriter, r *http.Request, claim bo
 		writeErr(w, http.StatusNotImplemented, "upstream unavailable")
 		return
 	}
-	accounts := make([]*auth.Auth, 0)
+	// 已禁用账号照常列出、可单号领取（禁用只关选号，之后可能重新启用），但「领取全部」只查不领。
+	type target struct {
+		a        *auth.Auth
+		disabled bool
+	}
+	targets := make([]target, 0)
 	for _, st := range p.cfg.Pool.List() {
-		if st.Disabled {
-			continue
-		}
 		a := p.cfg.Pool.AuthByUID(st.UID)
 		if a != nil && !a.IsGlobal() && !a.IsEnterprise() {
-			accounts = append(accounts, a)
+			targets = append(targets, target{a, st.Disabled})
 		}
 	}
-	items := make([]compensationAccountItem, len(accounts))
+	items := make([]compensationAccountItem, len(targets))
 	sem := make(chan struct{}, 3)
 	var wg sync.WaitGroup
-	for i, a := range accounts {
+	for i, t := range targets {
 		select {
 		case sem <- struct{}{}:
 		case <-r.Context().Done():
@@ -85,11 +88,12 @@ func (p *Panel) compensationAll(w http.ResponseWriter, r *http.Request, claim bo
 			return
 		}
 		wg.Add(1)
-		go func(i int, a *auth.Auth) {
+		go func(i int, t target) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			items[i] = p.compensationItem(a, claim)
-		}(i, a)
+			items[i] = p.compensationItem(t.a, claim && !t.disabled)
+			items[i].Disabled = t.disabled
+		}(i, t)
 	}
 	wg.Wait()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": items})

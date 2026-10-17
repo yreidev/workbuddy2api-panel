@@ -14,13 +14,13 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
-// 批量领取隔离单号失败，包含暂停账号，过滤国际/企业/禁用账号并刷新权威余额。
+// 批量领取隔离单号失败，包含暂停账号，过滤国际/企业账号，禁用账号只查不领，并刷新权威余额。
 func TestCompensationBulkClaim(t *testing.T) {
 	var mu sync.Mutex
 	claims := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		uid := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if uid == "global" || uid == "enterprise" || uid == "disabled" {
+		if uid == "global" || uid == "enterprise" {
 			t.Errorf("unsupported account contacted upstream: %s", uid)
 		}
 		if uid == "failed" {
@@ -83,8 +83,8 @@ func TestCompensationBulkClaim(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Accounts) != 5 {
-		t.Fatalf("accounts=%d want 5", len(response.Accounts))
+	if len(response.Accounts) != 6 {
+		t.Fatalf("accounts=%d want 6", len(response.Accounts))
 	}
 	if len(claims) != 2 || claims["ready"] != 1 || claims["paused"] != 1 {
 		t.Fatalf("claims=%v", claims)
@@ -98,6 +98,12 @@ func TestCompensationBulkClaim(t *testing.T) {
 				t.Errorf("claim result: %+v", it)
 			}
 		}
+		if it.Disabled != (it.UID == "disabled") {
+			t.Errorf("disabled flag: %+v", it)
+		}
+		if it.UID == "disabled" && (it.NewlyClaimed || it.Status == nil || !it.Status.Active || it.Status.Claimed) {
+			t.Errorf("disabled account must be listed but not claimed in bulk: %+v", it)
+		}
 	}
 	st, _ := accounts.Status("ready")
 	if st.Credits != 700 || st.Cooling {
@@ -106,6 +112,14 @@ func TestCompensationBulkClaim(t *testing.T) {
 	paused, _ := accounts.Status("paused")
 	if !paused.Paused {
 		t.Error("claim must preserve paused selection")
+	}
+	// 禁用账号可以单号领取，领完仍保持禁用。
+	request(http.MethodPost, "/panel/api/accounts/disabled/compensation/claim")
+	if claims["disabled"] != 1 {
+		t.Errorf("single claim for disabled account: claims=%v", claims)
+	}
+	if st, _ := accounts.Status("disabled"); !st.Disabled {
+		t.Error("claim must keep the account disabled")
 	}
 	// 单号与其他任务入口共用账号锁，冲突不能请求上游。
 	if !p.tryLockAccount("ready") {

@@ -12,8 +12,8 @@ import type { QueueItem, QueueState, RunQueueResp, ScanAccount } from '../../lib
 import { BusyButton, Empty } from '../../components/Feedback'
 import { Panel } from '../../components/Panel'
 import { useConfirm } from '../../components/useConfirm'
+import { CompensationModal } from './CompensationModal'
 import { VouchersModal } from './VouchersModal'
-import { CompensationPanel } from './CompensationPanel'
 
 interface Row { kind: string; code: string; prog: string; status: string; message?: string }
 interface Group { uid: string; nick: string; rows: Row[] }
@@ -67,6 +67,7 @@ export function TaskCenterPage() {
   const [conc, setConc] = useState('1')
   const [starting, setStarting] = useState(false)
   const [vouchers, setVouchers] = useState(false)
+  const [compensation, setCompensation] = useState(false)
   const [confirmEl, ask] = useConfirm()
 
   const q = queue.data
@@ -113,11 +114,11 @@ export function TaskCenterPage() {
 
   return (
     <>
-      <CompensationPanel />
       <Panel
         title={<>成长任务队列{total > 0 && <span className="ml-2 text-sm font-normal text-muted">{total} 项</span>}</>}
         actions={
           <>
+            <Button size="sm" variant="ghost" onPress={() => setCompensation(true)}>积分补偿</Button>
             <Button size="sm" variant="ghost" onPress={() => setVouchers(true)}>查询券码</Button>
             <Select aria-label="并发" value={conc} onChange={(v) => v != null && setConc(String(v))} className="w-28">
               <Label className="sr-only">并发</Label>
@@ -189,6 +190,7 @@ export function TaskCenterPage() {
         )}
       </Panel>
       <VouchersModal open={vouchers} onClose={() => setVouchers(false)} />
+      <CompensationModal open={compensation} onClose={() => setCompensation(false)} />
       {confirmEl}
     </>
   )

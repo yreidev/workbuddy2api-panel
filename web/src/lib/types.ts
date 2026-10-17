@@ -436,6 +436,8 @@ export interface CompensationStatus {
 export interface CompensationAccount {
   uid: string
   nickname: string
+  /** 已禁用：照常列出、可单号领取，但「领取全部」只查不领 */
+  disabled?: boolean
   status?: CompensationStatus
   newly_claimed: boolean
   credit: number

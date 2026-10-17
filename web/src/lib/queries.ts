@@ -1,10 +1,10 @@
-// 所有读接口的查询（TanStack Query）。打上游的接口（模型、积分包、任务、券码）不随窗口聚焦自动重查，
+// 所有读接口的查询（TanStack Query）。打上游的接口（模型、积分包、任务、券码、补偿）不随窗口聚焦自动重查，
 // 只读网关内存的接口（总览、日志、队列）按页面需要轮询；标签页切到后台时轮询自动暂停。
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ApiError, acct, api, errorMessage } from './api'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
 import type {
-  ConfigResp, LogEntry, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent, RequestMetrics, Task, UsageResp,
+  CompensationResp, ConfigResp, LogEntry, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent, RequestMetrics, Task, UsageResp,
   VoucherAccount,
 } from './types'
 
@@ -159,6 +159,15 @@ export function useVouchers(enabled: boolean) {
   return useQuery({
     queryKey: qk.vouchers,
     queryFn: () => api<{ accounts: VoucherAccount[] | null }>('school/vouchers'),
+    enabled,
+  })
+}
+
+/** 积分补偿：逐账号查官方活动状态（只查不领），打开弹窗时才查 */
+export function useCompensation(enabled: boolean) {
+  return useQuery({
+    queryKey: qk.compensation,
+    queryFn: () => api<CompensationResp>('compensation'),
     enabled,
   })
 }
