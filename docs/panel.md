@@ -60,6 +60,8 @@ IP 属于个人信息，所以由 `logging.request_client_info` 控制，默认�
 - 检查只是一个 GET 请求，不带任何本机信息。读不到（例如服务器访问不了 GitHub）就在运行日志里记一行，6 小时后再试，不影响其他功能。
 - 在「配置 → 服务」关掉「检查更新」（`panel.update_check`）即停止联网检查，立即生效；「本次更新」不受影响。
 
+<p align="center"><img src="images/update.webp" alt="有新版本弹窗" width="860"><br><sub>演示数据，v1.1.0 的条目是虚构的。</sub></p>
+
 版本号规则与发版流程见[发版与版本号](releasing.md)。
 
 ## 一键更新
