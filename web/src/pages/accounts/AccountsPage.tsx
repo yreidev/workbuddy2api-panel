@@ -91,7 +91,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         <Stat label="粘性会话" value={data.sticky_sessions} />
       </div>
 
-      <ExpiryReminder />
+      <ExpiryReminder accounts={accounts} />
 
       <Panel
         title="账号池"

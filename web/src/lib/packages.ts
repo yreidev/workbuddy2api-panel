@@ -2,7 +2,7 @@
 // 「个人体验版」…），面额从 6 到 1500 不等，且按次发放。所以两个任务完成度完全一致的账号，
 // 余额可能差上千——差别只在包里。这里把逐包明细摊开，并给每个来源一个稳定配色，跨账号对比时同色即同类。
 // （纯函数从旧版 app.js 平移，口径不变，见 packages.test.ts）
-import type { CreditPackage, PackageAccount } from './types'
+import type { Account, CreditPackage, PackageAccount } from './types'
 
 // 分类色：8 个固定槽位（CSS 变量，明暗两套，定义和校验说明见 index.css），按顺序分配、不循环复用，
 // 第 9 个起一律用「其他」灰——循环复用会让两个不同的账号/来源同色，读者分不清。
@@ -307,6 +307,25 @@ export function sortExpiryRows(list: PackageAccount[], now: number) {
   return list
     .map((a) => ({ a, r: a.error ? null : expiryReminder(a.packages, now) }))
     .sort((x, y) => rank(x.a, x.r) - rank(y.a, y.r) || (x.r && y.r ? x.r.first.days - y.r.first.days || y.r.first.remain - x.r.first.remain : 0))
+}
+
+/**
+ * 总览里每个账号只带最早一批到期（credits_earliest_*，后台刷余额时记下），换成逐包明细的形状，
+ * 没点「检查」之前到期提醒先拿它顶上，不查上游（同上游 0ab6690）。只有一批，所以没有随后批次和 7 天合计。
+ */
+export function snapshotPackageAccounts(list: Account[] | null | undefined): PackageAccount[] {
+  return (list || []).map((a) => {
+    const at = Date.parse(a.credits_earliest_expiry || '')
+    const remain = Number(a.credits_earliest_remaining || 0)
+    return {
+      uid: a.uid,
+      nickname: a.nickname || '',
+      realm: a.realm || '',
+      remain: a.credits ?? 0,
+      size: a.credits_total ?? 0,
+      packages: at > 0 && remain > 0 ? [{ name: '', remain, used: 0, size: remain, expires_at: at }] : [],
+    }
+  })
 }
 
 /** 危险度：3 天内（不抓紧就真没了）、7 天内、更远 */

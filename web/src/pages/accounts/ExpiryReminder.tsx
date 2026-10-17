@@ -1,21 +1,22 @@
 // 积分到期提醒：每个账号最近一批要过期的积分、到期前日均至少要耗多少。数据与积分构成页共用一份缓存。
 // 逐账号实时查上游，账号一多打开页面就卡，所以打开账号池不自动查，只在点「检查」时查（同上游 8391a05）；
+// 没查之前先用总览里各账号最早一批到期的快照顶上，不查上游（同上游 0ab6690）。
 // 积分构成页查过的话直接显示那份，并标出数据是几分钟前的，免得把旧数据当实时。
 import { useMemo } from 'react'
 import { fmtTok } from '../../lib/format'
 import { useNow } from '../../lib/hooks'
-import { expiryTone, sortExpiryRows } from '../../lib/packages'
+import { expiryTone, snapshotPackageAccounts, sortExpiryRows } from '../../lib/packages'
 import { usePackages } from '../../lib/queries'
-import type { PackageAccount } from '../../lib/types'
+import type { Account, PackageAccount } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { InfoTip, Panel } from '../../components/Panel'
 
-export function ExpiryReminder() {
+export function ExpiryReminder({ accounts }: { accounts: Account[] | null | undefined }) {
   const query = usePackages(false)
   const now = useNow(60_000)
+  const snapshot = useMemo(() => snapshotPackageAccounts(accounts), [accounts])
   const n = query.data?.accounts?.length ?? 0
   const age = query.dataUpdatedAt ? Math.floor((now - query.dataUpdatedAt) / 60_000) : 0
-  const idle = query.data === undefined && !query.isFetching && !query.error
   return (
     <Panel
       title={
@@ -27,11 +28,15 @@ export function ExpiryReminder() {
           </InfoTip>
         </span>
       }
-      desc={!query.data ? '逐账号向上游实时查询' : n + ' 个账号 · ' + (age > 0 ? age + ' 分钟前的数据，可点「检查」刷新' : '实时查询上游')}
+      desc={
+        !query.data
+          ? snapshot.length + ' 个账号 · 本地快照，只有最早一批；点「检查」逐账号查上游看全部批次（账号多时要等一会儿）'
+          : n + ' 个账号 · ' + (age > 0 ? age + ' 分钟前的数据，可点「检查」刷新' : '实时查询上游')
+      }
       actions={<BusyButton size="sm" variant="secondary" busy={query.isFetching} onPress={() => void query.refetch()}>检查</BusyButton>}
     >
-      {idle ? (
-        <p className="text-sm text-muted">点「检查」逐账号查询各自最近一批积分的到期时间（账号多时要等一会儿）。</p>
+      {query.data === undefined && !query.error ? (
+        <Rows list={snapshot} now={now} />
       ) : (
         <Loaded query={query} rows={2}>{(d) => <Rows list={d.accounts || []} now={now} />}</Loaded>
       )}

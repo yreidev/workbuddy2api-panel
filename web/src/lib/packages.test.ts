@@ -1,9 +1,9 @@
 // 从 Go 端 internal/panel/frontend_test.go 平移过来的两个用例（断言值原样保留）。
 import { describe, expect, it } from 'vitest'
 import {
-  expiryBatches, expiryReminder, pkAccountColorMap, pkDetailGroups, pkDetailLimit, sortExpiryRows, summarizeCreditDays,
+  expiryBatches, expiryReminder, pkAccountColorMap, pkDetailGroups, pkDetailLimit, snapshotPackageAccounts, sortExpiryRows, summarizeCreditDays,
 } from './packages'
-import type { PackageAccount } from './types'
+import type { Account, PackageAccount } from './types'
 
 describe('pkDetailGroups', () => {
   it('同到期时间按面额降序；其余未用完包与零/负余额包分别聚合', () => {
@@ -148,5 +148,30 @@ describe('sortExpiryRows', () => {
       { uid: 'e', nickname: 'broken', realm: 'cn', error: 'offline' },
     ] as PackageAccount[]
     expect(sortExpiryRows(list, now).map((x) => x.a.nickname)).toEqual(['gl-soon', 'cn-mid', 'cn-late', 'no-expiry', 'broken'])
+  })
+})
+
+// 从上游 internal/panel/frontend_test.go 的 TestAppJSExpirySnapshotRenders 平移（期望值原样保留）。
+describe('snapshotPackageAccounts', () => {
+  it('只有总览的最早到期快照也能排出到期提醒：2 天的在前，30 天其次，没有到期信息的最后', () => {
+    const now = Date.now()
+    const day = (n: number) => {
+      const d = new Date(now)
+      d.setHours(0, 0, 0, 0)
+      d.setDate(d.getDate() + n)
+      return d.toISOString()
+    }
+    // 总览形状：没有 packages 数组，只有到期快照字段
+    const list = [
+      { uid: 'aaaaaaaa-1', nickname: '秋', credits: 4099, credits_earliest_expiry: day(2), credits_earliest_remaining: 499 },
+      { uid: 'bbbbbbbb-2', nickname: '秋千易', credits: 3243, credits_earliest_expiry: day(30), credits_earliest_remaining: 43 },
+      { uid: 'cccccccc-3', nickname: '长期包', credits: 900, credits_earliest_expiry: undefined, credits_earliest_remaining: 0 },
+    ] as Account[]
+    const rows = sortExpiryRows(snapshotPackageAccounts(list), now)
+    expect(rows.map((x) => x.a.nickname)).toEqual(['秋', '秋千易', '长期包'])
+    expect(rows.map((x) => x.r?.first.remain ?? null)).toEqual([499, 43, null])
+    // Go 端 time.Time 零值也当作没有到期信息
+    const zero = snapshotPackageAccounts([{ uid: 'z', credits_earliest_expiry: '0001-01-01T00:00:00Z', credits_earliest_remaining: 5 } as Account])
+    expect(zero[0].packages).toEqual([])
   })
 })
