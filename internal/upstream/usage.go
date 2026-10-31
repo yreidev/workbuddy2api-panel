@@ -136,15 +136,25 @@ func UsageCacheMissTokens(usage map[string]any) (float64, bool) {
 // UsageCacheMissTokens。和 UsageCacheHitTokens 不同，命中为 0 也算有观测：usage 里只要出现任意一个
 // 缓存字段（含 prompt_cache_miss_tokens），整段未命中的请求也要计入命中率、交给未命中告警判断。
 // 一个缓存字段都没有时 ok=false。
+//
+// 命中为 0 而未命中是显式给的、又比 prompt_tokens 小时，按 prompt_tokens - 未命中 反推命中：上游在
+// 接近全命中时会回 hit=0 + miss=3、prompt 几万这种对不上的组合，不反推会被当成整段未命中、打出
+// 误报的 WARN（照上游 linguo2625469 329c09e，issue #170）。未命中不小于 prompt_tokens 时是真的整段
+// 未命中，命中保持 0。
 func UsageCacheTokens(usage map[string]any) (hit, miss float64, ok bool) {
 	if !hasUsageCacheField(usage) {
 		return 0, 0, false
 	}
 	hit, _ = UsageCacheHitTokens(usage)
 	miss, _ = UsageCacheMissTokens(usage)
-	if _, explicit := usageNumber(usage, "prompt_cache_miss_tokens"); !explicit && hit == 0 {
+	_, explicitMiss := usageNumber(usage, "prompt_cache_miss_tokens")
+	prompt, hasPrompt := usageNumber(usage, "prompt_tokens")
+	switch {
+	case hit == 0 && !explicitMiss:
 		// 命中为 0 时 UsageCacheMissTokens 推导不出（它只认正的命中），按 prompt_tokens 全量算未命中。
-		miss, _ = usageNumber(usage, "prompt_tokens")
+		miss = prompt
+	case hit == 0 && hasPrompt && prompt > miss:
+		hit = prompt - miss
 	}
 	return hit, miss, true
 }

@@ -35,6 +35,7 @@ func TestStatsReaderCacheTokens(t *testing.T) {
 		{"命中写在 prompt_tokens_details 里", `data: {"usage":{"prompt_tokens":8500,"prompt_tokens_details":{"cached_tokens":8000}}}`, 8000, 500, true},
 		{"命中为 0、未命中缺省，按 prompt 全量算", `data: {"usage":{"prompt_tokens":288109,"prompt_cache_hit_tokens":0}}`, 0, 288109, true},
 		{"命中为 0、未命中显式", `data: {"usage":{"prompt_tokens":5000,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":5000}}`, 0, 5000, true},
+		{"命中为 0、未命中远小于 prompt：反推命中（上游 #170）", `data: {"usage":{"prompt_tokens":52703,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":3}}`, 52700, 3, true},
 		{"没有缓存字段", `data: {"usage":{"prompt_tokens":100,"completion_tokens":5}}`, 0, 0, false},
 		{"usage 为 null", `data: {"usage":null}`, 0, 0, false},
 		{"usage 字段类型不对", `data: {"usage":{"prompt_tokens":"x","prompt_cache_hit_tokens":5}}`, 0, 0, false},
