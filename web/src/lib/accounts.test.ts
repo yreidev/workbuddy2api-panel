@@ -93,11 +93,21 @@ describe('卡片排序', () => {
 describe('rateLimitInfo', () => {
   const t = (h: number) => new Date(2026, 8, 28, h, 0, 0).getTime()
   const at = t(14)
-  it('上游重置时间 + 网关更早重试', () => {
+  it('上游重置时间 + 网关更早重试：两个时刻都写，倒计时跟着网关', () => {
     const r = rateLimitInfo({ model: 'glm-5.3', kind: 'rate_limit', reset_at: new Date(t(16)).toISOString(), until: new Date(t(15)).toISOString() }, at)
-    expect(r.detail).toBe('预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试')
-    expect(r.short).toBe('2时00分后解封')
+    expect(r.detail).toBe('网关 2026-09-28 15:00 起重试（剩余 1时00分） · 上游称 2026-09-28 16:00 恢复')
+    expect(r.short).toBe('1时00分后重试')
     expect(r.unavailable).toBe(false)
+  })
+  it('网关重试时刻已过、上游还没恢复', () => {
+    const r = rateLimitInfo({ model: 'glm-5.3', kind: 'rate_limit', reset_at: new Date(t(16)).toISOString(), until: new Date(t(13)).toISOString() }, at)
+    expect(r.detail).toBe('网关 2026-09-28 13:00 起重试 · 上游称 2026-09-28 16:00 恢复')
+    expect(r.short).toBe('等待重试')
+  })
+  it('只有上游重置时间', () => {
+    const r = rateLimitInfo({ model: 'glm-5.3', kind: 'rate_limit', reset_at: new Date(t(16)).toISOString() }, at)
+    expect(r.detail).toBe('预计 2026-09-28 16:00 解封（剩余 2时00分）')
+    expect(r.short).toBe('2时00分后解封')
   })
   it('模型不可用', () => {
     const r = rateLimitInfo({ model: 'missing', kind: 'model_unavailable', until: new Date(t(15)).toISOString() }, at)

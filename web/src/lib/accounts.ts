@@ -50,9 +50,9 @@ export function activeRateLimits(a: Account) {
 export interface RateLimitInfo {
   model: string
   unavailable: boolean
-  /** 完整说明：「预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试」 */
+  /** 完整说明：「预计 2026-09-28 16:00 解封（剩余 2时00分）」「网关 2026-09-28 15:00 起重试（剩余 1时00分） · 上游称 2026-09-28 16:00 恢复」 */
   detail: string
-  /** 表格里的短说明：「2时00分后解封」「不可用 · 1时00分后重试」 */
+  /** 表格里的短说明：「2时00分后解封」「1时00分后重试」「不可用 · 1时00分后重试」 */
   short: string
   /** 上游重置时刻优先，没有就用网关最早重试时刻 */
   deadline: number | null
@@ -60,8 +60,10 @@ export interface RateLimitInfo {
 
 /**
  * 限流 / 模型不可用的展示文案（口径与上游旧面板 rateLimitMeta 一致，见 accounts.test.ts）：
- * 上游给了重置时间（reset_at）就按它说「几点解封」，网关更早重试（until 早于 reset_at）时补一句；
- * 只有 until 就按它说「几点恢复」；都没有就是「时间未知」。模型不可用只说多久后重试。
+ * 上游给了重置时间（reset_at）就按它说「几点解封」；网关更早重试（until 早于 reset_at，网关把重试
+ * 封顶在软冷却上限内）时两个时刻都写出来，倒计时跟着 until——这一行在 until 到了就消失，按 reset_at
+ * 倒数会和实际恢复对不上（上游 20c3997）。只有 until 就按它说「几点恢复」；都没有就是「时间未知」。
+ * 模型不可用只说多久后重试。
  */
 export function rateLimitInfo(row: RateLimitedModel, now: number): RateLimitInfo {
   const model = row.model || '未知模型'
@@ -76,12 +78,18 @@ export function rateLimitInfo(row: RateLimitedModel, now: number): RateLimitInfo
       short: remaining ? '不可用 · ' + dur(remaining) + '后重试' : '不可用 · 等待重新探测',
     }
   }
-  let detail = resetAt != null
+  if (until != null && resetAt != null && until < resetAt) {
+    const retryIn = until > now ? Math.round((until - now) / 1000) : 0
+    return {
+      model, unavailable: false, deadline,
+      detail: '网关 ' + fmtLocalDateTime(until) + ' 起重试' + (retryIn ? '（剩余 ' + dur(retryIn) + '）' : '') +
+        ' · 上游称 ' + fmtLocalDateTime(resetAt) + ' 恢复',
+      short: retryIn ? dur(retryIn) + '后重试' : '等待重试',
+    }
+  }
+  const detail = resetAt != null
     ? '预计 ' + fmtLocalDateTime(resetAt) + ' 解封' + (remaining ? '（剩余 ' + dur(remaining) + '）' : '')
     : until != null ? '预计 ' + fmtLocalDateTime(until) + ' 恢复（剩余 ' + dur(remaining) + '）' : '预计解封时间未知'
-  if (until != null && resetAt != null && until < resetAt) {
-    detail += ' · 网关最快 ' + dur(Math.max(0, Math.round((until - now) / 1000))) + ' 后重试'
-  }
   return { model, unavailable: false, deadline, detail, short: remaining ? dur(remaining) + '后解封' : '解封时间未知' }
 }
 
