@@ -587,6 +587,13 @@ func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 		// 拉取失败只进负缓存（5min lastFail），不 NoteError：NoteError 喂的是 chat
 		// 熔断器，models 端点偶发 5xx 跨界惩罚 chat 通道健康的账号；
 		// models 拉取失败 ≠ 账号 chat 不可用。
+		// 只在真正打上游失败时记一行（负缓存期内前面已直接 return，不会刷屏）：
+		// 此前这里静默，CN 域不可达时 /v1/models 只剩 global 模型却毫无线索。
+		if err == nil {
+			err = fmt.Errorf("models api returned empty list")
+		}
+		log.Printf("WARN: [server] /v1/models: CN 模型目录拉取失败（%s 内不再重试，cn: 模型暂不列出）: %v",
+			modelsFetchFailCooldown, err)
 		dynamicModelsCache.Lock()
 		dynamicModelsCache.lastFail = time.Now()
 		dynamicModelsCache.Unlock()
