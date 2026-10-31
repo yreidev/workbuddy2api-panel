@@ -36,6 +36,8 @@ const (
 	codeUserNotActivated        = 14017 // UsageLimitUserNotActivated（trial not activated）
 	codeUserExhausted           = 14018 // UsageLimitUserExhausted
 	codeNoTokenBudget           = 14019 // UsageLimitNoTokenBudget
+	codeUsageLimitDepartment    = 14022 // UsageLimitExceededDepartment（部门额度用完；桌面端 5.9.3 内置的 CLI 还没有，npm 上的官方 CLI 2.179.0 有）
+	codeEnterprisePackageEmpty  = 14023 // UsageLimitEnterprisePackageExhausted（企业资源包用完；同上）
 	codeConversationLimitExceed = 10105 // ConversationLimitExceeded（官方归 quota_active_session：同时进行的会话太多）
 )
 
@@ -99,7 +101,8 @@ func isTransientRateCode(code int) bool {
 func isQuotaExhaustedCode(code int) bool {
 	switch code {
 	case codeUsageLimitExceeded, codeUsageLimitEnterprise, codeUsageLimitTencent,
-		codeEnterpriseExhausted, codeUserExhausted, codeNoTokenBudget:
+		codeEnterpriseExhausted, codeUserExhausted, codeNoTokenBudget,
+		codeUsageLimitDepartment, codeEnterprisePackageEmpty:
 		return true
 	}
 	return false

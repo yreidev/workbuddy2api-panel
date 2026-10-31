@@ -324,12 +324,14 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 | `14003` | `RateLimitError` | 临时限流，原请求退避重发（0.5 秒起、封顶 32 秒） | 只冷却这个号的这个模型约 30 秒，当场换号 |
 | `6001` `6002` `6005` `6006` | `CraftRateTPS/TPM/RPS/RPMLimit` | 同上 | 有重置时间就冷却到那时，没有就同 14003 |
 | `6000` `6003` `6004` `6007` `6008` | `CraftRateLimit`、`CraftRateTPH/TPD/RPH/RPDLimit` | 不自动重发 | 按模型冷却到上游给的重置时间，换别的模型照样用 |
-| `14001` `14012` `14013` `14014` `14018` `14019` | `UsageLimitExceeded*`、`UsageLimitUserExhausted`、`UsageLimitNoTokenBudget` | 额度用完（`isQuotaExhaustedError`），不重试 | 余额不足，冷却到次日 04:00 |
+| `14001` `14012` `14013` `14014` `14018` `14019` `14022` `14023` | `UsageLimitExceeded*`、`UsageLimitUserExhausted`、`UsageLimitNoTokenBudget`、`UsageLimitEnterprisePackageExhausted` | 额度用完（`isQuotaExhaustedError`），不重试 | 余额不足，冷却到次日 04:00 |
 | `14015` | `UsageLimitLicenseExpired` | 归授权过期 | 账号软冷却 |
 | `14016` `14017` | `UsageLimitEnterpriseNotActivated`、`UsageLimitUserNotActivated` | 归未激活 | 账号软冷却 |
 | `10105` | `ConversationLimitExceeded` | 归同时进行的会话太多 | 账号冷却约 60 秒，当场换号 |
 | `6021` | 桌面端容量排队的 `FULL` | 队列满，只提示，不自动重发 | 不罚账号、不换号，回 503 + `upstream_busy` |
 | `11115` | `ContextTooLong` | 归输入超长 | 不罚账号、不换号，原文返回；文案照 `isInputLengthError` 的词表与正则认 |
+
+`14022`（`UsageLimitExceededDepartment`，部门额度用完）和 `14023`（企业资源包用完）桌面端 5.9.3 内置的 CLI 2.165.0 还没有，npm 上的官方 CLI（`@tencent-ai/codebuddy-code` 2.179.0 读包）已列进 `isQuotaExhaustedError` 的码集合。网关和别的额度码一样冷却到次日 04:00，余额刷新发现恢复就提前解冻；部门额度、企业资源包实际什么时候恢复未确认，没见过实际响应。
 
 容量排队的码不在内置 CLI 里，在桌面端主进程（`app/main/conversations.js` 的 `CapacityQueueManager`，国内版 5.9.3 读包）：`6020` 排队中，官方按 `retry_after` 轮询 `POST /v2/chat/queue/status`（请求体 `{model}`，头带 `X-Conversation-Request-ID` 与 `X-Conversation-ID`），到号后重发原请求；`6021` 队列满；`6022` 用户上限。网关只处理 `6021`（上游 linguo2625469 `f14f374` 生产见过 `429 {"code":6021,"msg":"queue.full.title"}`，以前落进通用 429，逐号软冷却，2 秒内整池健康号全被冷却）；`6020`、`6022` 没见过实际响应，未处理。
 

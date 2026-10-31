@@ -54,6 +54,8 @@ func TestClassifyBizCodes(t *testing.T) {
 		{429, `{"code":14014}`, ErrHardCredit},
 		{400, `{"code":14018}`, ErrHardCredit},
 		{429, `{"code":14019}`, ErrHardCredit},
+		{429, `{"code":14022,"msg":"department usage limit exceeded"}`, ErrHardCredit},
+		{403, `{"code":14023}`, ErrHardCredit},
 		{429, `{"code":14015,"msg":"license expired"}`, ErrAccountFault},
 		{429, `{"code":14016}`, ErrAccountFault},
 		{403, `{"code":14017}`, ErrAccountFault},
@@ -145,6 +147,7 @@ func TestFrameKindBizCodes(t *testing.T) {
 		`{"error":{"message":"busy","code":14003}}`:  ErrSoftRate,
 		`{"code":6004,"msg":"x"}`:                    ErrSoftRate,
 		`{"error":{"message":"quota","code":14001}}`: ErrHardCredit,
+		`{"error":{"message":"quota","code":14023}}`: ErrHardCredit,
 		`{"error":{"message":"x","code":14016}}`:     ErrAccountFault,
 		`{"error":{"message":"x","code":6021}}`:      ErrUpstreamBusy,
 	}
