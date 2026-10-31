@@ -329,28 +329,25 @@ func newPinTransportFactory(base *http.Transport) func(string) http.RoundTripper
 	}
 }
 
-// pinTransport 从 base Clone 一个 Transport，把拨号换成「连到 ip、端口不变」，SNI 与证书校验仍按
+// pinTransport 从 base Clone 一个 Transport，把拨号换成「直连 ip、端口不变」，SNI 与证书校验仍按
 // 请求的原域名。https 走 DialTLSContext（uTLS 伪装官方 ClientHello + 钉 IP，见 tlsmimic.go），
-// 非 https 走 DialContext（同样钉 IP，兜底）。
+// 非 https 走 DialContext（同样钉 IP，兜底）。钉 IP 的连接照官方不走代理（见 proxy.go），所以不沿用
+// base 的拨号。
 func pinTransport(base *http.Transport, ip string) *http.Transport {
 	if base == nil {
 		base = &http.Transport{}
 	}
 	tr := base.Clone()
-	dial := tr.DialContext
-	if dial == nil {
-		dialer := newDialer()
-		dial = dialer.DialContext
-	}
+	dialer := newDialer()
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		_, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
-		return dial(ctx, network, net.JoinHostPort(ip, port))
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
 	}
-	// https 的 TLS 握手走 uTLS 并钉到这个 IP；SNI 仍取请求域名，RootCAs 等从 base 的
+	// https 的 TLS 握手走 uTLS，TCP 用上面钉 IP 的拨号；SNI 仍取请求域名，RootCAs 等从 base 的
 	// TLSClientConfig 继承（dialTLSMimic 内部处理）。
-	tr.DialTLSContext = dialTLSMimic(ip, tr.TLSClientConfig)
+	tr.DialTLSContext = dialTLSMimic(tr.DialContext, tr.TLSClientConfig)
 	return tr
 }

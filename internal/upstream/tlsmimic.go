@@ -65,8 +65,8 @@ func workbuddyClientHelloSpec() (*utls.ClientHelloSpec, error) {
 	return spec, nil
 }
 
-// dialTLSMimic 返回 http.Transport.DialTLSContext 用的拨号器。forceIP 非空时 TCP 连到该 IP、
-// 端口不变（钉 IP 场景），SNI 与证书校验仍按 addr 里的域名；为空时按 addr 原样连。
+// dialTLSMimic 返回 http.Transport.DialTLSContext 用的拨号器：先用 dial 建 TCP 连接（直连、钉 IP 或
+// 经代理的隧道，由调用方定），再在上面握手，SNI 与证书校验按 addr 里的域名。
 // 开关开（默认）用 uTLS 照官方 ClientHello 握手，关则回落标准库 TLS。
 //
 // base 是所属 Transport 的 TLSClientConfig（可能 nil）。设了 DialTLSContext，Transport 就不再
@@ -75,18 +75,13 @@ func workbuddyClientHelloSpec() (*utls.ClientHelloSpec, error) {
 //
 // 握手超时由本函数自管：http.Transport.TLSHandshakeTimeout 只在 Transport 自己做 TLS 时生效，
 // 用了 DialTLSContext 就得自己卡（否则握手挂起只能等 Client.Timeout）。
-func dialTLSMimic(forceIP string, base *tls.Config) func(context.Context, string, string) (net.Conn, error) {
-	dialer := newDialer()
+func dialTLSMimic(dial func(context.Context, string, string) (net.Conn, error), base *tls.Config) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
+		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
-		target := addr
-		if forceIP != "" {
-			target = net.JoinHostPort(forceIP, port)
-		}
-		raw, err := dialer.DialContext(ctx, network, target)
+		raw, err := dial(ctx, network, addr)
 		if err != nil {
 			return nil, err
 		}

@@ -309,7 +309,7 @@ func sniOf(rec []byte) string {
 func TestTLSMimicJA3(t *testing.T) {
 	t.Cleanup(func() { SetTLSMimic(true) })
 	SetTLSMimic(true)
-	tr := newTransport()
+	tr := newTransport(nil)
 	rec := captureClientHello(t, tr.DialTLSContext)
 	if got := ja3MD5(rec); got != targetJA3MD5 {
 		t.Errorf("出站 JA3 MD5 = %s, want %s\nJA3=%s", got, targetJA3MD5, computeJA3(rec))
@@ -320,7 +320,7 @@ func TestTLSMimicJA3(t *testing.T) {
 func TestTLSMimicJA4(t *testing.T) {
 	t.Cleanup(func() { SetTLSMimic(true) })
 	SetTLSMimic(true)
-	tr := newTransport()
+	tr := newTransport(nil)
 	rec := captureClientHello(t, tr.DialTLSContext)
 	if got := computeJA4(rec); got != targetJA4 {
 		t.Errorf("出站 JA4 = %s, want %s", got, targetJA4)
@@ -334,7 +334,7 @@ func TestTLSMimicDisabled(t *testing.T) {
 	if TLSMimicEnabled() {
 		t.Fatal("SetTLSMimic(false) 后 TLSMimicEnabled 仍为真")
 	}
-	tr := newTransport()
+	tr := newTransport(nil)
 	rec := captureClientHello(t, tr.DialTLSContext)
 	if got := ja3MD5(rec); got == targetJA3MD5 {
 		t.Error("关掉伪装后 JA3 仍等于官方指纹，开关没生效")
@@ -345,7 +345,7 @@ func TestTLSMimicDisabled(t *testing.T) {
 func TestTLSMimicPinnedIP(t *testing.T) {
 	t.Cleanup(func() { SetTLSMimic(true) })
 	SetTLSMimic(true)
-	tr := pinTransport(newTransport(), "127.0.0.1")
+	tr := pinTransport(newTransport(nil), "127.0.0.1")
 	if tr.DialTLSContext == nil {
 		t.Fatal("钉 IP Transport 应设 DialTLSContext")
 	}
@@ -413,7 +413,7 @@ func TestTLSMimicRealHandshake(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Cleanup(func() { SetTLSMimic(true) })
 			SetTLSMimic(mimic)
-			dial := dialTLSMimic("", cfg)
+			dial := dialTLSMimic(newDialer().DialContext, cfg)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			conn, err := dial(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
@@ -459,7 +459,7 @@ func TestTLSMimicBadClientHello(t *testing.T) {
 // TestDialTLSMimicErrors 覆盖拨号的错误分支：addr 没端口（SplitHostPort 失败）、连不上（dial 失败，
 // 走 ctx 无 deadline 补握手超时那条）。
 func TestDialTLSMimicErrors(t *testing.T) {
-	dial := dialTLSMimic("", nil)
+	dial := dialTLSMimic(newDialer().DialContext, nil)
 	if _, err := dial(context.Background(), "tcp", "没有端口的地址"); err == nil {
 		t.Error("addr 缺端口应报错")
 	}

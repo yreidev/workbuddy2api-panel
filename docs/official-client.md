@@ -255,6 +255,27 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 
 2026-10-20 生产（美国机房）实测：HTTPDNS 查到 `www.workbuddy.cn`、`copilot.tencent.com` 各 1 个 IP，`wb.tencentbuddy.com` 3 个，和系统 DNS 一致；钉到这些 IP 和备用 IP 拉模型目录全部成功。这种网络下每个 HTTPDNS 请求约 0.65 秒、一次完整查询约 1.4 秒，第一次查询按没有结果返回，之后命中缓存。改成闲置超时以前，单个请求按 300 毫秒总时长算，在这台机器上从来查不到。
 
+## 出站代理
+
+依据：桌面端 5.9.3 内置 CLI 2.165.0 的 `ProxyResolver`、请求拦截器 `HttpProxyInterceptor` 与地址层，以及桌面端主进程的地址层（`app/main/auth-liveness.js` 里打包的那份）；npm 上的 CLI 2.179.0 这几处相同。2026-10-31 读安装包确认。
+
+官方的做法：
+
+- 代理地址依次取 `HTTPS_PROXY`、`https_proxy`、`HTTP_PROXY`、`http_proxy` 第一个非空的，没写协议按 `http://`，只认 `http`、`https` 两种代理。官方另有配置文件（`~/.workbuddy/settings.json` 的 `http.proxy`）排在环境变量前、系统代理排在后，网关都不读。
+- `NO_PROXY`（没设再看 `no_proxy`）逗号分隔：`*` 全部直连，`example.com` 匹配它自己和子域，`.example.com` 只匹配子域，`*.example.com` 匹配它自己和子域，不认端口和网段；`localhost`、`127.0.0.1`、`::1` 总是直连。
+- https 目标经 `HttpsProxyAgent` 发 `CONNECT` 建隧道，在隧道里做 TLS。环境变量给的代理连不上就报错，不退回直连（只有桌面端传进来的系统代理，即 `WORKBUDDY_PROXY_SOURCE=system`，才会退回直连）。
+- 地址层照常工作（`shouldSkipAddressLayer` 目前恒返回不跳过）：走代理的对话、登录请求出错后照样换 HTTPDNS 地址和备用 IP，钉 IP 的请求一律直连（`applyPinnedAddress` 设 `proxy: false`，钉过 IP 的请求之后也强制直连）。
+- 拉模型目录的「备用 IP」一步只给直连的请求用（CLI 的 `applyConfigFallbackAddress`、主进程的 `prepareConfigFallbackAddressSlot` 都要求请求是直连的），走代理时没有这一步。
+- HTTPDNS 查询用不带代理的 `http.request`、`https.request`，直连。
+
+网关照做（`proxy.go`），不同之处：
+
+- 多认 `ALL_PROXY`、`all_proxy`（排在最后）和 `socks5`、`socks5h` 代理，两种 socks 都把域名交给代理解析（同 Go 标准库）。
+- 隧道自己建（`CONNECT` 只带 `Host` 和 `Proxy-Authorization`），隧道里照样用 uTLS 复刻官方的 ClientHello（见[没对齐或没实测的](#没对齐或没实测的)里的传输层），上游看到的指纹和直连一样，`proxy_test.go` 锁死。不用 Go 的 `http.Transport.Proxy`：设了它，https 请求改由标准库自己握手，指纹会丢。
+- 设了但用不了的值（协议不认、地址写错）启动时记一行 WARN、出站直连；官方是不提示直接直连。用上的代理也在启动时记一行，不带用户名密码。
+
+未实测：官方走代理时隧道里的握手和直连是否逐字节一致（按 `HttpsProxyAgent` 的实现应当一致）；网关走真实代理连上游。
+
 ## 设备与平台
 
 两个安装包都是 macOS（darwin-arm64）版，网关按 macOS 版官方客户端对齐（10-20 定）：
@@ -387,6 +408,7 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - 签到、领奖、接受任务、兑换、补签卡、新手礼包领取、试用：只用必然失败的参数试过，真正成功的那一次要上线后看日志；上报没有实测。
 - 官网网页的 UA 固定为一个 Mac Chrome 152 的值，`Sec-CH-UA` 由版本号推算；小程序 web-view 的 iOS、微信版本号是挑的近期值；网页登录码请求的头取自 Node 内置 fetch 的源码。这几样都没有抓包确认，见[官网网页的请求](#官网网页的请求)。
 - 备用入口与 HTTPDNS 的切换只在生产上验证了「查得到、钉 IP 能用」，主入口真正出错时的切换没有遇到过，靠离线测试覆盖。
+- 出站代理只做了离线测试（假的 CONNECT、SOCKS5 代理），没有经真实代理连过上游，见[出站代理](#出站代理)。
 - 任务中心的桌面端上报：各个事件的业务字段 1.1.2 起照 5.8.3 逐个核对过，依据是安装包里各事件的上报代码和给每个事件补字段的处理器（内置 CLI 的 baggage 处理器补 `codebuddy.session_id` 等，Buddy 处理器只在有 Buddy 时补 `buddyId`）。事件走哪条路决定多不多两个字段：
   - 界面的 `reportEvent`（模板点击、灵感案例的点击和 `playbook_cta_click`、换主题、专家召唤、定时任务、Buddy 应用、`query_recommend_prompt_send`）经渲染层上报服务 `AdapterTelemetryService` 和桌面适配器：`mode` 统一盖成 `LOCAL`（建任务、推荐类事件另有改写），没有 `buddyId`、`buddyName` 时补两个空串（`injectBuddyTelemetryContext`）；
   - 首轮回复后经 `wb.metrics` 报的（建任务、带模板建任务、做同款发送、专家使用、设计画布）、界面自动埋点（`data-track-id`，如召唤按钮、模板按钮的点击）和内置 CLI 的对话事件，不补这两个字段。

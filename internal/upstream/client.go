@@ -766,6 +766,9 @@ type Client struct {
 	PinIP func(ip string) http.RoundTripper
 	// addr 地址层的成功/失败记忆、在途换入口表与钉 IP 备忘，零值可用、并发安全。
 	addr addressState
+	// proxy 出站代理（proxy.go），New() 按环境变量装上，nil 直连。连接本身由 Transport 的拨号经代理建，
+	// 这里只用来判断拉模型目录时跳不跳过备用 IP。
+	proxy *outboundProxy
 
 	// refreshMu/refreshInFlight 同账号刷新单飞（按 UID 分桶）：同一时刻只放一个刷新在途，
 	// 其余调用等它的结果，见 RefreshToken。
@@ -777,7 +780,8 @@ type Client struct {
 // TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见 transport.go——吸收上游
 // kongjianguan 4 连击实测经验）。
 func New() *Client {
-	tr := newTransport()
+	px := envProxy()
+	tr := newTransport(px)
 	c := &Client{
 		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: tr},
 		ChatHTTP:      &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
@@ -793,6 +797,7 @@ func New() *Client {
 	dns := newHTTPDNSClient()
 	c.HTTPDNSQuery = dns.query
 	c.PinIP = newPinTransportFactory(tr)
+	c.proxy = px
 	c.SanitizeFingerprints.Store(true)
 	return c
 }
@@ -2352,8 +2357,9 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth) (map[string]ModelInfo, erro
 		at = next
 	}
 
-	// 试备用 IP：只在备用入口上；地址层不生效（钉 IP 函数为 nil）时跳过。
-	if c.PinIP == nil || len(failoverFallbackIPs) == 0 {
+	// 试备用 IP：只在备用入口上；地址层不生效（钉 IP 函数为 nil）时跳过；备用入口走代理时也跳过
+	// （照官方：这一步只给直连的请求用，见 proxy.go）。
+	if c.PinIP == nil || len(failoverFallbackIPs) == 0 || c.proxy.applies(failoverHost(failoverBackupOrigin)) {
 		return nil, lastErr
 	}
 	budget := nextBudget(at)

@@ -67,7 +67,8 @@ func newDialer() *net.Dialer {
 	}
 }
 
-// newTransport 构造共享出站 Transport（HTTP 与 ChatHTTP 同一实例，连接池不重复）。
+// newTransport 构造共享出站 Transport（HTTP 与 ChatHTTP 同一实例，连接池不重复）。px 是出站代理
+// （proxy.go，nil 直连）：代理藏在拨号里，Transport.Proxy 不设，见 proxy.go 开头。
 // 分两层防半死连接：
 //   - TLS 层：空 TLSNextProto 真正禁 h2（kongjianguan 二次修正的实证：ForceAttemptHTTP2=false
 //     只对自定义 Dial 生效，默认 TLS 经 ALPN 仍协商出 h2，半死 h2 流复用表现为
@@ -75,15 +76,15 @@ func newDialer() *net.Dialer {
 //     完成后无 h2 协议可用，连接退回 HTTP/1.1）。
 //   - TCP 层：DialContext 10s 建连上限 + 15s keepalive 探测，半开连接在建立期
 //     和复用期都能被快速识别（见 dialTimeout/dialKeepAlive 注释）。
-func newTransport() *http.Transport {
-	dialer := newDialer()
+func newTransport(px *outboundProxy) *http.Transport {
+	dial := proxyDial(px, newDialer())
 	return &http.Transport{
-		DialContext: dialer.DialContext,
+		DialContext: dial,
 		// DialTLSContext 把 https 握手交给 uTLS 伪装官方客户端的 ClientHello（见 tlsmimic.go）。
 		// 设了它，Transport 就不再自己做 TLS，所以 ALPN、h2 升级、TLSHandshakeTimeout 都由这层管：
 		// uTLS 的 ALPN 只给 http/1.1，自然退回 HTTP/1.1；握手超时在 dialTLSMimic 里自卡。开关关掉时
-		// 这层回落标准库 TLS，等价旧行为。
-		DialTLSContext: dialTLSMimic("", nil),
+		// 这层回落标准库 TLS，等价旧行为。走代理时 dial 先建好隧道，握手在隧道里做。
+		DialTLSContext: dialTLSMimic(dial, nil),
 		// 空 TLSNextProto（非 nil）真正禁 h2：见函数注释。必须 make 而非 nil——
 		// nil 表示「让标准库注入默认 h2 映射」（kongjianguan 实测：设
 		// ForceAttemptHTTP2=false 后日志仍报 h2 timeout，正是这个陷阱）。

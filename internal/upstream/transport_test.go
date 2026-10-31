@@ -24,7 +24,7 @@ func TestNewDialer(t *testing.T) {
 // TestNewTransport 出站 Transport 构造参数：真正禁 h2（非 nil 空 TLSNextProto）、
 // TLS/响应头超时、连接池容量与空闲回收。
 func TestNewTransport(t *testing.T) {
-	tr := newTransport()
+	tr := newTransport(nil)
 	if tr.DialContext == nil {
 		t.Error("DialContext 未接线")
 	}

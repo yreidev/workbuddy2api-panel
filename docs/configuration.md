@@ -214,6 +214,21 @@
 | `WB2A_PREFER_EXPIRING` / `WB2A_EXPIRING_SOON` | `pool.prefer_expiring`（布尔） / `pool.expiring_soon` |
 | `WB2A_SHUTDOWN_TIMEOUT` | 只能用环境变量设置：停机时等在途请求的上限，默认 `5s`，见[部署与运维](deployment.md#升级备份与停机) |
 
+### 出站代理
+
+发给官方的请求（对话、积分、任务、登录等）照官方客户端读代理环境变量，这几个变量没有对应的配置字段，改了要重启：
+
+| 变量 | 说明 |
+|---|---|
+| `HTTPS_PROXY`、`https_proxy`、`HTTP_PROXY`、`http_proxy`、`ALL_PROXY`、`all_proxy` | 代理地址，按这个顺序取第一个非空的。支持 `http://`、`https://`、`socks5://`、`socks5h://`，没写协议按 `http://`；要认证的把用户名密码写进地址，如 `http://user:pass@127.0.0.1:7890` |
+| `NO_PROXY`、`no_proxy` | 不走代理的域名，逗号分隔：`*` 全部直连，`example.com` 连同子域，`.example.com` 只管子域 |
+
+- 隧道里照样伪装官方客户端的 TLS 指纹（`upstream.tls_fingerprint`），走不走代理上游看到的握手都一样。
+- 本机地址（`localhost`、`127.0.0.1`、`::1`）总是直连。代理连不上时请求报错，不会退回直连。
+- 照官方，国内版主入口出错、改用 HTTPDNS 地址或备用 IP 重发的那几次请求直连，HTTPDNS 查询本身也直连，这些请求用的是服务器自己的 IP；拉模型目录走代理时不试备用 IP。依据见[对齐文档](official-client.md#出站代理)。
+- 启动日志会写一行用的是哪个代理；设了但用不了（协议不认、地址写错）时写一行 WARN 并直连。
+- 面板的版本检查和一键更新另走 Go 标准库的代理处理，同样认 `HTTPS_PROXY`、`NO_PROXY`。
+
 ## 热生效与写回规则
 
 - **立即生效**：`api_key`、`cooldown.soft_rate`、`features.*`、`logging.*`、`panel.*`、`pool.*`、`schedule.*`、`model_routes`、`models.hidden`。

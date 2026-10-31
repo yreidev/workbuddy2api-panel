@@ -175,6 +175,14 @@ func TestPinTransportKeepsHostAndSNI(t *testing.T) {
 	}
 }
 
+// TestPinTransportNilBase base 为 nil 时照样能建；拨号地址没端口时报错。
+func TestPinTransportNilBase(t *testing.T) {
+	tr := pinTransport(nil, "127.0.0.1")
+	if _, err := tr.DialContext(context.Background(), "tcp", "example.com"); err == nil {
+		t.Error("拨号地址没端口应报错")
+	}
+}
+
 // TestPinTransportFactoryCache 每个 IP 一个克隆的 Transport，重复取同一个。
 func TestPinTransportFactoryCache(t *testing.T) {
 	factory := newPinTransportFactory(&http.Transport{})
