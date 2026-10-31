@@ -44,7 +44,7 @@ import (
 // appVersion 网关版本，按语义化版本独立编号（不带 v）：有使用者看得到的改动就在推送前升版本号，
 // 并在 docs/CHANGELOG.md 顶部写好这一版的条目（测试会核对两者一致）；推送到 main 后 CI 自动打
 // vX.Y.Z 标签、建 Release、给镜像打版本标签。规则见 docs/releasing.md。
-const appVersion = "1.8.0"
+const appVersion = "1.9.0"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
