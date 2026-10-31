@@ -189,9 +189,10 @@ func TestRunShutdownTimeoutLog(t *testing.T) {
 	}
 }
 
-// Serve 返回非 ErrServerClosed（外部关掉监听）时 run 返回 http 错误。
+// Serve 返回非 ErrServerClosed（外部关掉监听）时 run 先走完停机（落盘）再返回 http 错误。
 func TestRunServeError(t *testing.T) {
 	setupRunGlobals(t)
+	logs := captureRunLogs(t)
 	cfg := newRunTestConfig(t)
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -205,6 +206,9 @@ func TestRunServeError(t *testing.T) {
 	res := awaitRun(t, out)
 	if res.restart || res.err == nil || !strings.Contains(res.err.Error(), "http:") {
 		t.Fatalf("结果 = %+v", res)
+	}
+	if text := logs.text(t); !strings.Contains(text, "监听出错，停止服务") {
+		t.Fatalf("run 返回前停机没走完: %s", text)
 	}
 }
 

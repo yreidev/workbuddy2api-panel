@@ -488,15 +488,19 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	// 优雅停机：收到 SIGTERM/SIGINT 后 /readyz 立刻转 503（编排系统据此摘流量），
 	// 先落盘，再 Shutdown——停止接新连接，等在途请求（含流式对话）结束，最多等 grace。
 	shutdownDone := make(chan struct{})
+	var listenFailed atomic.Bool
 	go func() {
 		defer close(shutdownDone)
 		<-ctx.Done()
 		server.SetDraining()
 		p.Flush() // 信号触发：先落盘再做优雅停机
 		sessPersist.Flush()
-		if restarting.Load() {
+		switch {
+		case restarting.Load():
 			log.Printf("准备重启：/readyz 已转 503，停止接新连接，最多等 %s 让在途请求结束", grace)
-		} else {
+		case listenFailed.Load():
+			log.Printf("监听出错，停止服务：/readyz 已转 503，最多等 %s 让在途请求结束", grace)
+		default:
 			log.Printf("收到停止信号：/readyz 已转 503，停止接新连接，最多等 %s 让在途请求结束", grace)
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
@@ -512,6 +516,11 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 
 	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		// 监听出错也走一遍停机，等最后一次落盘和在途请求做完再返回：直接返回的话，
+		// 停机协程会在进程退出、后面的 defer 收尾时还在写数据目录
+		listenFailed.Store(true)
+		requestRestart()
+		<-shutdownDone
 		return false, fmt.Errorf("http: %w", err)
 	}
 	// Shutdown 一开始 ListenAndServe 就会返回 ErrServerClosed，此时在途请求还没结束：
