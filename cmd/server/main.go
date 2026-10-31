@@ -88,6 +88,12 @@ func main() {
 	if err != nil {
 		fatalf("load config: %v", err)
 	}
+	// 出站 DNS：没有 /etc/resolv.conf 的环境里 Go 的解析器会退回问本机 53 端口，查什么都失败。
+	// 配了 dns_servers / WB2A_DNS 就让整个进程只问它们；发出任何请求之前换。
+	if len(cfg.DNSServers) > 0 {
+		upstream.UseDNSServers(cfg.DNSServers)
+		log.Printf("DNS: 出站解析只问 %v（不走系统解析器）", cfg.DNSServers)
+	}
 	// 数据目录里有面板装好的新版就 exec 过去（不返回）：放在读取账号、恢复状态之前，什么都还没动。
 	upd := launchUpdater(filepath.Dir(cfg.StateFile), appVersion)
 	sigCtx, stop := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -792,6 +798,9 @@ func restartRequiredFields(c *Config) []string {
 	out = append(out, "upstream.user_agent")
 	if c.Upstash.URL != "" || c.Upstash.Token != "" {
 		out = append(out, "upstash")
+	}
+	if len(c.DNSServers) > 0 {
+		out = append(out, "dns_servers")
 	}
 	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
 	out = append(out, "server.read_timeout")

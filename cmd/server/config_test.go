@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -927,5 +929,37 @@ func TestModelRoutes(t *testing.T) {
 		if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err=%v want %q", raw, err, want)
 		}
+	}
+}
+
+// TestDNSServers dns_servers：去空白与空项，IP、IP:端口、IPv6 都认；写域名或端口不对在加载时报错；
+// WB2A_DNS 逗号分隔覆盖。
+func TestDNSServers(t *testing.T) {
+	c, err := ParseConfig([]byte(`{"dns_servers":[" 223.5.5.5 ","","119.29.29.29:5353","2400:3200::1","[::1]:53"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"223.5.5.5", "119.29.29.29:5353", "2400:3200::1", "[::1]:53"}; !reflect.DeepEqual(c.DNSServers, want) {
+		t.Errorf("DNSServers=%v want %v", c.DNSServers, want)
+	}
+	for raw, want := range map[string]string{
+		`{"dns_servers":["dns.example.com"]}`: "不是 IP",
+		`{"dns_servers":["1.2.3.4:0"]}`:       "端口不对",
+		`{"dns_servers":["1.2.3.4:dns"]}`:     "端口不对",
+	} {
+		if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err=%v want %q", raw, err, want)
+		}
+	}
+	t.Setenv("WB2A_DNS", "223.5.5.5, 119.29.29.29")
+	c, err = Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"223.5.5.5", "119.29.29.29"}; !reflect.DeepEqual(c.DNSServers, want) {
+		t.Errorf("WB2A_DNS 覆盖后 DNSServers=%v want %v", c.DNSServers, want)
+	}
+	if !slices.Contains(restartRequiredFields(c), "dns_servers") {
+		t.Error("配了 dns_servers 时应列为需重启")
 	}
 }

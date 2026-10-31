@@ -33,6 +33,7 @@
 | `api_key` | 空 | 管理员密钥：能登面板、调全部接口，不受客户端密钥的上限约束；空 = 不鉴权（但建过[客户端密钥](api.md#客户端密钥)后 `/v1/*` 仍必须带密钥） |
 | `auth_dir` | `./auths` | 账号凭证目录 |
 | `state_file` | `./data/state.json` | 账号池状态文件；用量统计、请求归档、模型探测结果、客户端密钥（`api_keys.json`）、会话记录（`sessions.json`）都放在同一目录 |
+| `dns_servers` | 空 | 出站解析只问这几台 DNS 服务器，按顺序试，前一台连不上换下一台；每项是 IP 或 `IP:端口`（没写端口用 53），写域名会在启动时报错。空 = 用系统解析器。用在没有 `/etc/resolv.conf` 的环境（Android、精简容器），那时 Go 的解析器会退回问本机 53 端口，查什么都失败。换的是整个进程的解析器：对话、积分、网页请求，更新检查、Redis 镜像都跟着换；国内版的 HTTPDNS 和钉 IP 的连接本来就直接连 IP，不受影响。需重启 |
 | `server.read_timeout` | `300s` | 读取一个入站请求（含上传请求体）的总时长上限。大上下文请求经反代转发超时会报 400 `read body: i/o timeout`，可调大；`0` = 不限制 |
 | `panel.package_detail_limit` | `5` | 积分构成页单个账号默认展开的最早到期积分包数，其余折叠 |
 | `panel.update_check` | `true` | 每 6 小时从 GitHub 读取一次更新日志，有新版本时面板提醒，并可[一键更新](panel.md#一键更新)；`false` = 不联网检查，也不出现一键更新按钮。见[更新提醒](panel.md#更新提醒) |
@@ -196,6 +197,7 @@
 | `WB2A_API_KEY` | `api_key` |
 | `WB2A_AUTH_DIR` | `auth_dir` |
 | `WB2A_STATE_FILE` | `state_file` |
+| `WB2A_DNS` | `dns_servers`（逗号分隔，如 `223.5.5.5,119.29.29.29`） |
 | `WB2A_SOFT_RATE` / `WB2A_SOFT_RATE_MAX` | `cooldown.soft_rate` / `cooldown.soft_rate_max` |
 | `WB2A_TIMEOUT_SECONDS` | `upstream.timeout_seconds` |
 | `WB2A_HEADER_TIMEOUT_SECONDS` | `upstream.header_timeout_seconds` |
@@ -215,6 +217,6 @@
 ## 热生效与写回规则
 
 - **立即生效**：`api_key`、`cooldown.soft_rate`、`features.*`、`logging.*`、`panel.*`、`pool.*`、`schedule.*`、`model_routes`、`models.hidden`。
-- **需要重启**：`listen`、`auth_dir`、`state_file`、`server.read_timeout`、`upstream.*`、`prompt.*`、`upstash.*`、`session_sticky.*`。面板在保存后会提示具体是哪几项。
+- **需要重启**：`listen`、`auth_dir`、`state_file`、`dns_servers`、`server.read_timeout`、`upstream.*`、`prompt.*`、`upstash.*`、`session_sticky.*`。面板在保存后会提示具体是哪几项。
 - 面板写回配置时做**深合并 + 原子替换**：只更新表单里出现的键，你手写的其他键（包括程序不认识的键）原样保留。
 - 时长字段使用 Go 的写法，如 `600s`、`30m`、`2h`、`168h`。

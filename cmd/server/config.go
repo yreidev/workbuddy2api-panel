@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,10 @@ type Config struct {
 	APIKey    string `json:"api_key"`    // 空 = 不鉴权
 	AuthDir   string `json:"auth_dir"`   // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
+
+	// DNSServers 出站解析只问这几台 DNS 服务器（IP 或 IP:端口，没写端口用 53），按顺序试；空 = 系统解析器。
+	// 用在没有 /etc/resolv.conf 的环境（Android、精简容器）。WB2A_DNS（逗号分隔）覆盖。需重启。
+	DNSServers []string `json:"dns_servers,omitempty"`
 
 	// ModelRoutes 模型路由：客户端发来的模型名不在上游目录里时，从上往下找第一条 match
 	// 匹配的规则（只认 * 通配，不区分大小写），改用它的 target。三个对话入口都生效，
@@ -472,6 +477,9 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("WB2A_STATE_FILE"); v != "" {
 		c.StateFile = v
 	}
+	if v := os.Getenv("WB2A_DNS"); v != "" {
+		c.DNSServers = strings.Split(v, ",")
+	}
 	if v := os.Getenv("WB2A_SOFT_RATE"); v != "" {
 		c.Cooldown.SoftRate = v
 	}
@@ -729,6 +737,9 @@ func (c *Config) normalize() error {
 	if err := c.normalizeModelRoutes(); err != nil {
 		return err
 	}
+	if err := c.normalizeDNSServers(); err != nil {
+		return err
+	}
 	return c.normalizePrompt()
 }
 
@@ -745,6 +756,30 @@ func parseDurationOr(s, def string) (time.Duration, error) {
 		}
 	}
 	return time.ParseDuration(def)
+}
+
+// normalizeDNSServers 去掉两端空白和空项，每项必须是 IP 或 IP:端口：写域名的话解析它又得先有 DNS。
+func (c *Config) normalizeDNSServers() error {
+	out := c.DNSServers[:0]
+	for _, s := range c.DNSServers {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		host := s
+		if h, port, err := net.SplitHostPort(s); err == nil {
+			if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+				return fmt.Errorf("dns_servers: %q 的端口不对", s)
+			}
+			host = h
+		}
+		if net.ParseIP(host) == nil {
+			return fmt.Errorf("dns_servers: %q 不是 IP 或 IP:端口", s)
+		}
+		out = append(out, s)
+	}
+	c.DNSServers = out
+	return nil
 }
 
 func (c *Config) normalizeModelRoutes() error {
