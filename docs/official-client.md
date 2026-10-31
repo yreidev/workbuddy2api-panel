@@ -350,12 +350,14 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 | `14015` | `UsageLimitLicenseExpired` | 归授权过期 | 账号软冷却 |
 | `14016` `14017` | `UsageLimitEnterpriseNotActivated`、`UsageLimitUserNotActivated` | 归未激活 | 账号软冷却 |
 | `10105` | `ConversationLimitExceeded` | 归同时进行的会话太多 | 账号冷却约 60 秒，当场换号 |
+| `6020` | 桌面端容量排队的 `WAITING` | 在原来的号上排队，到号后原样重发 | 不罚账号、不换号，在这个号上照官方排队，到号原样重发；等不到回 503 + `upstream_busy`，见[容量排队](#容量排队) |
 | `6021` | 桌面端容量排队的 `FULL` | 队列满，只提示，不自动重发 | 不罚账号、不换号，回 503 + `upstream_busy` |
+| `6022` | 桌面端容量排队的 `USER_LIMIT` | 这个用户排队的数量到上限，只提示，不自动重发 | 不罚账号，换下一个号；都回 6022 时回 503 + `upstream_busy` |
 | `11115` | `ContextTooLong` | 归输入超长 | 不罚账号、不换号，原文返回；文案照 `isInputLengthError` 的词表与正则认 |
 
 `14022`（`UsageLimitExceededDepartment`，部门额度用完）和 `14023`（企业资源包用完）桌面端 5.9.3 内置的 CLI 2.165.0 还没有，npm 上的官方 CLI（`@tencent-ai/codebuddy-code` 2.179.0 读包）已列进 `isQuotaExhaustedError` 的码集合。网关和别的额度码一样冷却到次日 04:00，余额刷新发现恢复就提前解冻；部门额度、企业资源包实际什么时候恢复未确认，没见过实际响应。
 
-容量排队的码不在内置 CLI 里，在桌面端主进程（`app/main/conversations.js` 的 `CapacityQueueManager`，国内版 5.9.3 读包）：`6020` 排队中，官方按 `retry_after` 轮询 `POST /v2/chat/queue/status`（请求体 `{model}`，头带 `X-Conversation-Request-ID` 与 `X-Conversation-ID`），到号后重发原请求；`6021` 队列满；`6022` 用户上限。网关只处理 `6021`（上游 linguo2625469 `f14f374` 生产见过 `429 {"code":6021,"msg":"queue.full.title"}`，以前落进通用 429，逐号软冷却，2 秒内整池健康号全被冷却）；`6020`、`6022` 没见过实际响应，未处理。
+容量排队的三个码不在内置 CLI 里，在桌面端，网关怎么排见[容量排队](#容量排队)。`6021` 上游 linguo2625469 `f14f374` 生产见过 `429 {"code":6021,"msg":"queue.full.title"}`（以前落进通用 429，逐号软冷却，2 秒内整池健康号全被冷却）；`6020`、`6022` 没见过实际响应。
 
 `14002`（`ConversationChatTooMany`）官方只在统计里归成额度用完，既不算额度用完也不算临时限流，含义没确认，网关仍按状态码处理；`15001`（联网搜索限流）网关用不到。
 
@@ -370,6 +372,28 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - 该号的凭证在导入前就带着 `HTTP 403 (account restricted)` 和 `restrictedUntil`（换算后是导入后几分钟），可见是账号在导出时已被风控，不是网关或导入造成的。同一时段其余账号对话全部 200，网关侧的请求形状没有问题。
 
 结论：这类号的 token 是有效的，重新登录一般解不开，要向官方申诉。网关 1.5.0 起把禁用原因从「`re-login required`」改成提示申诉。同类项目 workbuddy2api-hub 的 #629 反馈，10-23 下午起国际版号成批被这样限制，国内版不受影响；网关的风控波暂停照它的做法：15 分钟内同一个域有 2 个号被限，就把该域其余的号暂停 30 分钟。
+
+### 容量排队
+
+上游这一路满了时，对话请求回业务码 `6020` 和排位，客户端在原来的号上排队，到号了原样重发。依据是国内版桌面端 5.9.3 安装包（2026-10-31 读包）：渲染层 `app/renderer/assets/workbuddy-provider-*.js` 的 `QueuePollingManager` 管排队（受 `featureToggles.QueueBanner` 开关控制，没关就开），查询和取消交给主进程 `app/main/server.js` 的 `queue:getStatus`、`queue:cancel` 去发。
+
+- 码：`6020` `WAITING` 排进队了；`6021` `FULL` 队列满，只提示；`6022` `USER_LIMIT` 这个用户排队的数量到上限，只提示。
+- 6020 回应里的排位 `queue_position` 和 `retry_after`（秒）：渲染层直接从错误数据里读，主进程先取 `data` 再看 `data.data`，网关按顶层、`data`、`data.data` 依次找。
+- 查询：`POST {对话入口}/v2/chat/queue/status`，请求体 `{"model":模型}`，头是 `Authorization: Bearer <token>`、`Content-Type: application/json`、`X-Conversation-Request-ID`（排进队的那一轮），有会话 id 时加 `X-Conversation-ID`。主进程用 axios 1.16.1 的默认实例发，没有官方请求框架的那些头，只多 axios 自带的 `Accept: application/json, text/plain, */*`、`Accept-Encoding: gzip, compress, deflate, br` 和 `User-Agent: axios/1.16.1`；超时 15 秒。回 `code 0` 且带 `data` 时看 `data.status`：`waiting`（带 `queue_position`）接着等，`ready` 到号，`expired` 过期；`code` 不是 0 或没有 `data` 都当过期，说明取 `msg`，没有就是 `Unknown error`。
+- 取消：`POST {对话入口}/v2/chat/queue/cancel`，请求体同上，头不带 `X-Conversation-ID`。只在使用者点取消时发，过期、超时都不发。
+- 节奏：第一次在 `retry_after` 秒后查（没带按 5 秒）；之后按排位隔一会儿查一次：前 5 名 2 秒、前 20 名 5 秒、前 50 名 10 秒、再往后 15 秒。`waiting` 用这次回的排位，没给按 50；查询出错（HTTP 出错、超时）按已知的排位再查。合计等满 20 分钟还没到号就停，提示超时。
+- 到号后原样重发：同一份提示词、同一份 `_meta`。
+
+主进程 `app/main/conversations.js` 另有一套 `CapacityQueueManager`，给本地会话经 ACP 转给 CLI 的那条路和云端会话用，节奏略有不同（前 10 名 2 秒、前 50 名 5 秒、再往后 10 秒）；内置 CLI 里没找到它转过去的处理。网关照的是渲染层那一套。
+
+网关（`internal/upstream/capqueue.go`、`internal/server/capqueue.go`）照上面的请求形状和节奏做，三个对话入口都走这条路：
+
+- `6020`：不罚号、不换号，在这个号上排队，到号后用同一个号原样重发（同一份请求体、同一组会话头），重发又回 `6020` 就接着排。排队期间不给客户端发数据，这个号的在途名额一直占着。
+- 等多久：官方等 20 分钟，网关改用 `pool.in_flight_wait`（默认 30 秒，号都满时排队也用这个上限，两边各算各的），从第一次 `6020` 起算。等满还没到号，或者客户端断开了，网关先取消排队（等于替使用者点了取消），再回 503 + `upstream_busy`、带上游原文；上游说过期时同官方不取消，直接回 503。`in_flight_wait` 设成 `0` 时不排队，取消后直接回 503。
+- `6021`：不罚号、不换号，直接回 503 + `upstream_busy`。
+- `6022`：按号的上限，换别的号还能排，所以不罚号、换下一个号；都回 `6022` 时回 503 + `upstream_busy`。
+
+没确认的见[没对齐或没实测的](#没对齐或没实测的)。
 
 ## 生产实测
 
@@ -432,6 +456,10 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - 对话请求里官方有、网关没发的（2026-10-28 对 5.9.3 时发现，5.8.3 里就有），同类项目的做法见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)。其中 OpenAI SDK 的 8 个 `X-Stainless-*` 与 `Accept: application/json` 2026-10-28 已补上（读了两域 mac 包核对 Electron，见[几类请求](#几类请求)里的对话）；另外两个 2026-10-28 也处理了：
   - `X-Device-Token`：2026-10-28 起对话也带了，但只在使用者填了 `device_token`（账号 / config / 文件）时——网关跑在 Linux 上，图灵盾 SDK 只支持 macOS 和 Windows，自己做不出真令牌，没填就不发（对应官方「令牌和错误码都没有时都不发」，不造 `X-Device-Token-Error`）。1.1.2 以前对话带过配置里的 `device_token`，1.1.2 按当时「官方对话不带」的错误结论去掉，现已恢复并修正。令牌能不能多个号共用、填进去的多久失效，仍没实测（未确认）；
   - `X-Moderation-Type`：2026-10-28 起专家对话按该专家是不是云端（`is_cloud===1`）或付费（`pay_detail` 的 `pay_mode` / `payMode`，回落 `need_pay===1`）决定带不带 `["protected"]`（`MarketExpert.Protected`，对齐官方 `shouldProtectSession`；官方还判「启用的技能里有云端技能」，网关的专家对话不加载技能，这条恒假）。任务中心的专家（`expert_5`、`expert_use_*`、`WorkBuddy_Valorant`）从市场列表拿到这些字段就按实发；列表里没查到、用占位专家时默认不带。这几个任务专家实际是不是云端 / 付费，没在真实账号上核对（未确认）。
+- 容量排队（`6020`、`6022`）照国内版 5.9.3 读包实现，没见过实际响应，见[容量排队](#容量排队)：
+  - 只认 HTTP 出错回应里的 `6020`；流开了以后才来的错误帧里要是带 `6020`，照普通错误处理（官方渲染层是从错误数据里读，上游会用哪种形态回，未确认）；
+  - 重发沿用排进队那一轮的 `X-Conversation-Request-ID`。官方带原样 `_meta` 重发，CLI 会不会给重发的请求换新的请求 id，未确认；
+  - 国际版安装包的排队代码没读过（等对齐国际版 5.9.4 时核实），国际版号照国内版的形状排。
 - 错误码：生产日志（10-19 至 10-23）只见过 `6004`、`14003`、`11101`、`11128`、`11140`、`11158`，其余业务码照官方枚举归类，没有真遇到过；`14002` 的含义没确认，见[错误码](#错误码)。`11140` 只见过 `request illegal` 一种文案（账号级风控，见上），限流那种文案没遇到过；`11158` 是个人免费号调 GPT、Gemini、Grok 时回「该用户类型不能用这个模型」（`model [...] is not allowed for user type [personal_free_user]`），官方客户端里没有这个码；网关照上游 linguo2625469 `6ee5491` 和 `11102` 一样处理：这个号的这个模型记负缓存、换号，可选的号都没权限时回 400 `model_unavailable`（以前按其他客户端错误换号，所有号都没权限时报 503 没有可用账号）。
 - 小程序的埋点事件（开学季活动）照的是一次 Windows 版 PC 微信的抓包，系统写 `windows`、`machineId` 是抓包里的固定值；小程序 web-view 的 UA 却是 iPhone 微信，开学季接口和埋点请求从 1.1.2 起也用这个 UA（以前没设，发的是 Go 默认的 `Go-http-client/1.1`）。没有小程序的包、也没有 PC 微信的 UA 抓包可对照，系统和 UA 两边都没改成一致，见[官网网页的请求](#官网网页的请求)。
 

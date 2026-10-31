@@ -74,6 +74,11 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	case ErrUpstreamBusy:
 		// 6021 容量排队满：措辞明确「不是账号问题、换号无意义」，指引客户端等待后重试。
 		return "upstream capacity is full (queue.full); this is a channel-level issue, not an account problem; retry after a short wait"
+	case ErrQueueWaiting:
+		// 6020：网关已经在号上排过队了（等满 pool.in_flight_wait、上游说排队过期，或客户端断开），才会回到客户端。
+		return "upstream queued this request for capacity (6020) and no slot came up in time; this is not an account problem; retry after a short wait"
+	case ErrQueueUserLimit:
+		return "this upstream account has too many requests waiting in the capacity queue (6022); the gateway tried other accounts; retry after a short wait"
 	case ErrModelBlocked:
 		return "upstream has no such model on this backend; switch model or retry on another account"
 	case ErrContentBlocked:

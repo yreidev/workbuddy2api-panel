@@ -1063,6 +1063,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
 		attemptStarted := time.Now()
 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
+		if isQueueWaiting(terr) {
+			// 6020 排进容量队列了：在这个号上照官方排队，到号了原样重发；不等了才拿着最后那次 6020
+			// 往下走，由下面回 503（见 capqueue.go）。
+			a := h.capacityQueue(r.Context(), acct, body, clientIP, chatMeta, bareModel,
+				chatAttempt{rc: rc, status: status, body: respBody, err: terr, started: attemptStarted})
+			rc, status, respBody, terr, attemptStarted = a.rc, a.status, a.body, a.err, a.started
+		}
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
 		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支
 		// （terr 为 nil 但 status>=400，如 ErrNone 兜底）回落本地 Classify，双保险。
@@ -1210,6 +1217,21 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					h.hintOf(upstream.ErrUpstreamBusy, string(respBody), bareModel, reqHasImage, uerr))
 				st.status = http.StatusServiceUnavailable
 				st.outcome = reqlog.OutcomeHTTPError
+				return
+			}
+			// 6020 排队没等到号（等满上限、上游说过期，或客户端断开）：同 6021，不罚号不换号，回 503 带上游原文。
+			// 换号也是排进同一条队列，从头再排。
+			if kind == upstream.ErrQueueWaiting {
+				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+				fail(acct.UID)
+				// 6020 是从这份回应体里认出来的，原文不会是空的。
+				writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "upstream_busy", string(respBody),
+					h.hintOf(upstream.ErrQueueWaiting, string(respBody), bareModel, reqHasImage, uerr))
+				st.status = http.StatusServiceUnavailable
+				st.outcome = reqlog.OutcomeHTTPError
+				if r.Context().Err() != nil {
+					st.outcome = reqlog.OutcomeInterrupted
+				}
 				return
 			}
 			// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
@@ -1436,6 +1458,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 可重试语义——上游原文（下方统一透传）含 requestId，客户端按 SDK 退避重试即可。
 			code = "upstream_busy"
 			msg = "upstream capacity is full (queue.full); retry after a short wait"
+		case upstream.ErrQueueUserLimit:
+			// 6022 每个号排着队的请求都到上限了：同样是上游忙，不是网关没号。上游原文下方统一透传。
+			code = "upstream_busy"
 		case upstream.ErrModelBlocked:
 			// 11102「该后端无此模型」：上游原文（下方统一透传）已经写清了原因，但
 			// code 此前停在默认的 no_healthy_account —— 那是"服务端过载"的语义，
@@ -1665,7 +1690,7 @@ func isUpstreamTimeout(err error, clientGone bool) bool {
 // 此处不再按原始 status 二次判断。仅在 chatCompletions 轮转循环内调用：内容拦截
 // 会立即 400 返回，其余种类 continue 换号（continue 前由 rotateBackoff 退避）。
 //
-// 十条路径，各司其职：
+// 各条路径，各司其职：
 //   - ErrHardCredit → CooldownUntilTomorrow4AM：即时硬冷却到次日 04:00（等签到恢复）。
 //   - ErrSoftRate → 优先对齐上游重置墙钟（带「将在 … 重置」时 6004 走模型级豁免、
 //     非 6004 走账号级，均不指数堆加）；无重置时间才走有界退避。冷却时长优先采信
@@ -1685,6 +1710,8 @@ func isUpstreamTimeout(err error, clientGone bool) bool {
 //     换任何号都会得到相同的解析错误）。零动作（不冷却/不熔断/不 NoteError、
 //     不喂连败），chatCompletions 已直接透传原文返回不轮转。
 //   - ErrModelBlocked → BlockModelBackoff：(账号, 模型) 11102/11158 负缓存避让。
+//   - ErrUpstreamBusy（6021）、ErrQueueWaiting（6020）、ErrQueueUserLimit（6022）→ 上游这一路忙，
+//     零动作；6021 和没排到号的 6020 回 503 不轮转，6022 换号。
 //   - ErrServer → NoteError：喂单一连续失败计数器 fails + 累计错误 errTotal，
 //     达到 breakerThreshold 触发熔断（指数退避）。
 //   - 其他（default：ErrClient/ErrNone）→ 只换号不罚（防雪崩），不喂熔断；ErrClient
@@ -1810,6 +1837,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 6021 容量排队满：账号余额健康、未限流、session 未死，换号也撞同一堵墙。
 		// 零动作（不冷却/不熔断/不 NoteError/不喂连败，同 ErrContentBlocked 待遇）；
 		// 非流式已 fail-fast 503 透传原文、终止轮转，流式 error 帧走到这里也不罚号。
+	case upstream.ErrQueueWaiting, upstream.ErrQueueUserLimit:
+		// 6020 排进容量队列（在号上排过队、没等到才会走到这里）、6022 这个号排队的数量到上限：都是上游
+		// 这一路忙，账号本身健康。零动作（不冷却/不熔断/不喂连败）；6022 换号由轮转做。
 	case upstream.ErrModelBlocked:
 		// 11102「该后端无此模型」/11158「该账号类型无此模型权限」：
 		// (账号, 模型) 负缓存避让。复用 modelCooldowns 机制（与 6004 同域），

@@ -115,6 +115,10 @@ func TestClassify(t *testing.T) {
 		{500, `{"code":"6021","msg":"queue.full.title"}`, ErrUpstreamBusy},
 		{429, `queue.full.title`, ErrSoftRate},
 		{429, `{"requestId":"6021","msg":"rate limit"}`, ErrSoftRate},
+		// 6020 排进容量队列、6022 排队数到上限：各自一类，不落进通用 429 的软冷却。
+		{429, `{"code":6020,"msg":"queue.waiting","data":{"queue_position":3,"retry_after":5}}`, ErrQueueWaiting},
+		{200, `{"error":{"data":{"code":"6020"}}}`, ErrQueueWaiting},
+		{429, `{"code":6022,"msg":"queue.user_limit"}`, ErrQueueUserLimit},
 		// WAF 403（P0-1）：403 + 无业务信封（无 "code":/"msg": 字段）→ ErrWafBlock。
 		// 空体 / HTML 拦截页 / 纯文本 / 非信封 JSON 均命中。
 		{403, ``, ErrWafBlock},

@@ -24,6 +24,9 @@ func TestGatewayHintKindTable(t *testing.T) {
 		{ErrHardCredit, "account credits exhausted at upstream; waiting for daily check-in to restore"},
 		{ErrModelBlocked, "upstream has no such model on this backend; switch model or retry on another account"},
 		{ErrContentBlocked, "request content was rejected by content policy; adjust the prompt and retry"},
+		{ErrUpstreamBusy, "upstream capacity is full (queue.full); this is a channel-level issue, not an account problem; retry after a short wait"},
+		{ErrQueueWaiting, "upstream queued this request for capacity (6020) and no slot came up in time; this is not an account problem; retry after a short wait"},
+		{ErrQueueUserLimit, "this upstream account has too many requests waiting in the capacity queue (6022); the gateway tried other accounts; retry after a short wait"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind.String(), func(t *testing.T) {

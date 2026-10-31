@@ -21,10 +21,12 @@ const (
 	codeCraftRateRPM   = 6006 // 每分钟请求
 	codeCraftRateRPD   = 6008 // CraftRateRPDLimit，限额段的最后一个
 
-	// 容量排队（桌面端 app/main/conversations.js 的 CapacityQueueManager：6020 WAITING 排队中，
-	// 轮询 /v2/chat/queue/status 到号后重发；6021 FULL 队列满，只提示不重试；6022 USER_LIMIT）。
-	// 网关只认 6021；6020、6022 没见过实际响应，未处理。
-	codeCapacityQueueFull = 6021
+	// 容量排队（桌面端 5.9.3 渲染层的 QueuePollingManager 与主进程 conversations.js 的 CapacityQueueManager）：
+	// 6020 WAITING 排进队了，查 /v2/chat/queue/status 到号后原样重发（capqueue.go）；6021 FULL 队列满，
+	// 只提示不重试；6022 USER_LIMIT 这个用户排队的数量到上限，只提示不重试。
+	codeCapacityQueueWaiting   = 6020
+	codeCapacityQueueFull      = 6021
+	codeCapacityQueueUserLimit = 6022
 
 	codeUsageLimitExceeded      = 14001 // UsageLimitExceeded
 	codeRateLimitError          = 14003 // RateLimitError：上游文案「模型繁忙，请换模型或稍后重试」
@@ -128,6 +130,10 @@ func codeKind(code int) ErrKind {
 		return ErrSoftRate
 	case code == codeCapacityQueueFull:
 		return ErrUpstreamBusy
+	case code == codeCapacityQueueWaiting:
+		return ErrQueueWaiting
+	case code == codeCapacityQueueUserLimit:
+		return ErrQueueUserLimit
 	}
 	return ErrNone
 }

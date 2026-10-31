@@ -48,6 +48,8 @@ const (
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrUpstreamBusy                  // 6021 容量排队满（渠道级，不是账号问题）→ 不罚号、不轮转，末端 503 + upstream_busy
+	ErrQueueWaiting                  // 6020 排进容量队列了 → 不罚号、不换号，在这个号上排队到号后重发；不等了才回 503
+	ErrQueueUserLimit                // 6022 这个号排队的数量到上限 → 不罚号，换号
 	ErrClient                        // 其他 4xx / 业务错误
 )
 
@@ -77,6 +79,10 @@ func (k ErrKind) String() string {
 		return "image_invalid"
 	case ErrUpstreamBusy:
 		return "upstream_busy"
+	case ErrQueueWaiting:
+		return "queue_waiting"
+	case ErrQueueUserLimit:
+		return "queue_user_limit"
 	case ErrAccountFault:
 		return "account_fault"
 	case ErrClient:
@@ -507,8 +513,8 @@ func ParseRateReset(body string) (time.Time, bool) {
 //  4. 业务码（bizcode.go，照官方客户端）—— 额度用完（14001/14012/14013/14014/14018/
 //     14019/14022/14023）归 ErrHardCredit（issue #175 起），授权过期/未激活（14015/14016/14017）归
 //     ErrAccountFault，按模型限额（6000–6008）、模型繁忙（14003）、会话太多（10105）归
-//     ErrSoftRate，容量排队满（6021）归 ErrUpstreamBusy。只认结构化业务码，不靠可能跨计费/
-//     限流两界的文案猜测。
+//     ErrSoftRate，容量排队满（6021）归 ErrUpstreamBusy，排进队了（6020）归 ErrQueueWaiting，
+//     排队数到上限（6022）归 ErrQueueUserLimit。只认结构化业务码，不靠可能跨计费/限流两界的文案猜测。
 //  5. status==429 —— 限流状态码兜底（先于 hardMarkers）：429 body 高频携带
 //     "quota exceeded"/"额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把
 //     限流误归 ErrHardCredit 硬冷却到次日 04:00，白扔号约 12h。状态码是比关键词
@@ -565,6 +571,7 @@ func Classify(status int, body string) ErrKind {
 	//     冷却只落在这个模型还是整个号，由 handler.applyErrorPolicy 按业务码细分。
 	//   - 容量排队满（6021）→ 上游忙：整条渠道满了，换哪个号都一样，不罚号不换号。以前落进
 	//     通用 429 逐号软冷却，上游 linguo2625469 2026-10-15 实测 2 秒内整池健康号全被冷却。
+	//   - 排进队了（6020）、排队数到上限（6022）→ 各自一类，不落进通用 429 的软冷却。
 	if k := codeKind(BizCode(body)); k != ErrNone {
 		return k
 	}

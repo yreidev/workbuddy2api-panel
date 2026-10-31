@@ -150,6 +150,8 @@ func TestFrameKindBizCodes(t *testing.T) {
 		`{"error":{"message":"quota","code":14023}}`: ErrHardCredit,
 		`{"error":{"message":"x","code":14016}}`:     ErrAccountFault,
 		`{"error":{"message":"x","code":6021}}`:      ErrUpstreamBusy,
+		`{"error":{"message":"x","code":6020}}`:      ErrQueueWaiting,
+		`{"error":{"message":"x","code":6022}}`:      ErrQueueUserLimit,
 	}
 	for payload, want := range cases {
 		if got := FrameKind(payload); got != want {
