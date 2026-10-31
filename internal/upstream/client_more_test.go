@@ -63,6 +63,8 @@ func TestIsModelBlocked(t *testing.T) {
 		{"窄短语命中", 400, `{"error":{"message":"Service Info Not Found"}}`, true},
 		{"msg 窄短语命中", 404, `{"code":0,"msg":"service info not found"}`, true},
 		{"其他文案不命中", 400, `{"msg":"model not found"}`, false},
+		{"11158 无权限", 400, `{"code":11158,"msg":"model [gpt-5.6-sol] is not allowed for user type [personal_free_user]"}`, true},
+		{"11158 只有文案", 400, `{"msg":"model is not allowed for user type"}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,6 +72,17 @@ func TestIsModelBlocked(t *testing.T) {
 				t.Errorf("IsModelBlocked(%d, %q) = %v，应为 %v", tc.status, tc.body, got, tc.want)
 			}
 		})
+	}
+
+	// 负缓存原因：11158（码或文案）记成无权限，其余沿用 11102。
+	for body, want := range map[string]string{
+		`{"code":11158,"msg":"x"}`:                                   ModelForbiddenReason,
+		`{"error":{"message":"model is not allowed for user type"}}`: ModelForbiddenReason,
+		`{"code":11102,"msg":"service info not found"}`:              ModelBlockReason,
+	} {
+		if got := ModelBlockReasonFor(body); got != want {
+			t.Errorf("ModelBlockReasonFor(%s) = %q，应为 %q", body, got, want)
+		}
 	}
 
 	if SoftRateResetLoc().String() != "UTC+8" {

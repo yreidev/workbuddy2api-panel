@@ -311,14 +311,15 @@ func TestModelRateLimitAuditDoesNotAffectRouting(t *testing.T) {
 	}
 }
 
-// 11102 与 6004 共用台账但必须输出不同 kind。
+// 11102、11158 与 6004 共用台账但必须输出不同 kind：面板按 kind 显示「模型不可用」还是「限流」。
 func TestRateLimitedModelKindModelUnavailable(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})
 	p.BlockModelBackoff("u1", "missing-model", "11102 model unavailable")
+	p.BlockModelBackoff("u1", "gpt-5.6-sol", "11158 model not allowed for account type")
 	st, _ := p.Status("u1")
-	if len(st.RateLimitedModels) != 1 || st.RateLimitedModels[0].Kind != "model_unavailable" {
-		t.Fatalf("rows=%+v want model_unavailable", st.RateLimitedModels)
+	if len(st.RateLimitedModels) != 2 || st.RateLimitedModels[0].Kind != "model_unavailable" || st.RateLimitedModels[1].Kind != "model_unavailable" {
+		t.Fatalf("rows=%+v want two model_unavailable", st.RateLimitedModels)
 	}
 }
 
