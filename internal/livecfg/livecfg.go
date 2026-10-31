@@ -13,6 +13,7 @@
 package livecfg
 
 import (
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -26,6 +27,32 @@ type Snapshot struct {
 	CrossRealm           bool          // 跨域负载均衡：不带前缀的模型名在国内版 + 国际版合池选号
 	UpdateCheck          bool          // 面板定时检查新版本（读 GitHub 上的更新日志）
 	ModelRoutes          []ModelRoute  // 模型路由规则：按顺序匹配，只改写模型目录里没有的名字
+	// HiddenModels 不对外的模型，键是带域前缀的全名（cn:x / global:x），见 NormalizeHiddenModels；
+	// nil = 不隐藏。只读共享，不得修改。
+	HiddenModels map[string]struct{}
+}
+
+// NormalizeHiddenModels 把 models.hidden 的条目归一成带域前缀的全名集合：带 cn: / global:
+// 前缀的只藏那个域，裸名两个域都藏。精确匹配、区分大小写（前缀规则同 server.resolveModel：
+// 第一个冒号前恰好是 cn 或 global 才算前缀）。没有有效条目时返回 nil。
+func NormalizeHiddenModels(hidden []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(hidden)*2)
+	for _, m := range hidden {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if prefix, bare, ok := strings.Cut(m, ":"); ok && (prefix == "cn" || prefix == "global") {
+			out[prefix+":"+bare] = struct{}{}
+		} else {
+			out["cn:"+m] = struct{}{}
+			out["global:"+m] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ModelRoute 一条模型路由：客户端发来的模型名匹配 Match（只认 * 通配，不区分大小写）时改用 Target。

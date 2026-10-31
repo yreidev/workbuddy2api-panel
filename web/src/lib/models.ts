@@ -83,3 +83,37 @@ export function probeFor(probes: Record<string, Probe>, id: string): Probe | und
   const key = Object.keys(probes).find((k) => k.endsWith(':' + id))
   return key ? probes[key] : undefined
 }
+
+/** 读配置里的 models.hidden：缺失或形状不对 → 空表，非字符串的项丢掉 */
+export function hiddenFromConfig(cfg: Record<string, unknown>): string[] {
+  const models = cfg.models
+  if (!models || typeof models !== 'object') return []
+  const raw = (models as Record<string, unknown>).hidden
+  return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
+}
+
+/** models.hidden 归一成带域前缀的全名集合，口径同网关 livecfg.NormalizeHiddenModels：
+ *  带 cn: / global: 前缀的只藏那个域，裸名两个域都藏；精确匹配、区分大小写 */
+export function hiddenModelSet(hidden: string[]): Set<string> {
+  const out = new Set<string>()
+  for (const raw of hidden) {
+    const m = raw.trim()
+    if (!m) continue
+    const i = m.indexOf(':')
+    const prefix = i < 0 ? '' : m.slice(0, i)
+    if (prefix === 'cn' || prefix === 'global') {
+      out.add(m)
+    } else {
+      out.add('cn:' + m)
+      out.add('global:' + m)
+    }
+  }
+  return out
+}
+
+/** 往隐藏名单里加一项：去两端空白，空的不加，已有的（原样相同）不重复加 */
+export function addHiddenModel(list: string[], raw: string): string[] {
+  const m = raw.trim()
+  if (!m || list.includes(m)) return list
+  return [...list, m]
+}

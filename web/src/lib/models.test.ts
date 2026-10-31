@@ -5,7 +5,9 @@
 // 条件查询部分从上游 internal/panel/frontend_test.go 的 TestAppJSModelFilter 平移（期望值原样保留；
 // 上游能力是单选，这里是多选，单个能力的结果一致）。
 import { describe, expect, it } from 'vitest'
-import { EMPTY_MODEL_FILTER, filterModels, probeFor, rateValue, type ModelFilter, type ModelSort } from './models'
+import {
+  addHiddenModel, EMPTY_MODEL_FILTER, filterModels, hiddenFromConfig, hiddenModelSet, probeFor, rateValue, type ModelFilter, type ModelSort,
+} from './models'
 import type { Model } from './types'
 
 const list: Model[] = [
@@ -68,5 +70,24 @@ describe('models', () => {
     expect(probeFor(probes, 'gpt-5')?.measured).toBe(2)
     expect(probeFor({ 'global:glm-5.2': { measured: 3 } }, 'cn:glm-5.2')).toBeUndefined()
     expect(probeFor(probes, 'cn:hunyuan')).toBeUndefined()
+  })
+})
+
+describe('models.hidden', () => {
+  it('读配置：缺失、形状不对都当空表，非字符串的项丢掉', () => {
+    expect(hiddenFromConfig({})).toEqual([])
+    expect(hiddenFromConfig({ models: null })).toEqual([])
+    expect(hiddenFromConfig({ models: { hidden: 'x' } })).toEqual([])
+    expect(hiddenFromConfig({ models: { hidden: ['a', 1, null, 'cn:b'] } })).toEqual(['a', 'cn:b'])
+  })
+  it('归一：带前缀只藏那个域，裸名两个域都藏，别的冒号前缀算名字的一部分', () => {
+    expect([...hiddenModelSet([' glm-5 ', 'cn:deepseek-v4', 'global:gpt-5', 'vendor:x', ' '])].sort()).toEqual([
+      'cn:deepseek-v4', 'cn:glm-5', 'cn:vendor:x', 'global:glm-5', 'global:gpt-5', 'global:vendor:x',
+    ])
+  })
+  it('添加：去空白、不重复', () => {
+    expect(addHiddenModel(['a'], ' b ')).toEqual(['a', 'b'])
+    expect(addHiddenModel(['a'], 'a')).toEqual(['a'])
+    expect(addHiddenModel(['a'], '  ')).toEqual(['a'])
   })
 })

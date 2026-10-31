@@ -419,7 +419,8 @@ func TestSaveConfig(t *testing.T) {
   "pool": {"cross_realm": true, "credit_floor": 9, "expiring_soon": "30m"},
   "panel": {"update_check": true},
   "upstream": {"timeout_seconds": 45, "model_optimization": true},
-  "model_routes": [{"match": " claude-*haiku* ", "target": "cn:glm-5.2 "}]
+  "model_routes": [{"match": " claude-*haiku* ", "target": "cn:glm-5.2 "}],
+  "models": {"hidden": ["glm-4.7", "global:gpt-5"]}
 }`
 		got, err := saveConfig([]byte(incoming), path, live, p, up, sch, logStores{})
 		if err != nil {
@@ -455,6 +456,9 @@ func TestSaveConfig(t *testing.T) {
 		}
 		if want := []livecfg.ModelRoute{{Match: "claude-*haiku*", Target: "cn:glm-5.2"}}; !reflect.DeepEqual(snap.ModelRoutes, want) {
 			t.Fatalf("模型路由未热更新（应去掉两端空白）: %+v", snap.ModelRoutes)
+		}
+		if want := livecfg.NormalizeHiddenModels([]string{"glm-4.7", "global:gpt-5"}); !reflect.DeepEqual(snap.HiddenModels, want) {
+			t.Fatalf("隐藏模型未热更新: %+v", snap.HiddenModels)
 		}
 		if !up.SanitizeFingerprints.Load() {
 			t.Fatal("up.SanitizeFingerprints 未热更新")

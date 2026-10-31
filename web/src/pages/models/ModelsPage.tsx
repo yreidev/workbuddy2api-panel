@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 模型与档位：上方是模型路由规则；下方实时查询上游模型目录（国内版、国际版两个域），展示积分倍率、思考档位、上下文与输出上限。
+// 模型与档位：上方是模型路由规则和对外隐藏的模型；下方实时查询上游模型目录（国内版、国际版两个域），展示积分倍率、思考档位、上下文与输出上限。
 // 输出上限列若有 scripts/probe_max_tokens.py 的实测结果，标注钳制情况；没有则显示上游声称值。
 import { useMemo, useState, type ReactNode } from 'react'
 import {
@@ -11,13 +11,14 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { fmtK } from '../../lib/format'
 import {
-  EMPTY_MODEL_FILTER, filterModels, probeFor, type Capability, type EffortFilter, type ModelFilter, type ModelSort, type PromoFilter,
-  type RealmFilter,
+  EMPTY_MODEL_FILTER, filterModels, hiddenFromConfig, hiddenModelSet, probeFor, type Capability, type EffortFilter, type ModelFilter,
+  type ModelSort, type PromoFilter, type RealmFilter,
 } from '../../lib/models'
-import { qk, useModels, useProbes } from '../../lib/queries'
+import { qk, useConfig, useModels, useProbes } from '../../lib/queries'
 import type { Model, Probe } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { InfoTip, Panel } from '../../components/Panel'
+import { HiddenModels } from './HiddenModels'
 import { ModelRoutes } from './ModelRoutes'
 
 function probeDays(ts?: string): number | null {
@@ -88,8 +89,9 @@ function Efforts({ m }: { m: Model }) {
   return <span className="flex flex-wrap gap-1">{eff.map((e) => <Chip key={e} size="sm" variant="soft" color="warning">{e}</Chip>)}</span>
 }
 
-function ModelName({ m }: { m: Model }) {
-  const caps: [string, 'success' | 'warning' | 'accent'][] = []
+function ModelName({ m, hidden }: { m: Model; hidden: boolean }) {
+  const caps: [string, 'success' | 'warning' | 'accent' | 'danger'][] = []
+  if (hidden) caps.push(['对外隐藏', 'danger'])
   if (m.enterprise_only) caps.push(['企业专属', 'accent'])
   if (m.is_default) caps.push(['默认', 'success'])
   if (m.supports_tool_call) caps.push(['工具', 'warning'])
@@ -156,6 +158,8 @@ export function ModelsPage() {
   const qc = useQueryClient()
   const models = useModels()
   const probes = useProbes()
+  const config = useConfig()
+  const hidden = useMemo(() => hiddenModelSet(config.data ? hiddenFromConfig(config.data.config) : []), [config.data])
   const isDesktop = useMediaQuery('(min-width: 1024px)')
   const [filter, setFilter] = useState<ModelFilter>(EMPTY_MODEL_FILTER)
   const [sort, setSort] = useState<ModelSort>('default')
@@ -175,6 +179,7 @@ export function ModelsPage() {
   return (
     <div className="flex flex-col gap-4">
       <ModelRoutes />
+      <HiddenModels />
       <Panel
         title="模型能力"
         desc={
@@ -237,7 +242,7 @@ export function ModelsPage() {
                   <Table.Body>
                     {shown.map((m) => (
                       <Table.Row key={m.id} id={m.id}>
-                        <Table.Cell><div className="max-w-72"><ModelName m={m} /></div></Table.Cell>
+                        <Table.Cell><div className="max-w-72"><ModelName m={m} hidden={hidden.has(m.id)} /></div></Table.Cell>
                         <Table.Cell><RateCell m={m} /></Table.Cell>
                         <Table.Cell>{m.default_effort ? <Chip size="sm" variant="soft" color="success">{m.default_effort}</Chip> : <span className="text-muted">—</span>}</Table.Cell>
                         <Table.Cell><div className="max-w-56"><Efforts m={m} /></div></Table.Cell>
@@ -253,7 +258,7 @@ export function ModelsPage() {
             <div className="flex flex-col gap-3">
               {shown.map((m) => (
                 <Card key={m.id} variant="secondary" className="gap-3 p-4">
-                  <ModelName m={m} />
+                  <ModelName m={m} hidden={hidden.has(m.id)} />
                   <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                     <dt className="text-muted">积分倍率</dt><dd><RateCell m={m} /></dd>
                     <dt className="text-muted">默认档</dt><dd>{m.default_effort || '—'}</dd>

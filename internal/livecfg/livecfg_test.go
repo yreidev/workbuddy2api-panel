@@ -77,3 +77,27 @@ func TestConcurrentLoadStore(t *testing.T) {
 		t.Errorf("最终快照 = %+v", got)
 	}
 }
+
+// TestNormalizeHiddenModels 带 cn: / global: 前缀的只藏那个域，裸名两个域都藏；空白条目去掉；
+// 别的冒号前缀当成名字的一部分。
+func TestNormalizeHiddenModels(t *testing.T) {
+	if got := NormalizeHiddenModels(nil); got != nil {
+		t.Errorf("空列表应为 nil，got %v", got)
+	}
+	if got := NormalizeHiddenModels([]string{" ", ""}); got != nil {
+		t.Errorf("只有空白条目应为 nil，got %v", got)
+	}
+	got := NormalizeHiddenModels([]string{" glm-5 ", "cn:deepseek-v4", "global:gpt-5", "vendor:x"})
+	want := []string{"cn:glm-5", "global:glm-5", "cn:deepseek-v4", "global:gpt-5", "cn:vendor:x", "global:vendor:x"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v，应为 %v", got, want)
+	}
+	for _, k := range want {
+		if _, ok := got[k]; !ok {
+			t.Errorf("缺 %s：%v", k, got)
+		}
+	}
+	if _, ok := got["global:deepseek-v4"]; ok {
+		t.Error("cn: 前缀的条目不应藏国际版")
+	}
+}

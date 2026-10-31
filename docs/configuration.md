@@ -153,6 +153,18 @@
 
 `match`、`target` 不能为空，`target` 不能带 `*`，否则启动和面板保存都会报错。一般在面板「模型与档位 → 模型路由」里编辑，保存即生效。
 
+### 隐藏模型
+
+`models.hidden` 是不对外的模型名单：`/v1/models` 不列，点名调用回 400 + `model_unavailable`。带 `cn:` / `global:` 前缀的只藏那个域，不带前缀的两个域都藏；精确匹配、区分大小写，不认通配。按经模型路由改写后实际发给上游的模型判，和客户端密钥的模型白名单叠加。默认为空。完整行为见 [API 参考](api.md#隐藏模型)。
+
+```json
+"models": {
+  "hidden": ["glm-4.7", "global:gpt-5.5"]
+}
+```
+
+一般在面板「模型与档位 → 对外隐藏的模型」里编辑，加一项、删一项都立即生效。
+
 ### 会话粘性与 Redis
 
 | 字段 | 默认 | 说明 |
@@ -202,7 +214,7 @@
 
 ## 热生效与写回规则
 
-- **立即生效**：`api_key`、`cooldown.soft_rate`、`features.*`、`logging.*`、`panel.*`、`pool.*`、`schedule.*`、`model_routes`。
+- **立即生效**：`api_key`、`cooldown.soft_rate`、`features.*`、`logging.*`、`panel.*`、`pool.*`、`schedule.*`、`model_routes`、`models.hidden`。
 - **需要重启**：`listen`、`auth_dir`、`state_file`、`server.read_timeout`、`upstream.*`、`prompt.*`、`upstash.*`、`session_sticky.*`。面板在保存后会提示具体是哪几项。
 - 面板写回配置时做**深合并 + 原子替换**：只更新表单里出现的键，你手写的其他键（包括程序不认识的键）原样保留。
 - 时长字段使用 Go 的写法，如 `600s`、`30m`、`2h`、`168h`。

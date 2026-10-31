@@ -417,6 +417,7 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 // 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
+	hidden := h.loadLive().HiddenModels // models.hidden：被藏起来的不列
 	cnEntry := func(mi upstream.ModelInfo) map[string]any {
 		entry := map[string]any{
 			"id":       "cn:" + mi.ID,
@@ -447,12 +448,17 @@ func (h *Handler) modelList() []map[string]any {
 		return entry
 	}
 	for _, mi := range h.fetchDynamicModels() {
-		out = append(out, cnEntry(mi))
+		if _, hide := hidden["cn:"+mi.ID]; !hide {
+			out = append(out, cnEntry(mi))
+		}
 	}
 	// 企业专属模型：域目录（个人号视角）里没有、池里某个企业号自己的目录里有，
 	// 请求只会派给目录里有它的企业号（见 upstream/account_catalog.go）。
 	if h.cfg.Upstream != nil {
 		for _, mi := range h.cfg.Upstream.EnterpriseOnlyModels("cn") {
+			if _, hide := hidden["cn:"+mi.ID]; hide {
+				continue
+			}
 			entry := cnEntry(mi)
 			entry["enterprise_only"] = true
 			delete(entry, "is_default")
@@ -474,6 +480,9 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
+			if _, hide := hidden["global:"+id]; hide {
+				continue
+			}
 			entry := map[string]any{
 				"id":       "global:" + id,
 				"object":   "model",
@@ -664,11 +673,16 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(peek.Model)
+	hidden := h.loadLive().HiddenModels
 	// 跨域负载均衡（pool.cross_realm，热生效）：只管不带前缀的模型名，带前缀的照旧钉死该域。
 	// 改写 realm 为目录里有这个模型的域；两域都有时为 ""，下方选号即在两域合池里挑。
+	// models.hidden 里只藏了一个域的，当那个域没有这个模型。
 	crossRouted := false
 	if bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && h.loadLive().CrossRealm {
-		realm = crossRealmFor(bareModel, h.cfg.Upstream.RealmHasModel)
+		realm = crossRealmFor(bareModel, func(r, m string) bool {
+			_, hide := hidden[r+":"+m]
+			return !hide && h.cfg.Upstream.RealmHasModel(r, m)
+		})
 		crossRouted = true
 	}
 	modelRate := ""
@@ -685,6 +699,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.clientIP, st.userAgent = tr.clientIP, tr.userAgent
 	}
 	defer st.done()
+
+	// models.hidden：点名调用被藏起来的模型直接拒，不选号、不发上游（只藏列表不够，知道名字照样能调）。
+	// 按改写后实际发上游的模型判；跨域合池时上面选域已经避开被藏的域（realm 为 "" 时不会命中）。
+	if _, hide := hidden[realm+":"+bareModel]; hide {
+		writeOpenAIError(w, http.StatusBadRequest, "model_unavailable",
+			fmt.Sprintf("model %s is hidden by gateway configuration (models.hidden), try another model", peek.Model))
+		st.status, st.outcome = http.StatusBadRequest, reqlog.OutcomeHTTPError
+		return
+	}
 
 	// 客户端密钥：白名单按改写后实际发上游的模型判，过了再按上限放行并计一次请求。被拦下的也记一行
 	// 请求日志（带模型名），看得出是哪个模型、哪项上限不让用。

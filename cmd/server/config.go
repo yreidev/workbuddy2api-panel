@@ -32,6 +32,13 @@ type Config struct {
 	// 带 cn: / global: 前缀的名字不改；target 可以带前缀。缺省为空（不路由）。热生效。
 	ModelRoutes []livecfg.ModelRoute `json:"model_routes"`
 
+	Models struct {
+		// Hidden 不对外的模型：/v1/models 不列，点名调用回 400 model_unavailable。带 cn: / global:
+		// 前缀的只藏那个域，裸名两个域都藏；精确匹配、区分大小写。按经模型路由改写后实际发往
+		// 上游的模型判，和客户端密钥的模型白名单叠加。缺省为空。热生效。
+		Hidden []string `json:"hidden"`
+	} `json:"models"`
+
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
 		PackageDetailLimit int `json:"package_detail_limit"`
