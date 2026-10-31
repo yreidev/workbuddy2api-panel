@@ -211,9 +211,6 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	delete(p.logins, state)
 	p.loginMu.Unlock()
 	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
-	if !a.IsEnterprise() && a.IsEnterpriseSession() {
-		log.Printf("panel: WARN uid=%s %s", acct.UID, enterpriseSwitchHint)
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"done":            true,
 		"uid":             acct.UID,

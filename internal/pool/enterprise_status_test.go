@@ -5,7 +5,6 @@
 package pool
 
 import (
-	"encoding/base64"
 	"testing"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
@@ -45,22 +44,6 @@ func TestStatusExposesEnterpriseFlag(t *testing.T) {
 			if st.Enterprise {
 				t.Error("List() 误标个人号为企业版")
 			}
-		}
-	}
-}
-
-// TestStatusExposesEnterpriseSwitch 个人号的令牌签发自企业切换会话时 Status 带 enterprise_switch，
-// 面板据此提示重新登录；企业版不置位（它本来就没有成长体系，标企业版就够了）。
-func TestStatusExposesEnterpriseSwitch(t *testing.T) {
-	tok := "h." + base64.RawURLEncoding.EncodeToString([]byte(`{"token_source":"enterprise_switch"}`)) + ".s"
-	p := New("")
-	p.Add(&auth.Auth{UID: "sw", AccessToken: tok})
-	p.Add(&auth.Auth{UID: "ent", AccessToken: tok, EnterpriseID: "e1"})
-	p.Add(&auth.Auth{UID: "per", AccessToken: "opaque"})
-	want := map[string]bool{"sw": true, "ent": false, "per": false}
-	for _, st := range p.List() {
-		if st.EnterpriseSwitch != want[st.UID] {
-			t.Errorf("%s EnterpriseSwitch=%v want %v", st.UID, st.EnterpriseSwitch, want[st.UID])
 		}
 	}
 }

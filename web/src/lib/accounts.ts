@@ -206,6 +206,3 @@ export function sortAccounts(list: Account[], key: AccountSortKey | null, desc: 
   })
   return desc ? out.reverse() : out
 }
-
-/** 企业切换会话的说明（账号名旁的标签悬停、详情抽屉） */
-export const ENTERPRISE_SWITCH_TIP = '登录时浏览器停在企业空间，凭证是企业切换会话：成长任务、连登、猫猫旅行、夜猫子做了也不计分，网关都跳过（签到、对话照常）。请在浏览器里切回个人身份，移除这个号后重新登录。'

@@ -566,7 +566,6 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		RateLimitedModels:        p.rateLimitedModelsLocked(e, now),
 		Realm:                    e.a.Realm(),
 		Enterprise:               e.a.IsEnterprise(),
-		EnterpriseSwitch:         !e.a.IsEnterprise() && e.a.IsEnterpriseSession(),
 		Nickname:                 e.a.Nickname,
 		Note:                     e.note,
 		Credits:                  e.credits,

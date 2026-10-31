@@ -11,7 +11,6 @@ package panel
 // X-Client-Platform」分发；未登记的请求会由假上游 t.Errorf 并回 400。
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,11 +47,6 @@ func newTasksPanel(t *testing.T, auths ...*auth.Auth) (*Panel, *autoUpstream) {
 // taskTestAuth 构造 CN 个人号凭证。
 func taskTestAuth(uid, nick string) *auth.Auth {
 	return &auth.Auth{UID: uid, AccessToken: "at-" + uid, RefreshToken: "rt-" + uid, Nickname: nick}
-}
-
-// enterpriseSwitchToken 载荷带 token_source=enterprise_switch 的 JWT 形状令牌（企业切换会话）。
-func enterpriseSwitchToken(uid string) string {
-	return "h." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"`+uid+`","token_source":"enterprise_switch"}`)) + ".s"
 }
 
 // 四个任务接口对未知 uid 一律 404，且不发上游请求。

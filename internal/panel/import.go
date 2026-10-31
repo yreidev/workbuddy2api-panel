@@ -105,9 +105,6 @@ func (p *Panel) importAccounts(w http.ResponseWriter, r *http.Request) {
 
 		p.cfg.Pool.Add(a)
 		p.cfg.Pool.Revive(uid)
-		if !a.IsEnterprise() && a.IsEnterpriseSession() {
-			log.Printf("panel: WARN import uid=%s %s", uid, enterpriseSwitchHint)
-		}
 
 		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
 		if a.IsGlobal() {

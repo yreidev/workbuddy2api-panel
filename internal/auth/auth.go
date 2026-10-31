@@ -7,7 +7,6 @@
 package auth
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -253,43 +252,6 @@ func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 // 直读字段（EnterpriseID 自 Parse 后不再改写，与 upstream 读取方式一致），
 // 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
 func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
-
-// IsEnterpriseSession 报告凭证是否处在企业上下文：企业版账号（IsEnterprise），或访问令牌
-// 签发自企业切换会话（JWT 载荷带 token_source=enterprise_switch，浏览器停在企业空间时
-// 完成授权就会这样）。
-//
-// 企业切换会话和企业版在上游的表现不同。上游 linguo2625469 2026-10-12 实测（本仓库未实测）：
-// 成长任务列表、额度查询、领养这类读接口照常，但 /v2/report 行为事件回 200 却不计分，
-// 15 个成长任务全部 0/x，连登也不涨。所以行为类任务（活跃上报、连登管家、猫猫旅行、夜猫子、
-// 成长任务执行）用它门控；签到失败会明着报错，任务列表扫描能用，都不在此列。额度查询、
-// 选号、保活照旧按 IsEnterprise 的口径。
-//
-// 每次现解：刷新会整个换掉令牌，重新授权后切换状态可能翻转，缓存会读到旧的。
-func (a *Auth) IsEnterpriseSession() bool {
-	return a.IsEnterprise() || jwtTokenSource(a.AccessTokenValue()) == "enterprise_switch"
-}
-
-// jwtTokenSource 取 JWT 载荷里的 token_source；不是 JWT 或解不开时返回空串。
-// 先按标准的无填充 base64url 解，不行再试带填充的。
-func jwtTokenSource(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		if raw, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
-			return ""
-		}
-	}
-	var payload struct {
-		TokenSource string `json:"token_source"`
-	}
-	if json.Unmarshal(raw, &payload) != nil {
-		return ""
-	}
-	return payload.TokenSource
-}
 
 // isGlobalDomain 判定 domain 是否指向 www.workbuddy.ai 家族。
 // 同时接受裸域 workbuddy.ai 与任意子域（HasSuffix("www.workbuddy.ai") 或裸域本身）。

@@ -8,7 +8,7 @@
 import { useState, type ReactNode } from 'react'
 import { Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, TextField, toast, useMediaQuery } from '@heroui/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { activeRateLimits, creditsText, ENTERPRISE_SWITCH_TIP, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditsText, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
 import { acct, post } from '../../lib/api'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
@@ -121,7 +121,6 @@ function Body({ a, health, now, busy, run }: {
 
         <Section title="状态">
           <Row label="当前"><HealthChip health={health} now={now} /></Row>
-          {a.enterprise_switch && <Row label="企业切换会话"><span className="text-warning">{ENTERPRISE_SWITCH_TIP}</span></Row>}
           {a.paused && <Row label="暂停选号">{a.enterprise ? '不参与选号，保活 / 刷新额度照常' : '不参与选号，签到 / 活跃上报 / 保活 / 刷新余额照常'}</Row>}
           {health.coolEnd != null && <Row label="恢复时间">{dateTime(health.coolEnd)}</Row>}
           {a.reason && <Row label={a.disabled ? '禁用原因' : '原因'}><span className="break-all">{a.reason}</span></Row>}

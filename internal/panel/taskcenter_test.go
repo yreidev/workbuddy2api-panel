@@ -600,26 +600,6 @@ func TestTasksRunQueueExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("企业切换会话的号不入队", func(t *testing.T) {
-		sw := taskTestAuth("u2", "切换号")
-		sw.AccessToken = enterpriseSwitchToken("u2")
-		p, up := newTasksPanel(t, taskTestAuth("u1", "一号"), sw)
-		up.onDefaultTasks(autoOK(autoTasksJSON(autoTaskJSON("no_action_done", 1, 1, "accepted"))))
-		up.onMPTasks(autoOK(autoTasksJSON()))
-		up.onWebClaim("no_action_done", autoOK(autoClaimJSON(50, 5)))
-
-		p.RunGrowthQueueOnce()
-		items := queueItemsOf(t, waitQueueIdle(t, p))
-		if len(items) != 1 || items[0]["uid"] != "u1" {
-			t.Fatalf("只有个人号的待办入队: %v", items)
-		}
-		for _, r := range up.requests() {
-			if autoToken(r) == sw.AccessToken {
-				t.Fatalf("企业切换会话的号不应发请求，收到 %s %s", r.Method, r.Path)
-			}
-		}
-	})
-
 	t.Run("RunGrowthQueueOnce 有待办时启动", func(t *testing.T) {
 		p, up := newTasksPanel(t, taskTestAuth("u1", "一号"))
 		up.onDefaultTasks(autoOK(autoTasksJSON(autoTaskJSON("chat_5", 1, 1, "accepted"))))
