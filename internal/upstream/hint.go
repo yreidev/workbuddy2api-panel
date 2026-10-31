@@ -71,6 +71,9 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 		return "account session expired at upstream; the account is disabled until re-login"
 	case ErrHardCredit:
 		return "account credits exhausted at upstream; waiting for daily check-in to restore"
+	case ErrUpstreamBusy:
+		// 6021 容量排队满：措辞明确「不是账号问题、换号无意义」，指引客户端等待后重试。
+		return "upstream capacity is full (queue.full); this is a channel-level issue, not an account problem; retry after a short wait"
 	case ErrModelBlocked:
 		return "upstream has no such model on this backend; switch model or retry on another account"
 	case ErrContentBlocked:

@@ -47,6 +47,7 @@ const (
 	ErrWafBlock                      // 403 + 非业务信封体（APISIX WAF 拦截页/空体）→ 账号软冷却 + 抖动退避
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
+	ErrUpstreamBusy                  // 6021 容量排队满（渠道级，不是账号问题）→ 不罚号、不轮转，末端 503 + upstream_busy
 	ErrClient                        // 其他 4xx / 业务错误
 )
 
@@ -74,6 +75,8 @@ func (k ErrKind) String() string {
 		return "prompt_too_long"
 	case ErrImageInvalid:
 		return "image_invalid"
+	case ErrUpstreamBusy:
+		return "upstream_busy"
 	case ErrAccountFault:
 		return "account_fault"
 	case ErrClient:
@@ -474,7 +477,8 @@ func ParseRateReset(body string) (time.Time, bool) {
 //  4. 业务码（bizcode.go，照官方客户端）—— 额度用完（14001/14012/14013/14014/14018/
 //     14019）归 ErrHardCredit（issue #175 起），授权过期/未激活（14015/14016/14017）归
 //     ErrAccountFault，按模型限额（6000–6008）、模型繁忙（14003）、会话太多（10105）归
-//     ErrSoftRate。只认结构化业务码，不靠可能跨计费/限流两界的文案猜测。
+//     ErrSoftRate，容量排队满（6021）归 ErrUpstreamBusy。只认结构化业务码，不靠可能跨计费/
+//     限流两界的文案猜测。
 //  5. status==429 —— 限流状态码兜底（先于 hardMarkers）：429 body 高频携带
 //     "quota exceeded"/"额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把
 //     限流误归 ErrHardCredit 硬冷却到次日 04:00，白扔号约 12h。状态码是比关键词
@@ -490,7 +494,7 @@ func ParseRateReset(body string) (time.Time, bool) {
 //  10. IsWafBlocked —— 403 且无业务信封（HTML 拦截页/空体/纯文本）：APISIX WAF
 //     拦截形态。判在通用 4xx 兜底**之前**：此前该形态落 ErrClient → 只换号不罚 →
 //     连环 403。带业务信封的 403 已被上方各层捕获，走不到本层。
-//  11. 内容策略/参数错误/其他 4xx —— 通用兜底。
+//  12. 内容策略/参数错误/其他 4xx —— 通用兜底。
 func Classify(status int, body string) ErrKind {
 	// 11102「该后端无此模型」须最先判：它是「模型在后端不存在」的确定性答复，语义比
 	// 计费/限流都更具体——若不先判，msg 里的 "service info not found" 会被更宽的
@@ -529,6 +533,8 @@ func Classify(status int, body string) ErrKind {
 	//   - 授权过期、未激活（14015/14016/14017）→ 账号故障。
 	//   - 按模型限额（6000–6008）、模型繁忙（14003）、会话太多（10105）→ 限流，不论状态码；
 	//     冷却只落在这个模型还是整个号，由 handler.applyErrorPolicy 按业务码细分。
+	//   - 容量排队满（6021）→ 上游忙：整条渠道满了，换哪个号都一样，不罚号不换号。以前落进
+	//     通用 429 逐号软冷却，上游 linguo2625469 2026-10-15 实测 2 秒内整池健康号全被冷却。
 	if k := codeKind(BizCode(body)); k != ErrNone {
 		return k
 	}

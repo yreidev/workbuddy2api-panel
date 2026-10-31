@@ -314,7 +314,10 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 | `14015` | `UsageLimitLicenseExpired` | 归授权过期 | 账号软冷却 |
 | `14016` `14017` | `UsageLimitEnterpriseNotActivated`、`UsageLimitUserNotActivated` | 归未激活 | 账号软冷却 |
 | `10105` | `ConversationLimitExceeded` | 归同时进行的会话太多 | 账号冷却约 60 秒，当场换号 |
+| `6021` | 桌面端容量排队的 `FULL` | 队列满，只提示，不自动重发 | 不罚账号、不换号，回 503 + `upstream_busy` |
 | `11115` | `ContextTooLong` | 归输入超长 | 不罚账号、不换号，原文返回；文案照 `isInputLengthError` 的词表与正则认 |
+
+容量排队的码不在内置 CLI 里，在桌面端主进程（`app/main/conversations.js` 的 `CapacityQueueManager`，国内版 5.9.3 读包）：`6020` 排队中，官方按 `retry_after` 轮询 `POST /v2/chat/queue/status`（请求体 `{model}`，头带 `X-Conversation-Request-ID` 与 `X-Conversation-ID`），到号后重发原请求；`6021` 队列满；`6022` 用户上限。网关只处理 `6021`（上游 linguo2625469 `f14f374` 生产见过 `429 {"code":6021,"msg":"queue.full.title"}`，以前落进通用 429，逐号软冷却，2 秒内整池健康号全被冷却）；`6020`、`6022` 没见过实际响应，未处理。
 
 `14002`（`ConversationChatTooMany`）官方只在统计里归成额度用完，既不算额度用完也不算临时限流，含义没确认，网关仍按状态码处理；`15001`（联网搜索限流）网关用不到。
 

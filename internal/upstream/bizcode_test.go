@@ -146,6 +146,7 @@ func TestFrameKindBizCodes(t *testing.T) {
 		`{"code":6004,"msg":"x"}`:                    ErrSoftRate,
 		`{"error":{"message":"quota","code":14001}}`: ErrHardCredit,
 		`{"error":{"message":"x","code":14016}}`:     ErrAccountFault,
+		`{"error":{"message":"x","code":6021}}`:      ErrUpstreamBusy,
 	}
 	for payload, want := range cases {
 		if got := FrameKind(payload); got != want {

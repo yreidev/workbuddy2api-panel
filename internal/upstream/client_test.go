@@ -103,6 +103,13 @@ func TestClassify(t *testing.T) {
 		{429, `{"error":{"data":{"code":"14018","msg":"Credits exhausted"}}}`, ErrHardCredit},
 		{429, `{"requestId":"14018","msg":"Credits exhausted"}`, ErrSoftRate},
 		{429, `{"code":1,"msg":"Credits exhausted"}`, ErrSoftRate},
+		// 6021 容量排队满（上游 linguo2625469 2026-10-15 实测的形状）：不是账号问题，归
+		// ErrUpstreamBusy（不罚号不轮转）。照官方只认业务码，不看状态码和文案。
+		{429, `{"code":6021,"msg":"queue.full.title","requestId":"b1bc87ea3a771e835e388328713d47cf"}`, ErrUpstreamBusy},
+		{429, `{"error":{"data":{"code":6021,"msg":"queue.full.title"}}}`, ErrUpstreamBusy},
+		{500, `{"code":"6021","msg":"queue.full.title"}`, ErrUpstreamBusy},
+		{429, `queue.full.title`, ErrSoftRate},
+		{429, `{"requestId":"6021","msg":"rate limit"}`, ErrSoftRate},
 		// WAF 403（P0-1）：403 + 无业务信封（无 "code":/"msg": 字段）→ ErrWafBlock。
 		// 空体 / HTML 拦截页 / 纯文本 / 非信封 JSON 均命中。
 		{403, ``, ErrWafBlock},
