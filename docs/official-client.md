@@ -136,6 +136,20 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - 1.1.2 以前用 `/v2/billing/meter/get-user-resource`，官方 5.8.3 里已经没有这个接口。2026-10-20 生产对比：新旧接口给的包相同，按整数字段算出的旧余额和汇总对不上，按官方算法算的一致。
 - 企业号查 `POST /v2/billing/meter/get-enterprise-user-usage`，带 `X-Enterprise-Id`（与以前相同）。
 
+### 积分包的到期时刻
+
+桌面端 5.9.3（`app/main/account.js` 的 `getCurrentPlan`）按包类型取时刻，网关的到期提醒、快照和快过期加权都照这个办法（`resourceAccount.expiry`）：
+
+| 包 | 官方显示 | 网关算作废的时刻 |
+|---|---|---|
+| 每日免费包（`TCACA_code_001`） | 到期：`CycleEndTime` | `CycleEndTime` |
+| 一次性发放的包：活动包 `007`（签到、任务发的裂变包）、加油包 `009` / `038`、`029`、`030`、国际版加油包 `036` | 到期：`DeductionEndTime`，不显示刷新 | `DeductionEndTime`，缺失时依次用 `ExpiredTime`、`CycleEndTime`（同官方 `toExpiredCreditPackage`） |
+| 其余（订阅、体验类：`002`、`003`、`005`、`008`、`023`、`026`、`027`、`028`、`035`、国际版 Bonus Pack `037`、`039`、`040`、`043`；`006` 两样都显示） | 刷新：`CycleEndTime` | `CycleEndTime`，缺失时同上回落 |
+
+- 刷新的包按「刷新时没用完的作废」算，会不会结转未确认；
+- 2026-10-01 实测上游按 `DeductionEndTime` 先到期先扣（两个号一致）；
+- 1.8.0 及以前，面板「检查」一律先读 `DeductionEndTime`（订阅、体验类包会显示成好几年后到期），快照和快过期加权一律读 `CycleEndTime`，两边对不上。
+
 签到照官方（`DesktopAccountRepo`）先查状态再签：`POST /v2/billing/meter/checkin-activity-status`，活动没开（`active` 为假）就不签，今天已签（`today_checked_in`）也不签；状态查不到时照常签。两条都带 `X-Device-Token`。
 
 ## 登录

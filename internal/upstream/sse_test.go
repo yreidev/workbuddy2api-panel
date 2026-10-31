@@ -7,6 +7,7 @@ package upstream
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -897,6 +898,27 @@ func TestUserResourceDetailedWithExpirySnapshot(t *testing.T) {
 	}
 	if earliestRemaining != 25 || !earliestAt.Equal(soon) {
 		t.Fatalf("earliest=%v/%d want %v/25", earliestAt, earliestRemaining, soon)
+	}
+}
+
+// 同一天（北京时间）不同时刻到期的包合成一批；活动包按 DeductionEndTime，不看 CycleEndTime。
+func TestUserResourceDetailedWithExpirySameDay(t *testing.T) {
+	day := time.Now().In(softRateResetLoc).AddDate(0, 0, 3)
+	morning := time.Date(day.Year(), day.Month(), day.Day(), 9, 0, 0, 0, softRateResetLoc)
+	night := time.Date(day.Year(), day.Month(), day.Day(), 23, 30, 0, 0, softRateResetLoc)
+	c := testClient(resourceRT(
+		// 活动包的 CycleEndTime 是明天，但它按 DeductionEndTime 算，在第 3 天晚上
+		cyclePkg("activity", 30, 30, `"PackageCode":"TCACA_code_007_nzdH5h4Nl0","DeductionEndTime":`+
+			strconv.FormatInt(night.UnixMilli(), 10)+`,"CycleEndTime":"`+day.AddDate(0, 0, -2).Format(packageEndLayout)+`"`),
+		cyclePkg("trial", 40, 40, `"PackageCode":"TCACA_code_039_KRcQj7wUat","CycleEndTime":"`+morning.Format(packageEndLayout)+`"`),
+		cyclePkg("later", 20, 20, `"CycleEndTime":"`+day.AddDate(0, 0, 5).Format(packageEndLayout)+`"`),
+	))
+	_, _, _, earliestAt, earliestRemaining, err := c.UserResourceDetailedWithExpiry(&auth.Auth{AccessToken: "at", UID: "u1"}, 0)
+	if err != nil {
+		t.Fatalf("resource: %v", err)
+	}
+	if earliestRemaining != 70 || !earliestAt.Equal(morning) {
+		t.Fatalf("earliest=%v/%d want %v/70", earliestAt, earliestRemaining, morning)
 	}
 }
 func TestCreditPackagesExpiryTimestamp(t *testing.T) {

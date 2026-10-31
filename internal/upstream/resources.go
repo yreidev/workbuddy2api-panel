@@ -65,7 +65,21 @@ var (
 		"TCACA_code_029_6wCGEWquYy", // bonus29
 		"TCACA_code_030_BjSt89qTvr", // bonus30
 	}
+
+	// oneOffPackageCodes 一次性发放、不按周期刷新的包（桌面端 5.9.3 getCurrentPlan 里
+	// 不显示刷新时间的那组）。签到、任务发的裂变包就是 activity。
+	oneOffPackageCodes = map[string]bool{
+		"TCACA_code_007_nzdH5h4Nl0": true, // activity
+		"TCACA_code_009_0XmEQc2xOf": true, // extra
+		"TCACA_code_038_OhvqZtiPKr": true, // extra38
+		"TCACA_code_029_6wCGEWquYy": true, // bonus29
+		"TCACA_code_030_BjSt89qTvr": true, // bonus30
+		"TCACA_code_036_lupO5WgNdG": true, // extraIntl
+	}
 )
+
+// dailyFreePackageCode 每日免费包（free），官方的到期时刻取 CycleEndTime。
+const dailyFreePackageCode = "TCACA_code_001_PqouKr6QWV"
 
 // preciseCount 上游 *Precise 字段（十进制字符串，也兼容数字）。同官方 toCount：
 // 解析不了、非正数都当 0。
@@ -96,12 +110,41 @@ type resourceAccount struct {
 		RemainPrecise preciseCount `json:"SlicePeriodCapacityRemainPrecise"`
 	} `json:"SlicePeriodUsageDetails"`
 
-	// 到期时间字段的取舍见 CreditPackage.EndTime。
+	// 到期时间字段的取舍见 expiry。
 	ExpiredTime      string `json:"ExpiredTime"`
-	PackageEndTime   string `json:"PackageEndTime"`
 	CycleEndTime     string `json:"CycleEndTime"`
 	DeductionEndTime int64  `json:"DeductionEndTime"`
 	CreateTime       int64  `json:"CreateTime"`
+}
+
+// refreshes 包是否按周期刷新（订阅、体验这类，官方只显示 CycleEndTime 的刷新时间）。
+func (r resourceAccount) refreshes() bool {
+	return r.PackageCode != dailyFreePackageCode && !oneOffPackageCodes[r.PackageCode]
+}
+
+// expiry 包里剩下的积分什么时候作废，照桌面端 5.9.3 getCurrentPlan 按包类型取：
+//   - 一次性发放的包：DeductionEndTime（可抵扣窗口结束；10-01 实测上游也按它先到期先扣），
+//     缺失时依次回落 ExpiredTime、CycleEndTime（同官方 toExpiredCreditPackage）；
+//   - 每日免费包、按周期刷新的包：CycleEndTime。刷新的包官方不显示到期、只显示刷新时间，
+//     这里按「刷新时没用完的作废」算（未确认会不会结转），缺 CycleEndTime 时同上回落。
+//
+// raw 是给面板显示的原文（DeductionEndTime 是毫秒，转成 RFC3339），at 解析不出时 ok 为 false。
+func (r resourceAccount) expiry() (raw string, at time.Time, ok bool) {
+	if !oneOffPackageCodes[r.PackageCode] && r.CycleEndTime != "" {
+		at, ok = parsePackageEndTime(r.CycleEndTime)
+		return r.CycleEndTime, at, ok
+	}
+	switch {
+	case r.DeductionEndTime > 0:
+		at = time.UnixMilli(r.DeductionEndTime)
+		return at.Format(time.RFC3339), at, true
+	case r.ExpiredTime != "":
+		raw = r.ExpiredTime
+	default:
+		raw = r.CycleEndTime
+	}
+	at, ok = parsePackageEndTime(raw)
+	return raw, at, ok
 }
 
 // capacity 单包额度与剩余（官方 resolveResourceCapacity）。剩余超过额度的脏数据按额度算。

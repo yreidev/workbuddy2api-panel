@@ -244,6 +244,8 @@ export interface CreditPackage {
   sub_product_code?: string
   sub_product_name?: string
   cycle?: boolean
+  /** 按周期刷新的包（订阅、体验类）：end_time 是刷新时刻 */
+  refresh?: boolean
 }
 
 export interface PackageAccount {

@@ -241,7 +241,10 @@ function PackTable({ packs, colorOf, label }: { packs: CreditPackage[]; colorOf:
                   <Table.Cell className="text-right font-mono tabular-nums">{fmtTok(p.remain)}</Table.Cell>
                   <Table.Cell className="text-right font-mono tabular-nums">{fmtTok(p.used)}</Table.Cell>
                   <Table.Cell className="whitespace-nowrap text-right font-mono tabular-nums">{(p.created_at || '').slice(0, 16).replace('T', ' ') || '—'}</Table.Cell>
-                  <Table.Cell className="whitespace-nowrap text-right font-mono tabular-nums">{(p.end_time || '').slice(0, 10) || '—'}</Table.Cell>
+                  <Table.Cell className="whitespace-nowrap text-right font-mono tabular-nums">
+                    {(p.end_time || '').slice(0, 10) || '—'}
+                    {p.refresh && p.end_time && <span className="ml-1 font-sans text-xs text-muted">刷新</span>}
+                  </Table.Cell>
                 </Table.Row>
               )
             })}

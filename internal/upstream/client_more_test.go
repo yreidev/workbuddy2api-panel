@@ -732,7 +732,7 @@ func TestCreditPackageBranches(t *testing.T) {
 		`{"PackageName":"deduct","DeductionEndTime":`+strconv.FormatInt(deduct, 10)+`,"CreateTime":`+strconv.FormatInt(created, 10)+`,
 		 "CycleCapacityRemainPrecise":"10","CycleCapacitySizePrecise":"30"}`,
 		`{"PackageName":"expired","ExpiredTime":"2026-10-24 00:00:00","CycleCapacityRemainPrecise":"5","CycleCapacitySizePrecise":"5"}`,
-		`{"PackageName":"pkgend","PackageEndTime":"2026-10-25 00:00:00","CycleCapacityRemainPrecise":"6","CycleCapacitySizePrecise":"6"}`,
+		`{"PackageName":"nocycle","CycleCapacityRemainPrecise":"6","CycleCapacitySizePrecise":"6"}`,
 		`{"PackageName":"cycle","CycleCapacitySizePrecise":"100","CycleCapacityRemainPrecise":"120"}`,
 		`{"PackageName":"nosize","CycleCapacityRemainPrecise":"7"}`,
 		`{}`)
@@ -754,8 +754,8 @@ func TestCreditPackageBranches(t *testing.T) {
 	if e := byName["expired"]; !strings.HasPrefix(e.EndTime, "2026-10-24") || e.ExpiresAt == 0 {
 		t.Errorf("expired = %+v", e)
 	}
-	if p := byName["pkgend"]; !strings.HasPrefix(p.EndTime, "2026-10-25") {
-		t.Errorf("pkgend = %+v", p)
+	if p := byName["nocycle"]; p.EndTime != "" || p.ExpiresAt != 0 {
+		t.Errorf("没有到期字段的包不该有到期时刻: %+v", p)
 	}
 	if cy := byName["cycle"]; !cy.Cycle || cy.Remain != 100 || cy.Size != 100 || cy.Used != 0 {
 		t.Errorf("cycle = %+v（剩余超过额度应按额度算）", cy)
@@ -769,6 +769,43 @@ func TestCreditPackageBranches(t *testing.T) {
 	// 面额降序：cycle(100) 在 nosize(0) 之前。
 	if packs[0].Size < packs[len(packs)-1].Size {
 		t.Errorf("应按面额降序: %+v", packs)
+	}
+}
+
+// TestPackageExpiryByType 到期时刻照桌面端按包类型取：一次性发放的包看 DeductionEndTime，
+// 每日免费包和按周期刷新的包看 CycleEndTime（刷新的包标 refresh），缺字段时依次回落。
+func TestPackageExpiryByType(t *testing.T) {
+	deduct := time.Date(2026, 11, 20, 23, 59, 59, 0, softRateResetLoc)
+	cycle := "2026-11-01 00:00:00"
+	both := `"DeductionEndTime":` + strconv.FormatInt(deduct.UnixMilli(), 10) + `,"CycleEndTime":"` + cycle + `"`
+	cases := []struct {
+		name, code, fields string
+		want               string // 到期日（北京时间）
+		refresh            bool
+	}{
+		{"活动包看 DeductionEndTime", "TCACA_code_007_nzdH5h4Nl0", both, "2026-11-20", false},
+		{"加油包看 DeductionEndTime", "TCACA_code_009_0XmEQc2xOf", both, "2026-11-20", false},
+		{"一次性的包缺 DeductionEndTime 回落 ExpiredTime", "TCACA_code_007_nzdH5h4Nl0", `"ExpiredTime":"2026-11-05 00:00:00","CycleEndTime":"` + cycle + `"`, "2026-11-05", false},
+		{"一次性的包只有 CycleEndTime", "TCACA_code_036_lupO5WgNdG", `"CycleEndTime":"` + cycle + `"`, "2026-11-01", false},
+		{"每日免费包看 CycleEndTime", "TCACA_code_001_PqouKr6QWV", both, "2026-11-01", false},
+		{"体验包看刷新时间", "TCACA_code_039_KRcQj7wUat", both, "2026-11-01", true},
+		{"国际版 Bonus Pack 看刷新时间", "TCACA_code_037_WxOD3MpI2o", both, "2026-11-01", true},
+		{"刷新的包缺 CycleEndTime 回落 DeductionEndTime", "TCACA_code_002_AkiJS3ZHF5", `"DeductionEndTime":` + strconv.FormatInt(deduct.UnixMilli(), 10), "2026-11-20", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var r resourceAccount
+			if err := json.Unmarshal([]byte(`{"PackageCode":"`+tc.code+`",`+tc.fields+`}`), &r); err != nil {
+				t.Fatal(err)
+			}
+			_, at, ok := r.expiry()
+			if !ok || at.In(softRateResetLoc).Format(time.DateOnly) != tc.want {
+				t.Fatalf("expiry = %v %v，want %s", at, ok, tc.want)
+			}
+			if r.refreshes() != tc.refresh {
+				t.Fatalf("refreshes = %v，want %v", r.refreshes(), tc.refresh)
+			}
+		})
 	}
 }
 

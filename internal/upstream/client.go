@@ -2466,12 +2466,13 @@ type CreditPackage struct {
 	Remain int64  `json:"remain"`
 	Used   int64  `json:"used"`
 	Size   int64  `json:"size"`
-	// EndTime 该包的失效时刻：优先 DeductionEndTime（可抵扣窗口结束，真「用不完
-	// 就没了」），缺失依次回落 ExpiredTime / PackageEndTime / CycleEndTime（周期
-	// 边界，仅兜底）。RFC3339 或上游墙钟字符串，前端取日期部分展示。
+	// EndTime 包里剩下的积分作废的时刻，按包类型取（见 resourceAccount.expiry）。
+	// RFC3339 或上游墙钟字符串，前端取日期部分展示。
 	EndTime string `json:"end_time,omitempty"`
 	// ExpiresAt 与 EndTime 同源的 Unix 毫秒时间戳，供面板按精确剩余天数聚合。
 	ExpiresAt int64 `json:"expires_at,omitempty"`
+	// Refresh 为 true 表示按周期刷新的包（订阅、体验类），EndTime 是刷新时刻。
+	Refresh bool `json:"refresh,omitempty"`
 	// CreatedAt 发放时刻，RFC3339。**这是区分「首登赠送」与「活动奖励」的唯一依据**：
 	// 两类包的 PackageName 与 PackageCode 完全相同（例如都是「国内运营裂变包」+
 	// TCACA_code_007_*），只看名字无法区分，只有时间能说明它是不是账号首次授权那刻发的。
@@ -2502,26 +2503,13 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 			SubProductCode: p.SubProductCode,
 			SubProductName: p.SubProductName,
 		}
-		switch {
-		case p.DeductionEndTime > 0:
-			// 真失效时刻（可抵扣窗口结束）：判「用不完就没了」用它而不是周期边界。
-			// epoch 毫秒 → RFC3339，与 CycleEndTime 字符串口径共存（前端统一 slice(0,10)
-			// 取日期）。ExpiresAt 直接用原始毫秒——RFC3339 不是 packageEndLayout 形态，
-			// 交给下方解析会静默失败得 0。
-			cp.EndTime = time.UnixMilli(p.DeductionEndTime).Format(time.RFC3339)
-			cp.ExpiresAt = p.DeductionEndTime
-		case p.ExpiredTime != "":
-			cp.EndTime = p.ExpiredTime
-		case p.PackageEndTime != "":
-			cp.EndTime = p.PackageEndTime
-		default:
-			cp.EndTime = p.CycleEndTime
+		var end time.Time
+		var ok bool
+		cp.EndTime, end, ok = p.expiry()
+		if ok {
+			cp.ExpiresAt = end.UnixMilli()
 		}
-		if cp.ExpiresAt == 0 && cp.EndTime != "" {
-			if end, perr := time.ParseInLocation(packageEndLayout, cp.EndTime, softRateResetLoc); perr == nil {
-				cp.ExpiresAt = end.UnixMilli()
-			}
-		}
+		cp.Refresh = p.refreshes()
 		// CreateTime 是 epoch 毫秒；0 表示上游没给，留空而不是伪造 1970。
 		if p.CreateTime > 0 {
 			cp.CreatedAt = time.UnixMilli(p.CreateTime).Format(time.RFC3339)
@@ -2561,14 +2549,13 @@ func parsePackageEndTime(raw string) (time.Time, bool) {
 }
 
 // UserResourceDetailed 在 UserResource 基础上额外返回「快过期」积分子集：
-// soon > 0 且套餐 CycleEndTime 解析成功且到期时刻 ≤ now+soon 的余额计入 expiring
-// （pool 据此优先消耗，避免官方活动赠送的奖励积分到期作废）；soon ≤ 0 时 expiring
-// 恒 0（禁用分桶，行为与引入前一致）。expiring 是 remain 的一部分。
+// soon > 0 且套餐到期时刻 ≤ now+soon 的余额计入 expiring（pool 据此优先消耗，避免官方活动
+// 赠送的奖励积分到期作废）；soon ≤ 0 时 expiring 恒 0（禁用分桶，行为与引入前一致）。
+// expiring 是 remain 的一部分。
 //
-// 到期时间判据是 CycleEndTime（上游实测：CN/global 两域字段全集均无 PackageEndTime，
-// 旧判据恒 miss 致 expiring 恒 0；CycleEndTime 是上游真实下发的到期时刻——
-// global Bonus Pack 14 天赠送积分的到期时间即此字段）。解析失败/缺失的套餐保守
-// 不计入 expiring（不误标为快过期而插队）。
+// 到期时刻按包类型取（resourceAccount.expiry）：一次性发放的包看 DeductionEndTime，
+// 每日免费包和按周期刷新的包（含国际版 14 天的 Bonus Pack）看 CycleEndTime。解析失败/缺失
+// 的套餐保守不计入 expiring（不误标为快过期而插队）。
 // 单套餐取数统一调 packageRemainUsed（与 CreditPackages 同一事实来源，含 remain
 // 钳 [0,size] 与 used 修正；消除双份逻辑漂移——旧中间 switch 只钳负值，上游脏数据
 // CycleRemain>Size 时会高估）。
@@ -2673,7 +2660,8 @@ func (c *Client) enterpriseResource(a *auth.Auth, soon time.Duration) (remain, t
 }
 
 // UserResourceDetailedWithExpiry 在 UserResourceDetailed 基础上返回最早未来到期批次：
-// earliestAt 是最早的可用到期时刻，earliestRemaining 是同一时刻所有正余额包的剩余量之和。
+// earliestAt 是最早的可用到期时刻，earliestRemaining 是和它同一天（北京时间）到期的所有正余额包
+// 的剩余量之和。到期时刻按包类型取（resourceAccount.expiry），和面板「检查」同一个口径。
 // 已过期、剩余为 0、缺少或无法解析到期时间的包都不会成为最早批次；无有效批次时返回零值。
 func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, err error) {
 	// 企业版额度不在「个人资源包」体系内：get-user-resource* 对 enterpriseId 非空账号
@@ -2687,6 +2675,7 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 	}
 	now := time.Now()
 	var sumLeft, sumSize float64
+	var earliestDay string // 最早一批的北京时间日期：同一天到期的合成一批，和面板「检查」一致
 	for _, p := range packs {
 		size, left := p.capacity()
 		sumLeft += left
@@ -2695,15 +2684,18 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 		if r <= 0 {
 			continue
 		}
-		end, ok := parsePackageEndTime(p.CycleEndTime)
+		_, end, ok := p.expiry()
 		if !ok || !end.After(now) {
 			continue
 		}
-		if earliestAt.IsZero() || end.Before(earliestAt) {
-			earliestAt = end
-			earliestRemaining = r
-		} else if end.Equal(earliestAt) {
+		switch day := end.In(softRateResetLoc).Format(time.DateOnly); {
+		case earliestAt.IsZero() || day < earliestDay:
+			earliestAt, earliestDay, earliestRemaining = end, day, r
+		case day == earliestDay:
 			earliestRemaining += r
+			if end.Before(earliestAt) {
+				earliestAt = end
+			}
 		}
 		// 分桶：仅 soon>0 且确实在窗口内 → expiring。
 		if soon > 0 && !end.After(now.Add(soon)) {

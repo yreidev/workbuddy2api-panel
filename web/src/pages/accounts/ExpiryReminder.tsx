@@ -27,7 +27,7 @@ export function ExpiryReminder({ accounts }: { accounts: Account[] | null | unde
         <span className="flex items-center gap-1">
           积分到期提醒
           <InfoTip label="到期提醒说明">
-            签到、任务发的积分包约一个月失效，用不完的部分到期直接作废。这里按每个账号最近要到期的一批估算：
+            签到、任务发的积分包约一个月失效，用不完的部分到期直接作废；订阅、体验这类按周期刷新的包，按刷新时刻算（刷新时没用完的是否结转未确认）。这里按每个账号最近要到期的一批估算：
             日均需耗 = 该批剩余 ÷ 距到期天数。上游按失效时刻先后优先扣减（FEFO），快过期的批次本来就最先被用掉。
           </InfoTip>
         </span>
