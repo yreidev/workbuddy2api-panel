@@ -52,6 +52,18 @@ func (p *Pool) notifySlotFreed() {
 // （域、禁用暂停、冷却熔断、模型级冷却、模型目录、积分保底），只是不看在途满没满。没有这样的号，
 // 等空位也等不来能用的号，选不到号就该直接回错。
 func (p *Pool) ServableIgnoringInFlight(tried map[string]bool, model, realm string) bool {
+	return p.servableExcept(tried, model, realm, false)
+}
+
+// ServableForModel 报告 tried 以外有没有号此刻就能接这个请求：过滤同 pick 的候选，在途满的也不算，
+// 但不含 pick 的全冷却兜底。国内版优先（pool.cross_realm 为 cn_first）据此判断国内版此刻能不能用：
+// 兜底会把冷却中的号捞回来，掩盖「这个域现在没有能用的号」。
+func (p *Pool) ServableForModel(tried map[string]bool, model, realm string) bool {
+	return p.servableExcept(tried, model, realm, true)
+}
+
+// servableExcept 上面两个的共用遍历；inFlight 为 true 时在途满的号不算。
+func (p *Pool) servableExcept(tried map[string]bool, model, realm string, inFlight bool) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := time.Now()
@@ -63,7 +75,7 @@ func (p *Pool) ServableIgnoringInFlight(tried map[string]bool, model, realm stri
 		if model != "" {
 			ok = p.servableFor(e, now, model)
 		}
-		if ok && !p.floorBlockedForRealmModel(e, model, realm, now) {
+		if ok && !p.floorBlockedForRealmModel(e, model, realm, now) && (!inFlight || !p.inFlightFull(e)) {
 			return true
 		}
 	}

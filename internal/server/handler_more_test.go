@@ -488,7 +488,7 @@ func TestModelListGlobalAndCrossRealm(t *testing.T) {
 	up.GlobalEnabled = true
 	auth.SetGlobalEnabled(true)
 	p := testPoolWith(&auth.Auth{UID: "g1", AccessToken: "at", Domain: "www.workbuddy.ai", ExpiresAt: 9999999999})
-	live := livecfg.New(livecfg.Snapshot{CrossRealm: true})
+	live := livecfg.New(livecfg.Snapshot{CrossRealm: livecfg.CrossRealmMerge})
 	h := NewHandler(Config{Pool: p, Upstream: up, GlobalEnabled: true, Live: live})
 
 	rec := httptest.NewRecorder()

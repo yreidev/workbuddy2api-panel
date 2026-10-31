@@ -82,7 +82,7 @@ func TestRunScheduleTogglesAndArchiveOff(t *testing.T) {
 	cfg.Schedule.BalanceRefreshMinutes = 5
 	cfg.BalanceRefreshInterval = 5 * time.Minute
 	cfg.Schedule.IncludeDisabledInTasks = true
-	cfg.Pool.CrossRealm = true
+	cfg.Pool.CrossRealm = livecfg.CrossRealmMerge
 	cfg.Logging.RequestArchiveEnabled = false
 
 	ln, err := net.Listen("tcp", "localhost:0")
@@ -106,7 +106,7 @@ func TestRunScheduleTogglesAndArchiveOff(t *testing.T) {
 		"token 保活已启用",
 		"夜猫子已启用",
 		"余额后台刷新：每 5m0s",
-		"跨域负载均衡已开启",
+		"跨域负载均衡：合池（pool.cross_realm=merge）",
 		"保号任务覆盖禁用账号",
 		"JSONL 归档已关闭",
 		"WB2A_SHUTDOWN_TIMEOUT 无效",

@@ -18,7 +18,7 @@ func TestNewAndLoad(t *testing.T) {
 		SoftCooldown:         90 * time.Second,
 		SanitizeFingerprints: true,
 		RecordClientInfo:     true,
-		CrossRealm:           true,
+		CrossRealm:           CrossRealmMerge,
 		UpdateCheck:          true,
 		ModelRoutes:          []ModelRoute{{Match: "claude-*", Target: "glm-5.2"}},
 	}
@@ -31,9 +31,9 @@ func TestNewAndLoad(t *testing.T) {
 // TestStoreReplacesSnapshot Store 后 Load 拿到新值，旧快照整体被替换。
 func TestStoreReplacesSnapshot(t *testing.T) {
 	h := New(Snapshot{APIKey: "old", SoftCooldown: time.Minute})
-	h.Store(Snapshot{APIKey: "new", CrossRealm: true})
+	h.Store(Snapshot{APIKey: "new", CrossRealm: CrossRealmCNFirst})
 	got := h.Load()
-	if got.APIKey != "new" || !got.CrossRealm || got.SoftCooldown != 0 {
+	if got.APIKey != "new" || got.CrossRealm != CrossRealmCNFirst || got.SoftCooldown != 0 {
 		t.Errorf("Store 后 = %+v", got)
 	}
 }

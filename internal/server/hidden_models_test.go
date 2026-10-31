@@ -54,7 +54,7 @@ func TestChatHiddenModels(t *testing.T) {
 			h := NewHandler(Config{
 				Pool: testPoolWith(cn, gl), Upstream: up, GlobalEnabled: true,
 				Live: livecfg.New(livecfg.Snapshot{
-					CrossRealm: c.cross, ModelRoutes: c.routes, HiddenModels: livecfg.NormalizeHiddenModels(c.hidden),
+					CrossRealm: mergeIf(c.cross), ModelRoutes: c.routes, HiddenModels: livecfg.NormalizeHiddenModels(c.hidden),
 				}),
 			})
 			body := `{"model":"` + c.model + `","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -89,7 +89,7 @@ func TestModelsHidden(t *testing.T) {
 	up := (&crossRealmUpstream{}).client(t, []string{"m-both", "m-cn"}, []string{"m-both", "m-global"})
 	h := NewHandler(Config{
 		Pool: testPoolWith(cn, gl), Upstream: up, GlobalEnabled: true,
-		Live: livecfg.New(livecfg.Snapshot{CrossRealm: true, HiddenModels: livecfg.NormalizeHiddenModels([]string{"m-cn", "global:m-both"})}),
+		Live: livecfg.New(livecfg.Snapshot{CrossRealm: livecfg.CrossRealmMerge, HiddenModels: livecfg.NormalizeHiddenModels([]string{"m-cn", "global:m-both"})}),
 	})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))

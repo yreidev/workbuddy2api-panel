@@ -145,7 +145,7 @@ func TestFull8ChatCrossRoutedRate(t *testing.T) {
 	u := usage.New("")
 	h := NewHandler(Config{
 		Pool: p, Upstream: up, Usage: u, GlobalEnabled: true,
-		Live: livecfg.New(livecfg.Snapshot{CrossRealm: true}),
+		Live: livecfg.New(livecfg.Snapshot{CrossRealm: livecfg.CrossRealmMerge}),
 	})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions",

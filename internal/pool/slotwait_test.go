@@ -101,6 +101,37 @@ func TestServableIgnoringInFlight(t *testing.T) {
 	}
 }
 
+// TestServableForModel 「此刻就能接」比「等得到」更严：在途满的号不算；软冷却的号也不算，
+// 尽管 pick 的全冷却兜底照样会把它选出来。
+func TestServableForModel(t *testing.T) {
+	withNoPickGap(t)
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	p.SetMaxInFlight(1)
+	if !p.ServableForModel(nil, "m", "cn") || !p.ServableForModel(nil, "", "") {
+		t.Fatal("空闲的健康号应算此刻能接")
+	}
+	if p.ServableForModel(map[string]bool{"u1": true}, "m", "") || p.ServableForModel(nil, "m", "global") {
+		t.Fatal("这次试过的号、别的域的号都不算")
+	}
+	if !p.Acquire("u1") {
+		t.Fatal("Acquire 应成功")
+	}
+	if p.ServableForModel(nil, "m", "") || !p.ServableIgnoringInFlight(nil, "m", "") {
+		t.Fatal("在途满：此刻接不了，但等得到")
+	}
+	p.Release("u1")
+	p.Cooldown("u1", CoolSoft, time.Hour, "test")
+	if p.ServableForModel(nil, "m", "") {
+		t.Fatal("软冷却中的号不算此刻能接")
+	}
+	if p.PickExcludingForRealm(nil, "m", "") == nil {
+		t.Fatal("对照：pick 的全冷却兜底应选出软冷却的号")
+	}
+}
+
 // TestSetInFlightWait 默认 30 秒；0 = 不等；负值保留原值。
 func TestSetInFlightWait(t *testing.T) {
 	p := New("")

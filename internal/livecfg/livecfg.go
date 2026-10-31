@@ -24,13 +24,20 @@ type Snapshot struct {
 	SoftCooldown         time.Duration // 429 软冷却基数（<=0 时调用方回退内置默认）
 	SanitizeFingerprints bool          // 出站请求体指纹脱敏
 	RecordClientInfo     bool          // 请求日志是否记录调用来源（客户端 IP / UA）
-	CrossRealm           bool          // 跨域负载均衡：不带前缀的模型名在国内版 + 国际版合池选号
+	CrossRealm           string        // 跨域负载均衡（pool.cross_realm）：CrossRealmMerge、CrossRealmCNFirst，空或 CrossRealmOff 为关
 	UpdateCheck          bool          // 面板定时检查新版本（读 GitHub 上的更新日志）
 	ModelRoutes          []ModelRoute  // 模型路由规则：按顺序匹配，只改写模型目录里没有的名字
 	// HiddenModels 不对外的模型，键是带域前缀的全名（cn:x / global:x），见 NormalizeHiddenModels；
 	// nil = 不隐藏。只读共享，不得修改。
 	HiddenModels map[string]struct{}
 }
+
+// pool.cross_realm 的三档（Snapshot.CrossRealm）：不带前缀的模型名怎么在两个域之间分。
+const (
+	CrossRealmOff     = "off"      // 只走国内版
+	CrossRealmMerge   = "merge"    // 两个域都有这个模型时合池选号
+	CrossRealmCNFirst = "cn_first" // 国内版优先：国内版此刻没有能接的号才用国际版
+)
 
 // NormalizeHiddenModels 把 models.hidden 的条目归一成带域前缀的全名集合：带 cn: / global:
 // 前缀的只藏那个域，裸名两个域都藏。精确匹配、区分大小写（前缀规则同 server.resolveModel：

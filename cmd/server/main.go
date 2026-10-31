@@ -290,8 +290,11 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	case cfg.BalanceRefreshInterval > 0:
 		log.Printf("余额后台刷新：每 %s（签到时点照常额外刷新）", cfg.BalanceRefreshInterval)
 	}
-	if cfg.Pool.CrossRealm {
-		log.Printf("跨域负载均衡已开启（pool.cross_realm=true）：不带前缀的模型名在国内版 + 国际版合池选号")
+	switch cfg.Pool.CrossRealm {
+	case livecfg.CrossRealmMerge:
+		log.Printf("跨域负载均衡：合池（pool.cross_realm=merge），不带前缀的模型名在国内版 + 国际版合池选号")
+	case livecfg.CrossRealmCNFirst:
+		log.Printf("跨域负载均衡：国内版优先（pool.cross_realm=cn_first），国内版此刻没有能接的号时不带前缀的模型名才用国际版")
 	}
 	if cfg.Schedule.IncludeDisabledInTasks {
 		log.Printf("保号任务覆盖禁用账号（schedule.include_disabled_in_tasks=true）：禁用号仍签到 / 活跃 / 保活 / 刷新余额，但不参与选号")
@@ -305,7 +308,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		SoftCooldown:         cfg.SoftRateDur,
 		SanitizeFingerprints: cfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
-		CrossRealm:           cfg.Pool.CrossRealm,
+		CrossRealm:           string(cfg.Pool.CrossRealm),
 		UpdateCheck:          cfg.Panel.UpdateCheck,
 		ModelRoutes:          cfg.ModelRoutes,
 		HiddenModels:         livecfg.NormalizeHiddenModels(cfg.Models.Hidden),
@@ -711,7 +714,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		SoftCooldown:         newCfg.SoftRateDur,
 		SanitizeFingerprints: newCfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
-		CrossRealm:           newCfg.Pool.CrossRealm,
+		CrossRealm:           string(newCfg.Pool.CrossRealm),
 		UpdateCheck:          newCfg.Panel.UpdateCheck,
 		ModelRoutes:          newCfg.ModelRoutes,
 		HiddenModels:         livecfg.NormalizeHiddenModels(newCfg.Models.Hidden),

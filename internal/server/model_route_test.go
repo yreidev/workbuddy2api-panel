@@ -25,7 +25,7 @@ func routeRig(t *testing.T, globalEnabled bool, routes ...livecfg.ModelRoute) (*
 	gl := &auth.Auth{UID: "g1", AccessToken: "at-global", ExpiresAt: 9999999999, Domain: "www.workbuddy.ai"}
 	h := NewHandler(Config{
 		Pool: testPoolWith(cn, gl), Upstream: up, GlobalEnabled: globalEnabled,
-		Live: livecfg.New(livecfg.Snapshot{CrossRealm: true, ModelRoutes: routes}),
+		Live: livecfg.New(livecfg.Snapshot{CrossRealm: livecfg.CrossRealmMerge, ModelRoutes: routes}),
 	})
 	return h, cu
 }

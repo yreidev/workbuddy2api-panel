@@ -258,11 +258,12 @@ type Config struct {
 		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
 		// 默认 0 = 关闭；负值钳 0。
 		CreditFloor int64 `json:"credit_floor"`
-		// CrossRealm 跨域负载均衡，默认 false（= 现状：不带前缀的模型名只走国内版）。
-		// 打开后，不带 cn: / global: 前缀的模型请求在「模型目录里有这个模型」的各域账号
-		// 合成的一个池里选号，规则不变（实测免费优先，再按积分 / 闲置等权重加权随机）；
-		// 带前缀的照旧只走该域。/v1/models 同时列出不带前缀的模型名。热生效。
-		CrossRealm bool `json:"cross_realm"`
+		// CrossRealm 跨域负载均衡，三档（见 livecfg.CrossRealm*），默认 "off"：不带前缀的模型名只走国内版。
+		// "merge"：不带 cn: / global: 前缀的模型请求在「模型目录里有这个模型」的各域账号合成的一个池里
+		// 选号，规则不变（实测免费优先，再按积分 / 闲置等权重加权随机）。"cn_first"：两个域都有这个模型时
+		// 国内版优先，国内版此刻没有能接的号才在国际版选。带前缀的照旧只走该域；打开时 /v1/models 同时
+		// 列出不带前缀的模型名。热生效。1.8.0 及以前是布尔，true 读成 "merge"、false 读成 "off"。
+		CrossRealm crossRealmMode `json:"cross_realm"`
 		// 风控波熔断：restriction_wave_window 内同一个域有 restriction_wave_threshold 个号
 		// 被上游 11140「账号存在异常行为」限制，就把该域其余的号暂停 restriction_wave_pause。
 		// 默认 2 个 / "15m" / "30m"（照 workbuddy2api-hub #629 的做法）；阈值 0 = 关闭，
@@ -740,7 +741,34 @@ func (c *Config) normalize() error {
 	if err := c.normalizeDNSServers(); err != nil {
 		return err
 	}
+	switch c.Pool.CrossRealm {
+	case "":
+		c.Pool.CrossRealm = livecfg.CrossRealmOff
+	case livecfg.CrossRealmOff, livecfg.CrossRealmMerge, livecfg.CrossRealmCNFirst:
+	default:
+		return fmt.Errorf("pool.cross_realm 只能是 off、merge、cn_first，不认 %q", string(c.Pool.CrossRealm))
+	}
 	return c.normalizePrompt()
+}
+
+// crossRealmMode pool.cross_realm 的取值。老配置是布尔：true 读成 "merge"、false 读成 "off"。
+type crossRealmMode string
+
+func (m *crossRealmMode) UnmarshalJSON(b []byte) error {
+	var on bool
+	if json.Unmarshal(b, &on) == nil {
+		*m = livecfg.CrossRealmOff
+		if on {
+			*m = livecfg.CrossRealmMerge
+		}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("pool.cross_realm 只能是 \"off\"、\"merge\"、\"cn_first\" 或老写法 true、false，不认 %s", b)
+	}
+	*m = crossRealmMode(s)
+	return nil
 }
 
 // normalizeModelRoutes 去掉两端空白并校验：match、target 都不能为空，target 不能带通配。

@@ -508,8 +508,8 @@ func (h *Handler) modelList() []map[string]any {
 			out = append(out, entry)
 		}
 		// 跨域负载均衡打开时，再列一份不带前缀的名字放在最前：客户端从列表里选到的
-		// 就是会在两域合池选号的名字；带前缀的条目照旧保留，用来钉死某一域。
-		if h.loadLive().CrossRealm {
+		// 就是会分到两域的名字；带前缀的条目照旧保留，用来钉死某一域。
+		if crossRealmOn(h.loadLive().CrossRealm) {
 			out = append(bareModelEntries(out), out...)
 		}
 	}
@@ -675,15 +675,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	realm, bareModel := resolveModel(peek.Model)
 	hidden := h.loadLive().HiddenModels
 	// 跨域负载均衡（pool.cross_realm，热生效）：只管不带前缀的模型名，带前缀的照旧钉死该域。
-	// 改写 realm 为目录里有这个模型的域；两域都有时为 ""，下方选号即在两域合池里挑。
+	// 改写 realm 为目录里有这个模型的域；两域都有时合池为 ""，下方选号即在两域合池里挑；国内版优先时
+	// 先定成此刻该用的域，选号循环每次再按国内版有没有能接的号重定（cnFirstRealm）。
 	// models.hidden 里只藏了一个域的，当那个域没有这个模型。
-	crossRouted := false
-	if bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && h.loadLive().CrossRealm {
+	crossRouted, cnFirst := false, false
+	if mode := h.loadLive().CrossRealm; bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && crossRealmOn(mode) {
 		realm = crossRealmFor(bareModel, func(r, m string) bool {
 			_, hide := hidden[r+":"+m]
 			return !hide && h.cfg.Upstream.RealmHasModel(r, m)
 		})
 		crossRouted = true
+		if realm == "" && mode == livecfg.CrossRealmCNFirst {
+			realm, cnFirst = h.cnFirstRealm(nil, bareModel), true
+		}
 	}
 	modelRate := ""
 	if h.cfg.Upstream != nil {
@@ -742,7 +746,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
 		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
-		// 域用上面已定好的 realm（跨域合池时为 ""）：粘性候选若自己按模型名再判一次，
+		// 域用上面已定好的 realm（跨域合池时为 ""，国内版优先时为此刻该用的域）：粘性候选若自己按模型名再判一次，
 		// 不带前缀的名字一律算国内版，合池时会话永远只绑国内版号，国际版号轮不到。
 		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, bareModel, realm); ok {
 			stickyUID = uid
@@ -948,6 +952,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		// 在选号之前取：选号和开始等之间放出的名额也能叫醒这个请求。
 		slotFreed := h.cfg.Pool.SlotFreed()
+		if cnFirst {
+			// 国内版优先：每次选号前重定域。换号后国内版可能没有能接的号了，排队醒来后国内版可能又有了；
+			// 绑在国际版号上的会话等国内版有号了也回国内版（下面按域不符解绑）。
+			realm = h.cnFirstRealm(tried, bareModel)
+		}
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
 		if stickyUID != "" {

@@ -58,6 +58,15 @@ describe('配置表单', () => {
     expect(field('request_client_info').kind).toBe('switch')
   })
 
+  it('跨域负载均衡是三选一：回填后端规范化过的取值，原样提交', () => {
+    expect(field('cross_realm').kind).toBe('select')
+    expect(field('cross_realm').options!.map((o) => o.id)).toEqual(['off', 'merge', 'cn_first'])
+    const form = toForm({ pool: { cross_realm: 'cn_first' } })
+    expect(form.cross_realm).toBe('cn_first')
+    const body = fromForm(form) as Record<string, Record<string, unknown>>
+    expect(body.pool.cross_realm).toBe('cn_first')
+  })
+
   it('时长、时点、数字校验', () => {
     expect(validateField(field('soft_rate'), '1h30m')).toBeNull()
     expect(validateField(field('soft_rate'), '30 分钟')).not.toBeNull()

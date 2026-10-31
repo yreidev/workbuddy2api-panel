@@ -17,7 +17,7 @@
 | `api_key` | 自动生成时为随机值 | 想换成自己的密钥。**为空 = 不鉴权**，暴露到局域网或公网前务必设置 |
 | `listen` | `:7863` | 换端口，或只监听本机（`127.0.0.1:7863`） |
 | `pool.max_in_flight` | `3` | 单个账号同时处理几个请求 |
-| `pool.cross_realm` | `false` | 同时有国内版和国际版账号，想让不带前缀的模型名在两边合池负载均衡 |
+| `pool.cross_realm` | `off` | 同时有国内版和国际版账号，想让不带前缀的模型名在两边合池负载均衡（`merge`），或者国内版优先、国际版只做后备（`cn_first`） |
 | `pool.credit_floor` | `0`（关） | 防止收费模型把余额打穿，样例配置里是 `100` |
 | `prompt.mode` | `passthrough` | 客户端的系统提示词频繁被上游内容审核误拦时改成 `custom` |
 | `schedule.*_enabled` | 全部 `true` | 关掉不需要的定时任务 |
@@ -128,7 +128,7 @@
 | `pool.max_in_flight` | `3` | 国内版单账号最大在途请求数；`0` = 不限 |
 | `pool.max_in_flight_global` | `2` | 国际版单账号在途上限（国际版风控更紧） |
 | `pool.in_flight_wait` | `30s` | 能接请求的号在途都满时，请求最多排队等多久空位，等满才回 503，见[网关与选号](gateway.md#选号策略)；`0` = 不等 |
-| `pool.cross_realm` | `false` | 跨域负载均衡，见[网关与选号](gateway.md#跨域负载均衡) |
+| `pool.cross_realm` | `off` | 跨域负载均衡：`off` 关闭、`merge` 合池、`cn_first` 国内版优先；老配置的 `true` 读成 `merge`、`false` 读成 `off`，见[网关与选号](gateway.md#跨域负载均衡) |
 | `pool.credit_floor` | `0` | 积分保底：余额低于该值的账号不再接实测收费的模型；`0` = 关闭 |
 | `pool.prefer_expiring` | `true` | 有积分快过期的账号选号权重 ×3，优先把快过期的积分用掉 |
 | `pool.expiring_soon` | `168h` | 「快过期」的窗口；空或 `0` 关闭 |

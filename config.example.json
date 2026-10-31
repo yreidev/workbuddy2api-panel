@@ -91,7 +91,7 @@
     "expiring_soon": "168h",
     "cost_explore_interval": "30m",
     "credit_floor": 100,
-    "cross_realm": false,
+    "cross_realm": "off",
     "restriction_wave_threshold": 2,
     "restriction_wave_window": "15m",
     "restriction_wave_pause": "30m"

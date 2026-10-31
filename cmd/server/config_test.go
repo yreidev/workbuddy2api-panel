@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
 )
 
 func TestDefault(t *testing.T) {
@@ -961,5 +963,50 @@ func TestDNSServers(t *testing.T) {
 	}
 	if !slices.Contains(restartRequiredFields(c), "dns_servers") {
 		t.Error("配了 dns_servers 时应列为需重启")
+	}
+}
+
+// TestCrossRealmModes pool.cross_realm 三档：老布尔 true 读成合池、false 和 null 读成关，没写也是关；
+// 字符串只认三档，别的值和别的类型加载时报错。
+func TestCrossRealmModes(t *testing.T) {
+	for raw, want := range map[string]crossRealmMode{
+		`{}`:                                  livecfg.CrossRealmOff,
+		`{"pool":{"cross_realm":true}}`:       livecfg.CrossRealmMerge,
+		`{"pool":{"cross_realm":false}}`:      livecfg.CrossRealmOff,
+		`{"pool":{"cross_realm":null}}`:       livecfg.CrossRealmOff,
+		`{"pool":{"cross_realm":""}}`:         livecfg.CrossRealmOff,
+		`{"pool":{"cross_realm":"off"}}`:      livecfg.CrossRealmOff,
+		`{"pool":{"cross_realm":"merge"}}`:    livecfg.CrossRealmMerge,
+		`{"pool":{"cross_realm":"cn_first"}}`: livecfg.CrossRealmCNFirst,
+	} {
+		c, err := ParseConfig([]byte(raw))
+		if err != nil {
+			t.Errorf("%s: %v", raw, err)
+			continue
+		}
+		if c.Pool.CrossRealm != want {
+			t.Errorf("%s: CrossRealm=%q want %q", raw, c.Pool.CrossRealm, want)
+		}
+	}
+	for raw, want := range map[string]string{
+		`{"pool":{"cross_realm":"on"}}`:    `不认 "on"`,
+		`{"pool":{"cross_realm":"Merge"}}`: `不认 "Merge"`,
+		`{"pool":{"cross_realm":1}}`:       "不认 1",
+	} {
+		if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err=%v want %q", raw, err, want)
+		}
+	}
+	// 面板读到的是规范化后的值：老配置 true 显示成 "merge"。
+	c, err := ParseConfig([]byte(`{"pool":{"cross_realm":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(c.Pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"cross_realm":"merge"`) {
+		t.Errorf("序列化结果=%s，应含 \"cross_realm\":\"merge\"", b)
 	}
 }

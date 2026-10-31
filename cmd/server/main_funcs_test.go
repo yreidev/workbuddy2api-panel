@@ -451,7 +451,7 @@ func TestSaveConfig(t *testing.T) {
 
 		snap := live.Load()
 		if snap.APIKey != "new-key" || snap.SoftCooldown != 90*time.Second ||
-			!snap.SanitizeFingerprints || !snap.RecordClientInfo || !snap.CrossRealm || !snap.UpdateCheck {
+			!snap.SanitizeFingerprints || !snap.RecordClientInfo || snap.CrossRealm != livecfg.CrossRealmMerge || !snap.UpdateCheck {
 			t.Fatalf("live 快照热生效不对: %+v", snap)
 		}
 		if want := []livecfg.ModelRoute{{Match: "claude-*haiku*", Target: "cn:glm-5.2"}}; !reflect.DeepEqual(snap.ModelRoutes, want) {
