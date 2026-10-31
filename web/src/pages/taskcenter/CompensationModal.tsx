@@ -4,17 +4,23 @@
 
 // 积分补偿（官方不定期发放的补偿活动）：打开弹窗逐账号查状态，可单号领取或领取全部；额度与领取期限均采用官方返回值。
 // 签到排程会自动检查并领取，这里是手动入口，所以和券码一样收在任务中心的按钮里，不常驻页面。
+// 还没领的离截止不到 48 小时就标红（签到排程停了、号被禁用时，补偿会悄悄过期）。
 import { Button, Chip, Modal, toast } from '@heroui/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { acct, post } from '../../lib/api'
-import { toastError } from '../../lib/hooks'
+import { until } from '../../lib/format'
+import { toastError, useNow } from '../../lib/hooks'
+import { pkExpiryMs } from '../../lib/packages'
 import { qk, useCompensation } from '../../lib/queries'
-import type { CompensationAccount, CompensationResp } from '../../lib/types'
+import type { CompensationAccount, CompensationResp, CompensationStatus } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
+
+const URGENT_MS = 48 * 3600_000
 
 export function CompensationModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient()
   const query = useCompensation(open)
+  const now = useNow(60_000)
   const mutation = useMutation({
     mutationFn: async (uid: string) => {
       if (uid === '*') return post<CompensationResp>('compensation/claim_all')
@@ -64,7 +70,7 @@ export function CompensationModal({ open, onClose }: { open: boolean; onClose: (
                         </p>
                         {a.error ? <p className="mt-1 break-all text-xs text-danger">{a.error}</p> : a.status && <p className="mt-1 text-xs text-muted">
                           {a.status.credit_num > 0 && `${a.status.credit_num} 积分`}
-                          {a.status.end_time && ` · 领取截止 ${a.status.end_time}`}
+                          {a.status.end_time && <Deadline status={a.status} now={now} />}
                         </p>}
                         {a.balance_error && <p className="mt-1 break-all text-xs text-warning">补偿已领取，余额刷新失败：{a.balance_error}</p>}
                       </div>
@@ -86,6 +92,15 @@ export function CompensationModal({ open, onClose }: { open: boolean; onClose: (
       </Modal.Container>
     </Modal.Backdrop>
   )
+}
+
+/** 领取截止时间；上游给的是不带时区的北京时间。还没领、离截止不到 48 小时的标红，并写明还剩多久
+ *  （按小时写：until 的天数向上取整，剩 30 小时会写成「2 天后」） */
+function Deadline({ status: s, now }: { status: CompensationStatus; now: number }) {
+  const at = pkExpiryMs({ end_time: s.end_time })
+  if (at == null || !s.active || s.claimed || at - now > URGENT_MS) return <> · 领取截止 {s.end_time}</>
+  const left = at <= now ? '已过截止时间' : (at - now < 3600_000 ? until(at, now) : Math.ceil((at - now) / 3600_000) + ' 小时后') + '截止'
+  return <span className="text-danger"> · 领取截止 {s.end_time}（{left}）</span>
 }
 
 function CompensationBadge({ account: a }: { account: CompensationAccount }) {
