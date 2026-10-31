@@ -429,10 +429,10 @@ func TestBridgeWriterEdges(t *testing.T) {
 	}
 }
 
-// 读请求体失败：两个入口和 count_tokens 都按客户端协议回 400。
+// 读请求体失败：两个入口、count_tokens 和 /v1/search/messages 都按客户端协议回 400。
 func TestBridgeReadBodyError(t *testing.T) {
 	h, _ := bridgeHandler(t, 200, sseOK, true)
-	for _, path := range []string{"/v1/messages", "/v1/responses", "/v1/messages/count_tokens"} {
+	for _, path := range []string{"/v1/messages", "/v1/responses", "/v1/messages/count_tokens", "/v1/search/messages"} {
 		req := httptest.NewRequest("POST", path, io.NopCloser(errReader{}))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)

@@ -27,17 +27,21 @@ import (
 
 var translators = builtin.Registry()
 
-// chatPaths 走对话链路的入口，请求日志按这些路径记账。
-var chatPaths = map[string]bool{
+// tracedPaths 请求日志按这些路径记账：对话链路的三个入口和 /v1/search/messages（/mcp 只在调了搜索工具时
+// 记，见 mcp.go）。
+var tracedPaths = map[string]bool{
 	"/v1/chat/completions": true,
 	"/v1/messages":         true,
 	"/v1/responses":        true,
+	"/v1/search/messages":  true,
 }
 
 func (h *Handler) registerBridgeRoutes() {
 	h.mux.HandleFunc("POST /v1/messages", h.withKeyAuth(sdktranslator.FormatClaude, true, h.anthropicMessages))
 	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withKeyAuth(sdktranslator.FormatClaude, true, h.countTokens))
 	h.mux.HandleFunc("POST /v1/responses", h.withKeyAuth(sdktranslator.FormatOpenAIResponse, true, h.openaiResponses))
+	h.mux.HandleFunc("POST /v1/search/messages", h.withKeyAuth(sdktranslator.FormatClaude, true, h.searchMessages))
+	h.mux.Handle("/mcp", h.withKeyAuth(sdktranslator.FormatOpenAI, true, h.mcpHandler().ServeHTTP))
 	h.mux.HandleFunc("/v1/v1/", h.doubledV1)
 }
 
@@ -54,22 +58,33 @@ func (h *Handler) doubledV1(w http.ResponseWriter, r *http.Request) {
 		"Base URL 多带了一个 /v1：请求成了 "+r.URL.Path+"。把 Base URL 末尾的 /v1 去掉。")
 }
 
-// anthropicMessages POST /v1/messages（Claude Code、Anthropic SDK）。
+// anthropicMessages POST /v1/messages（Claude Code、Anthropic SDK）。Claude Code WebSearch 的子请求不交给
+// 模型，网关直接搜（见 search_messages.go）。
 func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
-	h.bridge(w, r, sdktranslator.FormatClaude)
+	body, err := readRequestBody(r)
+	if err != nil {
+		writeBridgeError(w, sdktranslator.FormatClaude, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
+		return
+	}
+	if req, tool, query, ok := claudeCodeSearch(body); ok {
+		h.anthropicSearch(w, r, req, tool, query)
+		return
+	}
+	h.bridgeBody(w, r, sdktranslator.FormatClaude, body)
 }
 
 // openaiResponses POST /v1/responses（Codex CLI、OpenAI Responses SDK）。
 func (h *Handler) openaiResponses(w http.ResponseWriter, r *http.Request) {
-	h.bridge(w, r, sdktranslator.FormatOpenAIResponse)
-}
-
-func (h *Handler) bridge(w http.ResponseWriter, r *http.Request, format sdktranslator.Format) {
 	body, err := readRequestBody(r)
 	if err != nil {
-		writeBridgeError(w, format, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
+		writeBridgeError(w, sdktranslator.FormatOpenAIResponse, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
+	h.bridgeBody(w, r, sdktranslator.FormatOpenAIResponse, body)
+}
+
+// bridgeBody 把读好的请求体翻成聊天格式交给 chatCompletions，写出时翻回客户端的协议。
+func (h *Handler) bridgeBody(w http.ResponseWriter, r *http.Request, format sdktranslator.Format, body []byte) {
 	var peek struct {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`

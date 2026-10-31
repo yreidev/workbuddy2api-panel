@@ -259,8 +259,8 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	}
 	req.Header.Set("X-Agent-Intent", "craft")
 	req.Header.Set("X-Agent-Type", "main")
-	if !a.IsGlobal() {
-		req.Header.Set("X-Agent-Runtime", "local-agent")
+	if rt := agentRuntime(a); rt != "" {
+		req.Header.Set("X-Agent-Runtime", rt)
 	}
 	req.Header.Set("X-Private-Data", c.privateDataValue(a))
 	req.Header.Set("X-Product", deploymentType)
@@ -296,6 +296,15 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	}
 	// 会话头族（对话/请求/消息/链路），见 injectConversationHeaders。
 	c.injectConversationHeaders(req, meta)
+}
+
+// agentRuntime 对话和联网搜索的 X-Agent-Runtime：2.165.0 取会话的 agentRuntime，桌面端 5.9.3 给本地对话
+// 设的是 local-agent；国际版 5.8.4 内置的 2.161.0 没有这个头，返回空串（不发）。
+func agentRuntime(a *auth.Auth) string {
+	if a.IsGlobal() {
+		return ""
+	}
+	return "local-agent"
 }
 
 // chatDomain chat 出站的 X-Domain：国际版固定 www.workbuddy.ai（与国际版登录域相同，不回退

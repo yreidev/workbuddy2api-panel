@@ -104,25 +104,35 @@ func (h *Handler) withKeyAuth(format sdktranslator.Format, xAPIKey bool, next ht
 // 请求（请求最后失败时由调用方 Refund 退还）。不放行时写好错误并返回状态码，放行返回 0。管理员密钥
 // 和没开鉴权的请求直接放行。
 func (h *Handler) admitKey(w http.ResponseWriter, p principal, bareModel string, now time.Time) int {
-	if p.key == nil {
-		return 0
-	}
-	if bareModel != "" && !p.key.AllowsModel(bareModel) {
-		writeOpenAIError(w, http.StatusForbidden, "model_not_allowed",
-			fmt.Sprintf("密钥「%s」不能用模型 %s，允许的模型：%s", p.key.Name, bareModel, strings.Join(p.key.Models, "、")))
-		return http.StatusForbidden
-	}
-	d := h.cfg.Keys.Admit(p.key.ID, now)
+	d := h.keyDenial(p, bareModel, now)
 	if d == nil {
 		return 0
 	}
-	if d.Status == http.StatusTooManyRequests {
-		// 上限用完重试没用：告诉 SDK 别自动重试，每天的上限另给出到日切的秒数
-		w.Header().Set("X-Should-Retry", "false")
-		if d.RetryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int(d.RetryAfter.Round(time.Second).Seconds())))
-		}
-	}
+	denialHeaders(w, d)
 	writeOpenAIError(w, d.Status, d.Code, d.Message)
 	return d.Status
+}
+
+// keyDenial 客户端密钥这次放不放行（规则见 admitKey）：放行返回 nil 并计一次请求，不放行返回原因，
+// 由调用方按入口协议写出。bareModel 为空时不看白名单（联网搜索不是模型调用）。
+func (h *Handler) keyDenial(p principal, bareModel string, now time.Time) *apikeys.Denied {
+	if p.key == nil {
+		return nil
+	}
+	if bareModel != "" && !p.key.AllowsModel(bareModel) {
+		return &apikeys.Denied{Status: http.StatusForbidden, Code: "model_not_allowed",
+			Message: fmt.Sprintf("密钥「%s」不能用模型 %s，允许的模型：%s", p.key.Name, bareModel, strings.Join(p.key.Models, "、"))}
+	}
+	return h.cfg.Keys.Admit(p.key.ID, now)
+}
+
+// denialHeaders 上限用完重试没用：告诉 SDK 别自动重试，每天的上限另给出到日切的秒数。
+func denialHeaders(w http.ResponseWriter, d *apikeys.Denied) {
+	if d.Status != http.StatusTooManyRequests {
+		return
+	}
+	w.Header().Set("X-Should-Retry", "false")
+	if d.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(d.RetryAfter.Round(time.Second).Seconds())))
+	}
 }

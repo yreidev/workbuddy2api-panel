@@ -72,14 +72,14 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 
 ## 几类请求
 
-| | 对话 | 积分、签到、上报、外观、专家列表、登录 | 刷新令牌 | 成长中心、积分补偿、新手礼包、试用、账号资料 |
-|---|---|---|---|---|
-| 谁发 | 内置 CLI | 后台服务 | 内置 CLI | 官网网页（桌面端在浏览器里打开） |
-| UA | `WorkBuddy/<版本> <应用名>/<版本> CLI/<cli>` | `<应用名>/<版本> WorkBuddy/<版本> CLI/<cli>` | 同对话 | 浏览器的 UA |
-| 来源 | `UserAgentHttpInterceptor` | `WorkbuddyUserAgentHttpInterceptor` | `refreshSession` | 官网前端的 axios 实例，靠 Cookie 认人 |
-| 网关实现 | `ChatHeaders` | `BillingHeaders`、`frameworkHeaders` | `RefreshHeaders`、`RefreshToken` | `webHeaders`、`webJSON`、`websession.go` |
+| | 对话 | 积分、签到、上报、外观、专家列表、登录 | 刷新令牌 | 成长中心、积分补偿、新手礼包、试用、账号资料 | 联网搜索 |
+|---|---|---|---|---|---|
+| 谁发 | 内置 CLI | 后台服务 | 内置 CLI | 官网网页（桌面端在浏览器里打开） | 内置 CLI 的 WebSearch 工具 |
+| UA | `WorkBuddy/<版本> <应用名>/<版本> CLI/<cli>` | `<应用名>/<版本> WorkBuddy/<版本> CLI/<cli>` | 同对话 | 浏览器的 UA | `CLI/<版本>` |
+| 来源 | `UserAgentHttpInterceptor` | `WorkbuddyUserAgentHttpInterceptor` | `refreshSession` | 官网前端的 axios 实例，靠 Cookie 认人 | `performWebSearch`，Node 原生 `fetch` |
+| 网关实现 | `ChatHeaders` | `BillingHeaders`、`frameworkHeaders` | `RefreshHeaders`、`RefreshToken` | `webHeaders`、`webJSON`、`websession.go` | `searchHeaders`、`Search` |
 
-前三类请求都经过官方请求框架（`restOperations`）。内置 CLI 和后台服务各有一套框架，挂的拦截器相同，所以共用这些头：
+前三类请求都经过官方请求框架（`restOperations`），联网搜索不经过，头见[联网搜索](#联网搜索)。内置 CLI 和后台服务各有一套框架，挂的拦截器相同，所以共用这些头：
 
 - `Accept: application/json, text/plain, */*`（对话例外，见下文），有请求体的请求带 `Content-Type: application/json`（桌面端的 axios 对对象请求体只发这个值）；
 - `X-Requested-With: XMLHttpRequest`；
@@ -120,6 +120,21 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - 任务中心的专家对话就是一次普通对话，只多带 `X-Expert-Id`（专家插件激活时追加）；团队专家（专家列表里 `expertType` 为 `team`）另带 `X-Expert-Team-Task: true`（后台服务的 `applyPreparedExpertSettings`），网关按专家列表里的类型带。
 
 模型目录：内置 CLI 用对话的 UA，按 GET 拉 `/v3/config`，带 `Connection: close`。企业号另拉企业模型，见[企业号模型目录](#企业号模型目录)。
+
+## 联网搜索
+
+内置 CLI 的 WebSearch 工具（2.165.0 的 `performWebSearch`，2026-10-31 读国内版 5.9.3 安装包核对）不经请求框架，用 Node 原生 `fetch` 发 `POST <对话入口>/agenttool/v1/search`，20 秒超时。网关照这份发（`upstream/search.go`），不复用对话的头（原版 linguo2625469 是复用 `ChatHeaders` 再改几项）：
+
+- 请求头只有这些：`Accept: application/json`、`Content-Type: application/json;charset=UTF-8`、`X-Requested-With: XMLHttpRequest`、`User-Agent: CLI/<版本>`（版本是客户端信息里的 `platformVersion`，取产品配置的 `productVersion`，在桌面端里就是桌面端版本；`CLI` 是默认平台名常量）、`Authorization`、`X-Agent-Intent`（会话的模式，默认 `craft`）、`X-Agent-Runtime`（同对话，见[几类请求](#几类请求)）、`X-Conversation-ID`、`X-Conversation-Request-ID`（没有时是空串）、`X-Conversation-Message-ID` 与同值的 `X-Request-ID`（每次新生成的 `uuidv7()` 去连字符）、`X-Product`、`X-IDE-Type`、`X-IDE-Name`、`X-IDE-Version`（同 UA 里的版本）、`X-User-Id`、`X-Department-Info`（总是带，没有部门时是空串）。不带企业头（`X-Enterprise-Id`、`X-Tenant-Id`）、`X-Domain`、`X-Stainless-*` 和链路头；`Accept-Language: *`、`Sec-Fetch-Mode: cors`、`Accept-Encoding: br, gzip, deflate` 是原生 fetch（undici）自己加的。内网版（IOA）的默认头、专家会话的自定义头官方另加，网关都不涉及。`client_name` 配成 `SaaS`（旧行为）时同对话，不带 `X-IDE-*`；
+- 请求体：`{"query": <搜索词>, "type": "text2text", "max_results": 5, "allowed_domains": [...], "freshness": "..."}`，后两个有才带，字段顺序照官方；域名黑名单不单独传，拼在搜索词后面：`<搜索词> (-site:a.com -site:b.com)`。搜索词至少 2 个字、`freshness` 的写法（`d`、`d1`～`d30`、`m`、`m1`～`m12`、`y`、`y1`～`y5`），官方在发请求前就校验，网关同样；
+- 回应：HTTP 不是 2xx，或回应体的 `code` 不是 0，官方都当失败；网关按[错误码](#错误码)归类，决定罚不罚号（见 [API 参考](api.md#联网搜索)）。结果按 `title`（空的写 `Untitled`）、`url`、`snippet`、`site`、`favicon` 整理，链接不是 http/https 的条目去掉，图标不安全的只去掉图标，去掉过条目时 `total_results` 改成剩下的条数（`filterUnsafeResults`）。官方还拿本地的恶意域名库再筛一遍，网关没有这个库，不筛；
+- 交给模型的文字照官方 `formatSearchResults`：`# Search Results for "<搜索词>"`，每条是 `## <序号>. [<标题>](<链接>)`、摘要、`**URL:** <链接>`、`---`，最后一行 `*Found N result(s) • Provider: <提供方> • Search performed on <UTC 日期>*`；没有结果时是 `No search results found for query: "<搜索词>"`，结果都被筛掉时是 `No safe search results found for query: "<搜索词>"`。
+
+没确认的：
+
+- 国际版：只读了国内版 5.9.3 的包，国际版的搜索代码没读（等对齐国际版 5.9.4 时核实）。网关的国际版号照同样的形状搜，`X-Agent-Runtime` 和对话一样不带；
+- 会话头：官方带的是当前会话的 id，网关转客户端给的 `X-Conversation-ID`、`X-Conversation-Request-ID`，没给就各生成一个，和主对话的会话 id 不关联，上游会不会核对未确认；
+- 搜一次扣不扣积分、扣多少：没在真实账号上测。
 
 ## 积分与签到
 
@@ -467,6 +482,7 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - 对话请求里官方有、网关没发的（2026-10-28 对 5.9.3 时发现，5.8.3 里就有），同类项目的做法见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)。其中 OpenAI SDK 的 8 个 `X-Stainless-*` 与 `Accept: application/json` 2026-10-28 已补上（读了两域 mac 包核对 Electron，见[几类请求](#几类请求)里的对话）；另外两个 2026-10-28 也处理了：
   - `X-Device-Token`：2026-10-28 起对话也带了，但只在使用者填了 `device_token`（账号 / config / 文件）时——网关跑在 Linux 上，图灵盾 SDK 只支持 macOS 和 Windows，自己做不出真令牌，没填就不发（对应官方「令牌和错误码都没有时都不发」，不造 `X-Device-Token-Error`）。1.1.2 以前对话带过配置里的 `device_token`，1.1.2 按当时「官方对话不带」的错误结论去掉，现已恢复并修正。令牌能不能多个号共用、填进去的多久失效，仍没实测（未确认）；
   - `X-Moderation-Type`：2026-10-28 起专家对话按该专家是不是云端（`is_cloud===1`）或付费（`pay_detail` 的 `pay_mode` / `payMode`，回落 `need_pay===1`）决定带不带 `["protected"]`（`MarketExpert.Protected`，对齐官方 `shouldProtectSession`；官方还判「启用的技能里有云端技能」，网关的专家对话不加载技能，这条恒假）。任务中心的专家（`expert_5`、`expert_use_*`、`WorkBuddy_Valorant`）从市场列表拿到这些字段就按实发；列表里没查到、用占位专家时默认不带。这几个任务专家实际是不是云端 / 付费，没在真实账号上核对（未确认）。
+- 联网搜索照国内版 5.9.3 读包实现：国际版的搜索代码没读，搜一次扣不扣积分没实测，见[联网搜索](#联网搜索)。
 - 容量排队（`6020`、`6022`）照国内版 5.9.3 读包实现，没见过实际响应，见[容量排队](#容量排队)：
   - 只认 HTTP 出错回应里的 `6020`；流开了以后才来的错误帧里要是带 `6020`，照普通错误处理（官方渲染层是从错误数据里读，上游会用哪种形态回，未确认）；
   - 重发沿用排进队那一轮的 `X-Conversation-Request-ID`。官方带原样 `_meta` 重发，CLI 会不会给重发的请求换新的请求 id，未确认；

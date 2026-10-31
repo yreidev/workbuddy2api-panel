@@ -349,7 +349,7 @@ type requestTraceKey struct{}
 type requestTrace struct {
 	id    string
 	start time.Time
-	path  string // 入口路径（聊天、Claude Code、Codex 三个入口共用这套记账）
+	path  string // 入口路径（聊天、Claude Code、Codex 三个入口和联网搜索共用这套记账）
 	stat  *chatStat
 	// 调用来源，进入 handler 时一次性采集（见 ServeHTTP / captureClientInfo）。
 	clientIP  string

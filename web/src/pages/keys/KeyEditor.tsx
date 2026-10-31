@@ -283,6 +283,7 @@ export function KeyUsageGuide({ k: open, onClose }: { k: ApiKey | null; onClose:
     { title: '密钥', text: k.secret, what: '密钥' },
     { title: 'OpenAI 兼容客户端、Codex 的 Base URL', text: origin + '/v1', what: 'Base URL' },
     { title: 'Claude Code', text: `export ANTHROPIC_BASE_URL=${origin}\nexport ANTHROPIC_AUTH_TOKEN=${k.secret}`, what: 'Claude Code 配置' },
+    { title: 'Codex 联网搜索（MCP，写进 ~/.codex/config.toml）', text: `[mcp_servers.wb2api]\nurl = "${origin}/mcp"\nbearer_token_env_var = "WB2API_KEY"`, what: 'Codex 联网搜索配置' },
   ] : []
   return (
     <Modal.Backdrop isOpen={open != null} onOpenChange={(v) => { if (!v) onClose() }}>
@@ -304,7 +305,7 @@ export function KeyUsageGuide({ k: open, onClose }: { k: ApiKey | null; onClose:
               </div>
             ))}
             <p className="text-xs text-muted">
-              Claude Code 的 Base URL 不带 /v1，其余客户端带 /v1。Codex 把 Base URL 写进 config.toml 的 base_url，env_key 指向的环境变量填密钥。
+              Claude Code 的 Base URL 不带 /v1，其余客户端带 /v1。Codex 把 Base URL 写进 config.toml 的 base_url，env_key 指向的环境变量填密钥；联网搜索那段的 bearer_token_env_var 用同一个变量。Claude Code 自带的 WebSearch 不用配，直接可用。
             </p>
           </Modal.Body>
           <Modal.Footer>

@@ -5,6 +5,7 @@
 - [端点](#端点)
 - [客户端密钥](#客户端密钥)
 - [Claude Code 与 Codex 入口](#claude-code-与-codex-入口)
+- [联网搜索](#联网搜索)
 - [模型名](#模型名)
 - [模型路由](#模型路由)
 - [健康检查](#健康检查)
@@ -18,7 +19,9 @@
 | `POST /v1/chat/completions` | Bearer | OpenAI 兼容对话补全，支持流式与非流式、工具调用、图片输入、推理参数。网关不限制请求体大小，超限由上游返回 |
 | `POST /v1/messages` | Bearer 或 `x-api-key` | Anthropic Messages 格式（Claude Code），见[下节](#claude-code-与-codex-入口) |
 | `POST /v1/messages/count_tokens` | Bearer 或 `x-api-key` | 按字数估算输入 token，不发上游 |
-| `POST /v1/responses` | Bearer | OpenAI Responses 格式（Codex） |
+| `POST /v1/responses` | Bearer 或 `x-api-key` | OpenAI Responses 格式（Codex） |
+| `POST /v1/search/messages` | Bearer 或 `x-api-key` | 联网搜索，Anthropic Messages 形状，见[联网搜索](#联网搜索) |
+| `POST /mcp` | Bearer 或 `x-api-key` | MCP 服务器，只有一个工具 `web_search`，给 Codex 这类客户端联网搜索，见[联网搜索](#联网搜索) |
 | `GET /v1/models` | Bearer | 模型列表，见[模型名](#模型名) |
 | `GET /status` | Bearer | 账号状态汇总与每个账号的详情（积分、冷却、熔断、在途、粘性），以及按「域 + 模型」聚合的限额视图 `model_locks` |
 | `GET /healthz` | 无 | 健康检查：有可用账号返回 200，否则 503 |
@@ -29,9 +32,9 @@ Base URL 多写了 `/v1`、请求成了 `/v1/v1/...` 时，网关不校验密钥
 
 鉴权规则：
 
-- `/v1/*` 认管理员密钥（`api_key`）和[客户端密钥](#客户端密钥)，放在 `Authorization: Bearer <密钥>`；两个 `/v1/messages` 端点在没有 `Authorization` 头时也认 `x-api-key: <密钥>`（Claude Code 用 `ANTHROPIC_API_KEY` 时发这个头）。
+- `/v1/*` 和 `/mcp` 认管理员密钥（`api_key`）和[客户端密钥](#客户端密钥)，放在 `Authorization: Bearer <密钥>`；除了 `/v1/chat/completions` 和 `/v1/models`，这些端点在没有 `Authorization` 头时也认 `x-api-key: <密钥>`（Claude Code 用 `ANTHROPIC_API_KEY` 时发这个头）。
 - `/status` 和面板只认管理员密钥。
-- `api_key` 为空、也没建过客户端密钥时全部放行；只要建过客户端密钥，`/v1/*` 就必须带有效密钥，`api_key` 为空也一样（`/status` 和面板仍然放行）。
+- `api_key` 为空、也没建过客户端密钥时全部放行；只要建过客户端密钥，`/v1/*` 和 `/mcp` 就必须带有效密钥，`api_key` 为空也一样（`/status` 和面板仍然放行）。
 - `/healthz`、`/readyz` 始终不鉴权。每个响应都带 `X-Request-Id`。
 
 ## 客户端密钥
@@ -60,7 +63,7 @@ Base URL 多写了 `/v1`、请求成了 `/v1/v1/...` 时，网关不校验密钥
 |---|---|
 | Claude Code 的 `thinking`（含 `adaptive`）与 `output_config.effort` | `reasoning_effort`；超出模型支持范围时网关再按模型目录降级 |
 | Claude Code 的 `cache_control`、`metadata.user_id`、`context_management`、思考块 | 丢掉（上游是 OpenAI 格式，没有对应字段） |
-| Codex 的 `store`、`include`、`prompt_cache_key`、内置 `web_search` 工具 | 丢掉 |
+| Codex 的 `store`、`include`、`prompt_cache_key`、内置 `web_search` 工具 | 丢掉（Codex 要联网搜索就接网关的 [`/mcp`](#联网搜索)） |
 | Codex 的自定义工具 `apply_patch` | 函数工具（参数 `input` 是字符串），回复里再还原成 `custom_tool_call` |
 | `developer` 角色 | `user` 角色 |
 
@@ -69,6 +72,24 @@ Base URL 多写了 `/v1`、请求成了 `/v1/v1/...` 时，网关不校验密钥
 模型名不在上游目录里、也没有[路由规则](#模型路由)命中时，直接返回 404 并说明该设哪个变量，不拿每个号去试。目录还没拉到时放行，交给上游判断。
 
 `/v1/messages/count_tokens` 只做估算：只数 `system`、`messages`、`tools` 里的文本，CJK 字符每字 1 个 token，其余每 4 字节 1 个。Claude Code 用它显示上下文占用，不影响计费。
+
+## 联网搜索
+
+网关用官方的联网搜索接口（桌面端内置 CLI 的 WebSearch 工具用的那个，请求形状见[官方客户端对照](official-client.md#联网搜索)）替客户端搜，一次最多 5 条结果。有三个入口：
+
+- **Claude Code 的 WebSearch**：不用配。Claude Code 调 WebSearch 时另发一个 `/v1/messages` 子请求，声明 Anthropic 的服务端工具 `web_search_20250305`，用户消息是 `Perform a web search for the query: <搜索词>`，原本由 Anthropic 的模型调这个工具搜。上游的模型没有这个工具，网关认出这种子请求就不交给模型，直接搜，按 Anthropic 服务端搜索的形状回（`server_tool_use`、`web_search_tool_result`、`text` 三块，流式、非流式都支持），WebSearch 的 `allowed_domains`、`blocked_domains` 照传。只有同时满足「声明了 `web_search_` 开头的服务端工具」和「最后一条用户消息以那句话开头」才拦，客户端自己定义的 `web_search` 函数工具照常交给模型。2026-10-31 用 Claude Code 2.1.314 实测可用；
+- **`POST /v1/search/messages`**：同样是 Anthropic Messages 的形状，给直接调搜索的客户端（照原版保留）。`tools` 里要声明搜索工具（`type` 以 `web_search_` 开头，或 `type`、`name` 是 `web_search`），没声明回 400；搜索词取最后一条用户消息，带上面那句前缀的去掉；
+- **`/mcp`**：MCP 服务器（Streamable HTTP，无状态，回应直接是 JSON），只有一个工具 `web_search`：入参 `query`（至少 2 个字）、`allowed_domains`、`blocked_domains`、`freshness`（`d`、`d1`～`d30`、`m`、`m1`～`m12`、`y`、`y1`～`y5`，同官方），返回照官方 WebSearch 的写法列出的 Markdown 文字。给 Codex 这类能接 MCP 服务器的客户端用，接法见 README 的 [Codex](../README.md#codex)。只收 POST，GET、DELETE 回 405。2026-10-31 用 Codex 0.166.0 实测可用，模型看到的工具名是 `mcp__<服务器名>__web_search`。
+
+三个入口的规则相同：
+
+- 选号、在途名额（满了照样排队）、刷新令牌、换号重试和对话一样，只是不看模型。在哪个域选号：Claude Code 子请求的模型带 `cn:` / `global:` 前缀时照前缀，否则同不带前缀的对话，按 `pool.cross_realm`；
+- 没搜成时：余额不足、限流、登录失效、封号、WAF 拦截这几类和对话一样罚号再换号；上游故障、404 和认不出的错误只换号，不罚号；请求本身有问题（`11101`、`11128` 这类）回 400，上游满了（`6021`、`6020`）回 503，上游超时回 503，这三种都不换号；
+- Claude Code 和 `/v1/search/messages` 的失败回应带 `X-Should-Retry: false`：Claude Code 遇到 5xx、429 默认会自动重试好几次，搜索失败就直接交给主模型，要不要再搜由它定。`/mcp` 的失败是工具结果里的 `isError`，文字以 `web search failed:` 开头；
+- 客户端密钥：每搜一次计一次请求，不看模型白名单，没搜成的退还，不计 token 和积分；
+- 搜索不进用量统计（没有 token）。请求记录照记：路径照实（Claude Code 的子请求记 `/v1/messages`），模型一列写 `web_search`（国际版的号写 `global:web_search`）；`/mcp` 只有调了搜索才记，握手、列工具不记；
+- 会话头：客户端带了 `X-Conversation-ID`、`X-Conversation-Request-ID` 就原样转给上游，没带就各生成一个。Claude Code 的子请求不带这两个头，所以和主对话的会话 id 不关联，上游会不会核对，未确认；
+- 搜一次扣不扣积分、扣多少：还没在真实账号上测（未确认）。
 
 ## 模型名
 

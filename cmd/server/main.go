@@ -433,6 +433,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
 		// handler 侧第三道闸（global realm）：false（显式逃生门）时不列 global: 模型名。
 		GlobalEnabled: cfg.Global.Enabled,
+		Version:       appVersion,
 	})
 
 	// 先占端口再起后台任务和停机协程：端口被占时直接返回，不先跑调度、不打停机日志。
