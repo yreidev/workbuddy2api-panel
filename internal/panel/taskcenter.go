@@ -58,6 +58,12 @@ func growthPending(t upstream.Task) bool {
 	return autoActionFor(t.TaskCode) != nil
 }
 
+// claimPending 已达标还没领、又没有自动动作的任务（比如用真实对话点亮的）：
+// 队列只替它领奖（上游 #174）。有自动动作的走 growthPending，执行时自己会领。
+func claimPending(t upstream.Task) bool {
+	return t.Claimable && !t.Locked && autoActionFor(t.TaskCode) == nil
+}
+
 // tasksScanAll 扫描全部账号：成长任务（未完成+可自动化，含 mp 口径合并）。
 // 只读操作，并发拉取（账号数个位数）。
 func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +96,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 				it.GrowthErr = err.Error()
 			} else {
 				for _, t := range tasks {
-					if growthPending(t) {
+					if growthPending(t) || claimPending(t) {
 						it.Growth = append(it.Growth, t)
 					}
 				}
@@ -104,7 +110,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 					seen[t.TaskCode] = true
 				}
 				for _, t := range mpTasks {
-					if growthPending(t) && !seen[t.TaskCode] {
+					if (growthPending(t) || claimPending(t)) && !seen[t.TaskCode] {
 						it.Growth = append(it.Growth, t)
 					}
 				}
@@ -232,22 +238,39 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 			}
 			if growth {
 				if tasks, err := p.cfg.Upstream.ListTasks(a); err == nil {
+					listed := map[string]bool{} // 默认列表里有的任务码
+					queued := map[string]bool{}
 					for _, t := range tasks {
-						if growthPending(t) {
+						listed[t.TaskCode] = true
+						switch {
+						case growthPending(t):
 							one.grow = append(one.grow, t)
+							queued[t.TaskCode] = true
+						case claimPending(t):
+							one.claim = append(one.claim, t.TaskCode)
+							queued[t.TaskCode] = true
 						}
 					}
 					// 合并小程序口径待办（与 tasksScanAll 同口径：mp 列表是默认口径
 					// 超集，按 code 去重；失败静默）。此前此处漏合并——扫描显示
 					// mp 待办而队列报"无可执行待办"。
 					if mpTasks, mpErr := p.cfg.Upstream.ListTasksMP(a); mpErr == nil {
-						seen := map[string]bool{}
-						for _, t := range one.grow {
-							seen[t.TaskCode] = true
-						}
 						for _, t := range mpTasks {
-							if growthPending(t) && !seen[t.TaskCode] {
+							if queued[t.TaskCode] {
+								continue
+							}
+							switch {
+							case growthPending(t):
 								one.grow = append(one.grow, t)
+							case claimPending(t):
+								one.claim = append(one.claim, t.TaskCode)
+								if !listed[t.TaskCode] {
+									// 只在小程序列表里出现的任务按小程序口径领。
+									if one.claimMP == nil {
+										one.claimMP = map[string]bool{}
+									}
+									one.claimMP[t.TaskCode] = true
+								}
 							}
 						}
 					}
@@ -256,7 +279,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 					})
 				}
 			}
-			if len(one.grow) > 0 {
+			if len(one.grow) > 0 || len(one.claim) > 0 {
 				mu.Lock()
 				accts = append(accts, one)
 				mu.Unlock()
@@ -270,6 +293,9 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	for _, one := range accts {
 		for _, t := range one.grow {
 			items = append(items, queueItem{UID: one.a.UID, Nickname: one.a.Nickname, Kind: "growth", Code: t.TaskCode, Status: "pending"})
+		}
+		for _, code := range one.claim {
+			items = append(items, queueItem{UID: one.a.UID, Nickname: one.a.Nickname, Kind: "claim", Code: code, Status: "pending"})
 		}
 	}
 	if len(items) == 0 {
@@ -348,6 +374,8 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 				switch kind {
 				case "growth":
 					msg, err = p.runGrowthQueued(one.a, code)
+				case "claim":
+					msg, err = p.claimQueued(one, code)
 				}
 				if err != nil {
 					p.queueMarkAt(i, "error", err.Error())
@@ -365,6 +393,29 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 type queueAccount struct {
 	a    *auth.Auth
 	grow []upstream.Task
+	// claim 只领奖的任务码（claimPending）；claimMP 标出其中只在小程序列表里出现的。
+	claim   []string
+	claimMP map[string]bool
+}
+
+// claimQueued 队列里只领奖的一项。
+func (p *Panel) claimQueued(one queueAccount, code string) (string, error) {
+	var credit, energy int64
+	var err error
+	if one.claimMP[code] {
+		credit, energy, err = p.cfg.Upstream.ClaimRewardMP(one.a, code)
+	} else {
+		credit, energy, err = claimTaskReward(p, one.a, code)
+	}
+	if err != nil {
+		return "", err
+	}
+	msg := "奖励此前已领取"
+	if credit > 0 || energy > 0 {
+		msg = fmt.Sprintf("已领奖 +%d 分 +%d 能", credit, energy)
+	}
+	log.Printf("panel: 队列领奖 uid=%s code=%s: %s", one.a.UID, code, msg)
+	return msg, nil
 }
 
 // snapshotAt 锁内读条目三元组（避免锁外持有指针）。

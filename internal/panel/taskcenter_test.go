@@ -100,6 +100,27 @@ func TestGrowthPendingRules(t *testing.T) {
 	}
 }
 
+func TestClaimPendingRules(t *testing.T) {
+	cases := []struct {
+		name string
+		task upstream.Task
+		want bool
+	}{
+		{"无自动动作已达标未领", upstream.Task{TaskCode: "no_action", Target: 1, Current: 1, Claimable: true}, true},
+		{"无自动动作未达标", upstream.Task{TaskCode: "no_action", Target: 3, Current: 1}, false},
+		{"无自动动作已领取", upstream.Task{TaskCode: "no_action", Target: 1, Current: 1, Claimed: true}, false},
+		{"已锁定", upstream.Task{TaskCode: "no_action", Target: 1, Current: 1, Claimable: true, Locked: true}, false},
+		{"有自动动作的归 growthPending", upstream.Task{TaskCode: "chat_5", Target: 1, Current: 1, Claimable: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claimPending(tc.task); got != tc.want {
+				t.Fatalf("claimPending(%+v)=%v want %v", tc.task, got, tc.want)
+			}
+		})
+	}
+}
+
 // 扫描：禁用账号不发请求；global/企业号门控；默认列表失败只影响该账号；
 // 小程序列表合并去重且失败静默；pending_count 是所有账号待办数之和。
 func TestTasksScanAll(t *testing.T) {
@@ -172,6 +193,30 @@ func TestTasksScanAll(t *testing.T) {
 			if tok := autoToken(r); tok == "at-u2" || tok == "at-u3" || tok == "at-u4" {
 				t.Fatalf("禁用/global/企业号不应发请求，收到 %s %s %s", tok, r.Method, r.Path)
 			}
+		}
+	})
+
+	t.Run("没有自动动作的已达标任务列出来等领奖", func(t *testing.T) {
+		p, up := newTasksPanel(t, taskTestAuth("u1", "一号"))
+		up.onDefaultTasks(autoOK(autoTasksJSON(
+			autoTaskJSON("no_action", 3, 1, "accepted"),
+			autoTaskJSON("no_action_done", 1, 1, "accepted"),
+		)))
+		up.onMPTasks(autoOK(autoTasksJSON(autoTaskJSON("mp_only_done", 1, 1, "accepted"))))
+
+		rec := postJSON(t, p, "/panel/api/tasks/scan_all", `{}`)
+		autoWantCode(t, rec, http.StatusOK)
+		resp := autoDecode(t, rec)
+		accounts, _ := resp["accounts"].([]any)
+		u1, _ := accounts[0].(map[string]any)
+		grow, _ := u1["growth"].([]any)
+		var codes []string
+		for _, v := range grow {
+			m, _ := v.(map[string]any)
+			codes = append(codes, fmt.Sprint(m["task_code"]))
+		}
+		if strings.Join(codes, ",") != "no_action_done,mp_only_done" || resp["pending_count"] != float64(2) {
+			t.Fatalf("已达标未领的应列出、未达标的不列: %v %v", codes, resp["pending_count"])
 		}
 	})
 
@@ -512,6 +557,46 @@ func TestTasksRunQueueExecution(t *testing.T) {
 			"/activity/growth/tasks/school_season/claim", "miniprogram")
 		if len(claims) != 1 {
 			t.Fatalf("应走 ClaimRewardMP 一次，实际 %d", len(claims))
+		}
+	})
+
+	t.Run("没有自动动作的已达标任务只领奖", func(t *testing.T) {
+		p, up := newTasksPanel(t, taskTestAuth("u1", "一号"))
+		up.onDefaultTasks(autoOK(autoTasksJSON(
+			autoTaskJSON("no_action_done", 1, 1, "accepted"),
+			autoTaskJSON("no_action_old", 1, 1, "accepted"),
+			autoTaskJSON("no_action_bad", 1, 1, "accepted"),
+		)))
+		up.onMPTasks(autoOK(autoTasksJSON(
+			autoTaskJSON("no_action_done", 1, 1, "accepted"), // 和默认列表重复，按默认口径领
+			autoTaskJSON("mp_only_done", 1, 1, "accepted"),
+		)))
+		up.onWebClaim("no_action_done", autoOK(autoClaimJSON(50, 5)))
+		up.onWebClaim("no_action_old", autoOK(autoEnvelope(`{"already_claimed":true}`)))
+		up.onWebClaim("no_action_bad", autoFail(500, `{"code":500,"msg":"claim boom"}`))
+		up.onMPClaim("mp_only_done", autoOK(autoClaimJSON(20, 0)))
+
+		p.RunGrowthQueueOnce()
+		items := queueItemsOf(t, waitQueueIdle(t, p))
+		want := map[string][2]string{
+			"no_action_done": {"done", "已领奖 +50 分 +5 能"},
+			"no_action_old":  {"done", "奖励此前已领取"},
+			"mp_only_done":   {"done", "已领奖 +20 分 +0 能"},
+		}
+		for code, w := range want {
+			it := queueItemByCode(t, items, code)
+			if it["kind"] != "claim" || it["status"] != w[0] || it["message"] != w[1] {
+				t.Fatalf("%s 结果不对: %v", code, it)
+			}
+		}
+		if bad := queueItemByCode(t, items, "no_action_bad"); bad["status"] != "error" || !strings.Contains(fmt.Sprint(bad["message"]), "claim boom") {
+			t.Fatalf("领奖失败应记 error 并带上错误: %v", bad)
+		}
+		if n := len(up.requestsTo(http.MethodPost, autoWebHost, "/activity/growth/tasks/no_action_done/claim", "web")); n != 1 {
+			t.Fatalf("默认列表的任务走网页口径领一次，实际 %d", n)
+		}
+		if n := len(up.requestsTo(http.MethodPost, autoWebHost, "/activity/growth/tasks/mp_only_done/claim", "miniprogram")); n != 1 {
+			t.Fatalf("只在小程序列表里的任务走小程序口径领一次，实际 %d", n)
 		}
 	})
 
