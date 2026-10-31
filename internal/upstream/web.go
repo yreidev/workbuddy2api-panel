@@ -55,17 +55,30 @@ func (c *Client) webUserAgent() string {
 	return browserUA
 }
 
-// webAcceptLanguage 网页的界面语言：国内版 zh-CN，国际版 en-US（Chrome 自动带的
-// Accept-Language 形状，带 q 权重）。
-func webAcceptLanguage(a *auth.Auth) string {
-	if a != nil && a.IsGlobal() {
+// growthAPIPath 成长中心接口的路径片段。官网 config-*.js 的请求拦截器对地址含它的请求
+// （含 /v2/activity/growth/...）另设 Accept-Language，见 webAcceptLanguage。
+const growthAPIPath = "/activity/growth"
+
+// webAcceptLanguage 网页请求的 Accept-Language。成长中心接口照官网拦截器显式设成 zh-CN，
+// 页面地址带 lang=en… 时才是 en-US（国际版按英文页面算，网关不对国际版调成长中心）；
+// 其余网页请求是 Chrome 按界面语言自动带的形状（带 q 权重），国内版 zh-CN、国际版 en-US。
+func webAcceptLanguage(a *auth.Auth, path string) string {
+	global := a != nil && a.IsGlobal()
+	if strings.Contains(path, growthAPIPath) {
+		if global {
+			return "en-US"
+		}
+		return "zh-CN"
+	}
+	if global {
 		return "en-US,en;q=0.9"
 	}
 	return "zh-CN,zh;q=0.9"
 }
 
-// webClientHints 补 Chrome 自动带的 UA 客户端提示与 Accept-Language。只在用内置 browserUA
-// 时补 Sec-CH-UA*——配置了 user_agent 后 UA 与客户端提示对不上，浏览器不会这样发。
+// webClientHints 补 Chrome 自动带的 UA 客户端提示与 Accept-Language（成长中心接口另有取值，
+// 见 webAcceptLanguage）。只在用内置 browserUA 时补 Sec-CH-UA*——配置了 user_agent 后
+// UA 与客户端提示对不上，浏览器不会这样发。
 // Sec-CH-UA 的取值按 Chromium 的 GREASE 规则由主版本 152 推出（推算，未抓包）。
 func (c *Client) webClientHints(req *http.Request, a *auth.Auth) {
 	if c == nil || c.UserAgent == "" {
@@ -73,7 +86,7 @@ func (c *Client) webClientHints(req *http.Request, a *auth.Auth) {
 		req.Header.Set("Sec-CH-UA-Mobile", "?0")
 		req.Header.Set("Sec-CH-UA-Platform", `"macOS"`)
 	}
-	req.Header.Set("Accept-Language", webAcceptLanguage(a))
+	req.Header.Set("Accept-Language", webAcceptLanguage(a, req.URL.Path))
 	req.Header.Set("Accept-Encoding", acceptEncodingChrome)
 }
 

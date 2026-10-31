@@ -170,10 +170,10 @@ func TestMiniProgramWebViewShape(t *testing.T) {
 		lang, ua  string
 		ent, base string
 	}{
-		{"国内版企业号", &Client{GlobalEnabled: true}, cnEnt, "zh-CN,zh;q=0.9", miniProgramUA, "corp-cn", cnProductEndpoint},
-		{"国际版", &Client{GlobalEnabled: true}, globalAuth(), "en-US,en;q=0.9", miniProgramUA, "", defaultGlobalBase},
-		{"显式 user_agent", &Client{GlobalEnabled: true, UserAgent: "MP/1"}, cnAuth(), "zh-CN,zh;q=0.9", "MP/1", "", cnProductEndpoint},
-		{"client_name=SaaS 不改变 UA", &Client{GlobalEnabled: true, ClientName: "SaaS"}, cnAuth(), "zh-CN,zh;q=0.9", miniProgramUA, "", cnProductEndpoint},
+		{"国内版企业号", &Client{GlobalEnabled: true}, cnEnt, "zh-CN", miniProgramUA, "corp-cn", cnProductEndpoint},
+		{"国际版", &Client{GlobalEnabled: true}, globalAuth(), "en-US", miniProgramUA, "", defaultGlobalBase},
+		{"显式 user_agent", &Client{GlobalEnabled: true, UserAgent: "MP/1"}, cnAuth(), "zh-CN", "MP/1", "", cnProductEndpoint},
+		{"client_name=SaaS 不改变 UA", &Client{GlobalEnabled: true, ClientName: "SaaS"}, cnAuth(), "zh-CN", miniProgramUA, "", cnProductEndpoint},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, _ := http.NewRequest(http.MethodPost, tc.base+"/activity/growth/tasks/accept", strings.NewReader("{}"))

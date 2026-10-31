@@ -259,7 +259,7 @@ func TestWebHeaders(t *testing.T) {
 			"Origin":             upBase,
 			"Referer":            upBase + webPageGrowthCenter,
 			"User-Agent":         browserUA,
-			"Accept-Language":    "zh-CN,zh;q=0.9",
+			"Accept-Language":    "zh-CN",
 			"Sec-CH-UA-Mobile":   "?0",
 			"Sec-CH-UA-Platform": `"macOS"`,
 			"Sec-Fetch-Site":     "same-origin",
@@ -375,5 +375,36 @@ func TestWebInternational(t *testing.T) {
 	}
 	if got := r.header.Get("Referer"); got != "https://www.workbuddy.ai"+webPageGrowthCenter {
 		t.Errorf("Referer = %q，应为国际版成长中心", got)
+	}
+}
+
+// TestWebAcceptLanguageGrowth 成长中心接口（含 /v2 路径）照官网拦截器发 zh-CN / en-US，
+// 网页和小程序两条路径一样；其余网页请求照旧是浏览器带 q 权重的形状。
+func TestWebAcceptLanguageGrowth(t *testing.T) {
+	for _, tc := range []struct {
+		path     string
+		cn, intl string
+	}{
+		{"/activity/growth/tasks/x/claim", "zh-CN", "en-US"},
+		{"/v2/activity/growth/tasks", "zh-CN", "en-US"},
+		{"/v2/billing/meter/get-compensation-status", "zh-CN,zh;q=0.9", "en-US,en;q=0.9"},
+		{"/profile/growth-center", "zh-CN,zh;q=0.9", "en-US,en;q=0.9"},
+	} {
+		for _, a := range []*auth.Auth{cnAuth(), globalAuth()} {
+			want := tc.cn
+			if a.IsGlobal() {
+				want = tc.intl
+			}
+			c := &Client{GlobalEnabled: true}
+			web, _ := http.NewRequest(http.MethodGet, c.webBase(a)+tc.path, nil)
+			c.webHeaders(web, a, webPageGrowthCenter)
+			mp, _ := http.NewRequest(http.MethodGet, c.webBase(a)+tc.path, nil)
+			c.webMPHeaders(mp, a)
+			for name, r := range map[string]*http.Request{"网页": web, "小程序": mp} {
+				if got := r.Header.Get("Accept-Language"); got != want {
+					t.Errorf("%s %s global=%v Accept-Language = %q，应为 %q", name, tc.path, a.IsGlobal(), got, want)
+				}
+			}
+		}
 	}
 }

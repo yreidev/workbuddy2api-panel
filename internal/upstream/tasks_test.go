@@ -263,8 +263,8 @@ func TestListTasksMP(t *testing.T) {
 	if got := r.header.Get("Referer"); got != upBase+webPageGrowthCenter {
 		t.Errorf("Referer = %q", got)
 	}
-	if got := r.header.Get("Accept-Language"); got != "zh-CN,zh;q=0.9" {
-		t.Errorf("Accept-Language = %q", got)
+	if got := r.header.Get("Accept-Language"); got != "zh-CN" {
+		t.Errorf("Accept-Language = %q，成长中心接口应为 zh-CN", got)
 	}
 	for _, k := range []string{"Cookie", "X-CodeBuddy-Request", "X-User-Id", "X-Domain", "X-Tenant-Id",
 		"X-Device-Token", "Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform"} {

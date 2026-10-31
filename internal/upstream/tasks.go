@@ -84,7 +84,7 @@ func (c *Client) webMPHeaders(req *http.Request, a *auth.Auth) {
 	}
 	req.Header.Set("Referer", base+webPageGrowthCenter)
 	req.Header.Set("User-Agent", c.miniProgramUserAgent())
-	req.Header.Set("Accept-Language", webAcceptLanguage(a))
+	req.Header.Set("Accept-Language", webAcceptLanguage(a, req.URL.Path))
 	req.Header.Set("Accept-Encoding", acceptEncodingBrowser)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Sec-Fetch-Mode", "cors")

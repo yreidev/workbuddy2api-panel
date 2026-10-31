@@ -201,7 +201,8 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - `Accept: application/json, text/plain, */*`，有请求体时才带 `Content-Type: application/json`；
 - `X-Client-Platform: web`；
 - 非 GET 请求带 `Origin`，`Referer` 是对应页面（成长中心 `/profile/growth-center`，积分补偿和新手礼包 `/profile/usage`，试用 `/profile`，账号资料 `/profile/account-settings`）；
-- 企业号只带 `X-Enterprise-Id`；不带 `X-User-Id`、`X-Domain`、`X-Tenant-Id`、`X-Product`、`X-Request-ID`、`X-Requested-With`、`Accept-Language`；
+- 企业号只带 `X-Enterprise-Id`；不带 `X-User-Id`、`X-Domain`、`X-Tenant-Id`、`X-Product`、`X-Request-ID`、`X-Requested-With`；
+- 成长中心接口（地址含 `/activity/growth`，包括 `/v2/activity/growth/...`）另设 `Accept-Language`：官网 `config-*.js` 的请求拦截器对这类地址显式设语言头（2026-10-31 读 `ef3f6107` 这一版），取值只有 `zh-CN` 和 `en-US`，页面地址带 `lang=en…` 时才是 `en-US`，桌面端打开成长中心的地址不带 `lang`。网关国内版发 `zh-CN`，国际版按英文页面发 `en-US`（网关不对国际版调成长中心，国际版页面怎么带 `lang` 未确认）。1.8.0 及以前发的是 Chrome 自动带的 `zh-CN,zh;q=0.9`；
 - UA 是 Mac 上的 Chrome 152（和上报的桌面端同一台 Mac，见[设备与平台](#设备与平台)；版本取任务中心抓包里的网页上报），`Sec-CH-UA-Platform: "macOS"`，`upstream.user_agent` 配了时用它；
 - `Accept-Encoding: gzip, deflate, br, zstd`（Chrome 123 起的默认值；配了自定义 UA 时也发这个）。
 
@@ -211,11 +212,11 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 2. 浏览器打开 `<官网>/console/client-login?code=<登录码>&target=<页面路径>`，网站 302 跳到目标页，同时种下 `session`（7 天，`HttpOnly`）、国内版另有 `session_2`，以及负载均衡用的 `tgw_l7_route`。网关照浏览器跟随跳转打开目标页（同一套导航头、带上 Cookie、不带 `Referer`，最多 20 跳），页面内容读完丢掉；页面里的脚本、图片和页面自己发的请求不模拟。打开目标页出错不影响登录态。
 3. 之后网页的请求只靠这些 Cookie 认人，不带 `Authorization`。
 
-网关每个账号在每个域各存一份 Cookie，只放内存；请求回 401 时清掉重取一次，再 401 就按原错误返回。浏览器请求另带 Chrome 自动加的 `Accept-Language`（国内版 `zh-CN,zh;q=0.9`、国际版 `en-US,en;q=0.9`）、`Sec-Fetch-*`，以及用内置 UA 时的 `Sec-CH-UA*`；`Sec-CH-UA` 的值按 Chromium 的 GREASE 规则由主版本 152 推算，没有抓包确认。登录码请求另带 Node `fetch` 自动加的头：`Accept: */*`、`Accept-Language: *`、`Sec-Fetch-Mode: cors`、`User-Agent: node`、`Accept-Encoding: br, gzip, deflate`，取自安装包里 undici 6.25.0 的源码，同样没有抓包确认。
+网关每个账号在每个域各存一份 Cookie，只放内存；请求回 401 时清掉重取一次，再 401 就按原错误返回。浏览器请求另带 Chrome 自动加的 `Accept-Language`（国内版 `zh-CN,zh;q=0.9`、国际版 `en-US,en;q=0.9`；成长中心接口除外，见上）、`Sec-Fetch-*`，以及用内置 UA 时的 `Sec-CH-UA*`；`Sec-CH-UA` 的值按 Chromium 的 GREASE 规则由主版本 152 推算，没有抓包确认。登录码请求另带 Node `fetch` 自动加的头：`Accept: */*`、`Accept-Language: *`、`Sec-Fetch-Mode: cors`、`User-Agent: node`、`Accept-Encoding: br, gzip, deflate`，取自安装包里 undici 6.25.0 的源码，同样没有抓包确认。
 
 2026-10-20 生产实测：两个域都按上面的流程拿到了 Cookie；只带 Cookie 时国内版的成长任务、账号资料、抽奖次数都返回 200，国际版的账号资料、抽奖次数也返回 200（国际版没有成长体系，`/v2/activity/growth/tasks` 回 401，网关对国际版不调）；什么都不带时回 401。用 1.1.2 的代码在 6 个国内版号上走了一遍：任务列表、旅行状态正常，3 个号旅行领奖成功、1 个号出发成功。
 
-小程序限定任务：微信小程序用 web-view 打开同一份网页（`/profile/growth-center?platform=miniProgram&token=<令牌>`），网页把令牌存起来，之后发 `X-Client-Platform: miniprogram` 和 `Authorization: Bearer <令牌>`，其余和网页一样。网关照这个形状发往官网域，UA 用微信小程序 web-view 的格式（`MicroMessenger/…` 加 `miniProgram/<小程序 appid>`，appid 取自官网前端代码，iOS 和微信的版本号是挑的近期值，没有抓包），`Accept-Encoding` 用 iOS WebKit 的 `gzip, deflate, br`。生产实测任务列表正常，领不存在的任务回 `400 task not completed`。
+小程序限定任务：微信小程序用 web-view 打开同一份网页（`/profile/growth-center?platform=miniProgram&token=<令牌>`），网页把令牌存起来，之后发 `X-Client-Platform: miniprogram` 和 `Authorization: Bearer <令牌>`，其余和网页一样（成长中心接口的 `Accept-Language` 也是 `zh-CN`）。网关照这个形状发往官网域，UA 用微信小程序 web-view 的格式（`MicroMessenger/…` 加 `miniProgram/<小程序 appid>`，appid 取自官网前端代码，iOS 和微信的版本号是挑的近期值，没有抓包），`Accept-Encoding` 用 iOS WebKit 的 `gzip, deflate, br`。生产实测任务列表正常，领不存在的任务回 `400 task not completed`。
 
 几处请求和以前不同：
 
