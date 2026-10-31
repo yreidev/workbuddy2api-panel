@@ -4,7 +4,7 @@
 
 // 账号池的状态推导、筛选与排序（纯函数，见 accounts.test.ts）。
 import { dur, fmtLocalDateTime, timeMs } from './format'
-import type { Account, RateLimitedModel } from './types'
+import type { Account, Overview, RateLimitedModel } from './types'
 
 /** paused = 暂停选号：不参与选号，但签到 / 活跃上报 / 保活 / 刷新余额照常 */
 export type AccountState = 'ok' | 'cooling' | 'paused' | 'disabled'
@@ -156,11 +156,37 @@ export function parseCardSort(id: string): { column: AccountSortKey; direction: 
   return { column, direction }
 }
 
+/** 账号备注最长几个字（同后端 noteMaxRunes） */
+export const NOTE_MAX = 40
+
+/** 账号显示名，各页统一：备注 > 昵称 > UID 前 8 位 */
+export function accountName(a: { uid: string; nickname?: string; note?: string }): string {
+  return a.note || a.nickname || a.uid.slice(0, 8)
+}
+
+/** 总览里各账号的备注（uid → 备注）；别的接口只给 uid 和昵称，显示名靠它补上备注 */
+export function notesOf(o: Pick<Overview, 'accounts'>): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const a of o.accounts || []) if (a.note) out.set(a.uid, a.note)
+  return out
+}
+
+/**
+ * 请求记录里存的账号标签是记录时的「昵称(uid8)」或「uid8」（后端 logfmt.Label）。这个号现在有备注，
+ * 就换成「备注(uid8)」；认不出是哪个号（没对上，或 uid8 对上了不止一个号）照原样。
+ */
+export function relabel(label: string, notes: Map<string, string>): string {
+  const open = label.lastIndexOf('(')
+  const uid8 = label.endsWith(')') && open >= 0 ? label.slice(open + 1, -1) : label
+  const hits = [...notes].filter(([uid]) => uid.slice(0, 8) === uid8)
+  return hits.length === 1 ? hits[0][1] + '(' + uid8 + ')' : label
+}
+
 export function filterAccounts(list: Account[], fetchedAt: number, status: StatusFilter, q: string): Account[] {
   const kw = q.trim().toLowerCase()
   return list.filter((a) => {
     if (!matchStatus(accountHealth(a, fetchedAt).state, status)) return false
-    return !kw || a.uid.toLowerCase().includes(kw) || (a.nickname || '').toLowerCase().includes(kw)
+    return !kw || [a.uid, a.nickname, a.note].some((s) => (s || '').toLowerCase().includes(kw))
   })
 }
 
@@ -168,7 +194,7 @@ export function sortAccounts(list: Account[], key: AccountSortKey | null, desc: 
   if (!key) return list
   const val = (a: Account): number | string => {
     switch (key) {
-      case 'name': return (a.nickname || a.uid).toLowerCase()
+      case 'name': return accountName(a).toLowerCase()
       case 'credits': return a.credits ?? -1
       case 'errors': return a.err_total || 0
       case 'last_success': return timeMs(a.last_success) ?? 0

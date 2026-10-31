@@ -5,7 +5,7 @@
 // 账号卡片：宽屏的卡片网格和窄屏列表共用。边框按状态着色（冷却橙、禁用红），右上角箭头看详情。
 import { ChevronRight } from '@gravity-ui/icons'
 import { Button, Card, Separator, Surface } from '@heroui/react'
-import { activeRateLimits, type Health } from '../../lib/accounts'
+import { accountName, activeRateLimits, type Health } from '../../lib/accounts'
 import { ago } from '../../lib/format'
 import type { Account } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
@@ -41,7 +41,7 @@ export function AccountCard({ a, health, now, poolMax, selected, onSelect, onOpe
     <Card variant="secondary" className={`gap-3 p-4 ${RING[health.state]}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-start gap-2">
-          <SelectionCheckbox label={'选择 ' + (a.nickname || a.uid)} isSelected={selected} onChange={onSelect} />
+          <SelectionCheckbox label={'选择 ' + accountName(a)} isSelected={selected} onChange={onSelect} />
           <AccountName a={a} />
         </div>
         <div className="flex shrink-0 items-center gap-1">

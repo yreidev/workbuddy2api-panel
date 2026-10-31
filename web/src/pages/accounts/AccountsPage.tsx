@@ -9,7 +9,7 @@ import {
   Button, Card, Checkbox, Label, ListBox, SearchField, Select, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type Selection, type SortDescriptor,
 } from '@heroui/react'
 import {
-  accountHealth, CARD_SORT_OPTIONS, cardSortKey, filterAccounts, parseCardSort, poolCredits, sortAccounts, type AccountSortKey, type StatusFilter,
+  accountHealth, accountName, CARD_SORT_OPTIONS, cardSortKey, filterAccounts, parseCardSort, poolCredits, sortAccounts, type AccountSortKey, type StatusFilter,
 } from '../../lib/accounts'
 import { post } from '../../lib/api'
 import { ago } from '../../lib/format'
@@ -216,7 +216,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         run={run}
         onClose={() => setDetail(null)}
       />
-      <TasksModal uid={tasksOf} name={tasksAcct?.nickname || tasksOf?.slice(0, 16) || ''} onClose={() => setTasksOf(null)} />
+      <TasksModal uid={tasksOf} name={tasksAcct ? accountName(tasksAcct) : tasksOf?.slice(0, 16) || ''} onClose={() => setTasksOf(null)} />
       {confirmEl}
     </>
   )
@@ -280,7 +280,7 @@ function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, selection, 
               const health = accountHealth(a, fetchedAt)
               return (
                 <Table.Row key={a.uid} id={a.uid} className="cursor-pointer">
-                  <Table.Cell className="pe-0"><SelectBox label={'选择 ' + (a.nickname || a.uid)} /></Table.Cell>
+                  <Table.Cell className="pe-0"><SelectBox label={'选择 ' + accountName(a)} /></Table.Cell>
                   <Table.Cell><div className="max-w-40"><AccountName a={a} /></div></Table.Cell>
                   <Table.Cell><StatusCell a={a} health={health} now={now} /></Table.Cell>
                   <Table.Cell><CreditsCell a={a} poolMax={poolMax} now={now} /></Table.Cell>

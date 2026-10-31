@@ -63,8 +63,10 @@ type TokenUsageDelta struct {
 
 // Status 单个账号对外暴露的状态（脱敏）。
 type Status struct {
-	UID          string `json:"uid"`
-	Nickname     string `json:"nickname,omitempty"`
+	UID      string `json:"uid"`
+	Nickname string `json:"nickname,omitempty"`
+	// Note 面板里给账号写的备注（只在面板上显示，不发给上游）；空 = 没写。
+	Note         string `json:"note,omitempty"`
 	Credits      int64  `json:"credits"`
 	CreditsTotal int64  `json:"credits_total,omitempty"` // 积分总额度（各套餐聚合）；0 = 未知（旧 state/查询失败）
 	// CreditsExpiring / CreditsEarliestExpiry / CreditsEarliestRemaining 描述当前积分中
@@ -210,6 +212,7 @@ type entry struct {
 	// 但保号任务遍历只按 Disabled 过滤，故 paused 号天然继续参与签到 / 活跃上报 /
 	// 保活 / 余额刷新。持久化（state.json），跨重启不丢。
 	paused   bool
+	note     string // 面板备注（Status.Note），持久化
 	reason   string
 	lastUsed time.Time // 最近被选中时刻（防并发撞号）
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
@@ -427,6 +430,7 @@ type stateAccount struct {
 	CreditsTotal int64     `json:"credits_total,omitempty"`
 	Disabled     bool      `json:"disabled"`
 	Paused       bool      `json:"paused,omitempty"`
+	Note         string    `json:"note,omitempty"`
 	Reason       string    `json:"reason,omitempty"`
 	Until        time.Time `json:"until,omitempty"`
 	CoolKind     CoolKind  `json:"cool_kind"`

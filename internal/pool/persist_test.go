@@ -265,3 +265,38 @@ func TestStateOverviewFilters(t *testing.T) {
 		t.Errorf("序列化: %v", err)
 	}
 }
+
+// TestSetNotePersists 面板备注存进 state.json：重新导入同一个号（Add 换凭证）不丢、重启后还在；
+// 空串清除后不再落盘；未知 uid 返回 false。
+func TestSetNotePersists(t *testing.T) {
+	fp := filepath.Join(t.TempDir(), "state.json")
+	p := New(fp)
+	p.Add(&auth.Auth{UID: "u1", Nickname: "一号"})
+	if !p.SetNote("u1", "主力号") || p.SetNote("no-such", "x") {
+		t.Fatal("已有账号应改成功，未知 uid 应返回 false")
+	}
+	p.Add(&auth.Auth{UID: "u1", Nickname: "一号", AccessToken: "new"})
+	p.Flush()
+	p2 := New(fp)
+	p2.Add(&auth.Auth{UID: "u1"})
+	if st, _ := p2.Status("u1"); st.Note != "主力号" {
+		t.Fatalf("重启后备注 = %q，应为 主力号", st.Note)
+	}
+	p2.SetNote("u1", "")
+	p2.Flush()
+	raw, err := os.ReadFile(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sf stateFile
+	if err := json.Unmarshal(raw, &sf); err != nil || sf.Accounts["u1"].Note != "" {
+		t.Fatalf("清除后 state.json 里的备注 = %q，err=%v", sf.Accounts["u1"].Note, err)
+	}
+	if p2.dirty.Load() {
+		t.Fatal("Flush 后不应还有没落盘的改动")
+	}
+	p2.SetNote("u1", "")
+	if p2.dirty.Load() {
+		t.Fatal("备注没变不应标记要落盘")
+	}
+}

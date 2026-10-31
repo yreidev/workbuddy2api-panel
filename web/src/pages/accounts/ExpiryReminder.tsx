@@ -10,7 +10,7 @@ import { useMemo } from 'react'
 import { fmtTok } from '../../lib/format'
 import { useNow } from '../../lib/hooks'
 import { expiryTone, snapshotPackageAccounts, sortExpiryRows } from '../../lib/packages'
-import { usePackages } from '../../lib/queries'
+import { useAccountNames, usePackages } from '../../lib/queries'
 import type { Account, PackageAccount } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { InfoTip, Panel } from '../../components/Panel'
@@ -53,6 +53,7 @@ const DOT = { danger: 'bg-danger', warning: 'bg-warning', success: 'bg-success' 
 const dayWord = (days: number) => (days === 0 ? '今天到期' : days === 1 ? '明天到期' : days + ' 天后到期')
 
 function Rows({ list, now }: { list: PackageAccount[]; now: number }) {
+  const names = useAccountNames()
   const rows = useMemo(() => sortExpiryRows(list, now), [list, now])
   if (!rows.length) return <Empty title="没有账号" />
   return (
@@ -61,7 +62,7 @@ function Rows({ list, now }: { list: PackageAccount[]; now: number }) {
         <div key={a.uid} className="flex items-start gap-3 py-2 text-sm">
           <span className={`mt-1.5 size-2 shrink-0 rounded-full ${a.error ? 'bg-muted' : DOT[r ? expiryTone(r.first.days) : 'success']}`} />
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:gap-3">
-            <span className="shrink-0 truncate font-medium sm:w-36">{a.nickname || a.uid.slice(0, 8)}</span>
+            <span className="shrink-0 truncate font-medium sm:w-36">{names.name(a.uid, a.nickname)}</span>
             {a.error ? (
               <span className="text-danger">查询失败：{a.error}</span>
             ) : !r ? (

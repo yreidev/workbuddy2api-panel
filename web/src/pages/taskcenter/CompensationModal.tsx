@@ -11,7 +11,7 @@ import { acct, post } from '../../lib/api'
 import { until } from '../../lib/format'
 import { toastError, useNow } from '../../lib/hooks'
 import { pkExpiryMs } from '../../lib/packages'
-import { qk, useCompensation } from '../../lib/queries'
+import { qk, useAccountNames, useCompensation } from '../../lib/queries'
 import type { CompensationAccount, CompensationResp, CompensationStatus } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 
@@ -20,6 +20,7 @@ const URGENT_MS = 48 * 3600_000
 export function CompensationModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient()
   const query = useCompensation(open)
+  const names = useAccountNames()
   const now = useNow(60_000)
   const mutation = useMutation({
     mutationFn: async (uid: string) => {
@@ -65,7 +66,7 @@ export function CompensationModal({ open, onClose }: { open: boolean; onClose: (
                     <li key={a.uid} className="flex flex-wrap items-center gap-3 py-3 text-sm">
                       <div className="min-w-0 flex-1 basis-48">
                         <p className="flex items-center gap-1.5 break-all font-medium text-foreground">
-                          {a.nickname || a.uid}
+                          {names.name(a.uid, a.nickname)}
                           {a.disabled && <Chip size="sm" variant="soft">已禁用</Chip>}
                         </p>
                         {a.error ? <p className="mt-1 break-all text-xs text-danger">{a.error}</p> : a.status && <p className="mt-1 text-xs text-muted">

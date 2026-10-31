@@ -20,7 +20,7 @@
 | 视图 | 能做什么 |
 |---|---|
 | **账号池** | 统计卡：总数 / 可用 / 冷却 / 禁用 / 暂停，点一下即按状态筛选；另有积分合计与粘性会话数。<br>积分到期提醒：打开就列出每个账号最早一批要过期的积分，以及到期前日均至少要用掉多少（本地快照，不查上游）；点「检查」逐账号向上游查询，看到全部到期批次。同一天（北京时间）到期的算一批；订阅、体验这类按周期刷新的包按刷新时刻算。<br>账号卡片：状态与冷却倒计时（风控暂停、积分冷却等分开标出，冷却的卡片描橙边、禁用的描红边）、冷却原因和被限额的模型及解封时间、积分量条与最早到期、成功 / 失败 / 成功率 / 在途、用量与速率；右上角箭头看详情。宽屏可以在「卡片 / 表格」之间切换，选了哪种记在本浏览器；卡片视图用旁边的下拉排序，表格点表头排序。<br>单号操作：签到、余额、任务、解冻、暂停选号、禁用、移除。<br>批量操作：全部签到、旅行巡检、活跃上报、全部保活。<br>导出凭证：勾选账号（搜索框旁的「全选」或表格的表头勾选框 = 当前筛选结果全选）后点「导出凭证」，下载一个 JSON 文件；单个账号在详情里导出。<br>模型锁池：哪些模型被上游按模型限额、还剩几个号可用、多久后解锁。 |
-| **账号详情**（点账号行） | 模型限额台账、每个模型的实测单价、最早到期批次、连败与熔断计数、最近一次请求的模型与耗时；可单独导出这个号的凭证 |
+| **账号详情**（点账号行） | 备注：给账号写一句备注（最多 40 个字，只在面板上显示，存在网关的号池状态里，换浏览器、重新导入这个号都还在）；写了以后各页的账号名都先显示备注，没有备注才用昵称、再没有用 UID 前 8 位。请求记录里存的是记录时的「昵称(UID 前 8 位)」，显示和搜索时换成现在的备注（按原来的昵称也搜得到）。<br>模型限额台账、每个模型的实测单价、最早到期批次、连败与熔断计数、最近一次请求的模型与耗时；可单独导出这个号的凭证 |
 | **添加账号** | 浏览器内完成国内版 / 国际版 OAuth 登录，凭证落盘并热加载进池，不用重启；国际版会自动完成注册地区、激活与试用额度领取。也可导入 JSON：账号池导出的凭证（单个或批量），或 cockpit tools 导出的账号 |
 | **用量** | 请求数、token 构成、失败率、平均延迟与吐字速率；按小时的 token 时序图；按账号 / 模型 / 域 / 密钥的用量明细；积分扣除历史（每百万 token 积分、前缀缓存命中率）。建过客户端密钥后可以按密钥筛，整页只算这个密钥的请求 |
 | **请求记录** | 每次调用 API 的记录：成功率、平均耗时、进行中；每条请求的结果与失败原因、模型 / 账号 / 密钥 / 来源 IP / User-Agent / token 与缓存命中 / 积分 / 请求 ID，可按条件和时间范围从归档里查。失败原因是回给客户端的错误消息，最多 200 字，悬停看全文 |
@@ -100,7 +100,7 @@ IP 属于个人信息，所以由 `logging.request_client_info` 控制，默认�
 | 分组 | 端点 |
 |---|---|
 | 只读 | `GET overview` · `version`（`since` = 上次看过的版本，返回之后到当前版本的更新日志，`none` 表示没看过、只返回当前这一版；更新检查开着时另有远端最新版本和比本机新的各版本条目；`self_update` 是一键更新的状态与进度）· `usage`（`hours` 或 `from`/`to`；`key` = 只看一个密钥：客户端密钥的 id、`admin` 是管理员密钥、`-` 是没开鉴权或 1.3.0 之前的数据）· `packages` · `models` · `model_probes` · `logs` · `logs/archive`（按时间范围查运行日志的留存：`from` / `to` / `ch`（`task` / `sys`）/ `level`（`warn` = 警告及错误，`error` = 仅错误）/ `q` / `limit`（默认 500，最多 5000）；返回区间内最新的 `limit` 行，按时间先后排，`more` = 更早的还有没返回的）· `log_storage`（请求记录、任务日志、系统日志的文件数、大小、最早日期和保留天数，用量统计的明细条数与 `usage.json` 大小）· `request_metrics` · `request_logs`（`limit` / `outcome` / `account` / `model` / `client_ip` / `user_agent` / `api_key`（密钥名）/ `from` / `to`）· `config` · `tasks/queue` · `school/vouchers` |
-| 账号运维 | `POST accounts/{uid}/checkin` · `balance` · `revive` · `pause` · `resume` · `disable` · `remove`<br>`POST checkin_all` · `travel_all` · `activity_all` · `keepalive_all` · `balance_all`<br>`POST accounts/export`（`{"uids":[…]}`，返回 `{"accounts":[…]}`，每项与 `auths/workbuddy-<uid>.json` 同形；有 uid 不在池里时整单 404） |
+| 账号运维 | `POST accounts/{uid}/checkin` · `balance` · `revive` · `pause` · `resume` · `disable` · `remove`<br>`POST accounts/{uid}/note`（`{"note":"…"}`，去掉首尾空白后最多 40 个字、不能有换行，空串清除；总览的账号带 `note`）<br>`POST checkin_all` · `travel_all` · `activity_all` · `keepalive_all` · `balance_all`<br>`POST accounts/export`（`{"uids":[…]}`，返回 `{"accounts":[…]}`，每项与 `auths/workbuddy-<uid>.json` 同形；有 uid 不在池里时整单 404） |
 | 任务 | `GET accounts/{uid}/tasks`<br>`POST accounts/{uid}/tasks/accept` · `accept_all` · `claim` · `auto` · `auto_all`<br>`POST tasks/scan_all` · `tasks/run_queue` |
 | 积分补偿 | `GET compensation`（逐账号查询官方状态，含已禁用账号，带 `disabled` 标记）<br>`POST accounts/{uid}/compensation/claim` · `POST compensation/claim_all`（先查状态再领取，已禁用账号只查不领；批量结果逐账号返回） |
 | 添加账号 | `POST login/start` · `GET login/poll` · `GET login/regions` · `POST import`（multipart 字段 `file`；网关凭证与 cockpit tools 格式逐项自动识别，单个对象或数组都行；旧路径 `import/cockpit` 仍可用） |

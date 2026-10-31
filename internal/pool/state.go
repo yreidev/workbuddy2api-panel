@@ -114,6 +114,21 @@ func (p *Pool) Pause(uid string) bool {
 	return true
 }
 
+// SetNote 改账号的面板备注，空串清除。uid 不存在返回 false。
+func (p *Pool) SetNote(uid, note string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return false
+	}
+	if e.note != note {
+		e.note = note
+		p.dirty.Store(true)
+	}
+	return true
+}
+
 // Resume 解除暂停选号（幂等，对未暂停账号为空操作）。uid 不存在返回 false。
 func (p *Pool) Resume(uid string) bool {
 	p.mu.Lock()
@@ -553,6 +568,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Enterprise:               e.a.IsEnterprise(),
 		EnterpriseSwitch:         !e.a.IsEnterprise() && e.a.IsEnterpriseSession(),
 		Nickname:                 e.a.Nickname,
+		Note:                     e.note,
 		Credits:                  e.credits,
 		CreditsTotal:             e.creditsTotal,
 		CreditsExpiring:          e.creditsExpiring,

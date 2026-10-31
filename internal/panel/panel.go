@@ -17,6 +17,7 @@ package panel
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -26,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/apikeys"
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
@@ -211,6 +214,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountDisable))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountPause))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountResume))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/note", p.withAuth(p.accountNote))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuth(p.accountCheckin))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuth(p.accountBalance))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountRemove))
@@ -570,6 +574,41 @@ func (p *Panel) accountResume(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("panel: resume uid=%s（恢复参与选号）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// noteMaxRunes 账号备注最长几个字。
+const noteMaxRunes = 40
+
+// accountNote 改账号备注（只在面板上显示）：请求体 {"note": "..."}，去掉首尾空白后存进号池状态，空串清除。
+func (p *Panel) accountNote(w http.ResponseWriter, r *http.Request) {
+	uid := r.PathValue("uid")
+	var body struct {
+		Note *string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Note == nil {
+		writeErr(w, http.StatusBadRequest, "请求体要有 note 字段")
+		return
+	}
+	note := strings.TrimSpace(*body.Note)
+	if strings.IndexFunc(note, unicode.IsControl) >= 0 {
+		writeErr(w, http.StatusBadRequest, "备注不能有换行或控制字符")
+		return
+	}
+	if utf8.RuneCountInString(note) > noteMaxRunes {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("备注最多 %d 个字", noteMaxRunes))
+		return
+	}
+	if !p.cfg.Pool.SetNote(uid, note) {
+		writeErr(w, http.StatusNotFound, "account not found")
+		return
+	}
+	// 备注是使用者随手写的，可能有手机号之类，日志里不记内容。
+	if note == "" {
+		log.Printf("panel: note uid=%s 清除了备注", uid)
+	} else {
+		log.Printf("panel: note uid=%s 改了备注", uid)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note})
 }
 
 // accountCheckin 单号签到：DailyCheckin + 余额查询解冻（已签到等业务错误不阻塞余额刷新），

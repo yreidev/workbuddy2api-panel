@@ -73,11 +73,14 @@ export interface RequestFilter {
   outcome: string
 }
 
-/** 请求记录筛选：只在已拉取的条目上做，不发新请求 */
-export function matchRequest(e: RequestEvent, f: RequestFilter): boolean {
+/**
+ * 请求记录筛选：只在已拉取的条目上做，不发新请求。account 是账号现在的显示名（记录里存的是当时的昵称，
+ * 换成备注后的名字也要搜得到）。
+ */
+export function matchRequest(e: RequestEvent, f: RequestFilter, account = ''): boolean {
   if (f.outcome && e.outcome !== f.outcome) return false
   const kws = f.q.toLowerCase().split(/\s+/).filter(Boolean)
   if (!kws.length) return true
-  const text = [e.client_ip, e.user_agent, e.model, e.account, e.api_key, e.error, e.request_id].filter(Boolean).join(' ').toLowerCase()
+  const text = [e.client_ip, e.user_agent, e.model, e.account, account, e.api_key, e.error, e.request_id].filter(Boolean).join(' ').toLowerCase()
   return kws.every((kw) => text.includes(kw))
 }

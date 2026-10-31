@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  accountHealth, activeRateLimits, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, parseCardSort, poolCredits, rateLimitInfo,
-  sortAccounts,
+  accountHealth, accountName, activeRateLimits, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, notesOf, parseCardSort, poolCredits,
+  rateLimitInfo, relabel, sortAccounts,
 } from './accounts'
 import type { Account } from './types'
 
@@ -74,6 +74,40 @@ describe('账号表辅助', () => {
     expect(filterAccounts(list, now, 'all', '乙').map((a) => a.uid)).toEqual(['bbb'])
     expect(sortAccounts(list, 'credits', true).map((a) => a.uid)).toEqual(['bbb', 'ccc', 'aaa'])
     expect(sortAccounts(list, null, false)).toBe(list)
+  })
+  it('备注能搜到，按名称排序时备注优先于昵称', () => {
+    const list = [
+      { ...base, uid: 'aaa', nickname: '甲', note: '主力' },
+      { ...base, uid: 'bbb', nickname: '乙' },
+      { ...base, uid: 'ccc', note: 'Backup' },
+    ]
+    expect(filterAccounts(list, now, 'all', '主力').map((a) => a.uid)).toEqual(['aaa'])
+    expect(filterAccounts(list, now, 'all', 'backup').map((a) => a.uid)).toEqual(['ccc'])
+    // 按小写后的码位比：backup < 主力（U+4E3B）< 乙（U+4E59）
+    expect(sortAccounts(list, 'name', false).map((a) => a.uid)).toEqual(['ccc', 'aaa', 'bbb'])
+  })
+})
+
+describe('账号显示名', () => {
+  it('备注 > 昵称 > UID 前 8 位', () => {
+    expect(accountName({ uid: 'u1234567890', nickname: '一号', note: '主力' })).toBe('主力')
+    expect(accountName({ uid: 'u1234567890', nickname: '一号', note: '' })).toBe('一号')
+    expect(accountName({ uid: 'u1234567890' })).toBe('u1234567')
+  })
+  it('总览里只收有备注的号', () => {
+    const notes = notesOf({ accounts: [{ ...base, uid: 'a', note: '甲' }, { ...base, uid: 'b' }] })
+    expect([...notes]).toEqual([['a', '甲']])
+    expect(notesOf({ accounts: null }).size).toBe(0)
+  })
+  it('请求记录的标签按 uid8 换成备注，认不出的照原样', () => {
+    const notes = new Map([['abcdefgh-1111', '主力'], ['zzzzzzzz-1', '甲'], ['zzzzzzzz-2', '乙']])
+    expect(relabel('一号(abcdefgh)', notes)).toBe('主力(abcdefgh)')
+    expect(relabel('abcdefgh', notes)).toBe('主力(abcdefgh)')
+    // 昵称里自己带括号
+    expect(relabel('小(号)(abcdefgh)', notes)).toBe('主力(abcdefgh)')
+    expect(relabel('二号(12345678)', notes)).toBe('二号(12345678)')
+    // uid8 对上了两个号：不猜
+    expect(relabel('某号(zzzzzzzz)', notes)).toBe('某号(zzzzzzzz)')
   })
 })
 

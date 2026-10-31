@@ -9,12 +9,13 @@ import { Copy, QrCode } from '@gravity-ui/icons'
 import { Button, Card, Chip, Modal, toast, Typography } from '@heroui/react'
 import { encode } from 'uqr'
 import { copyText } from '../../lib/clipboard'
-import { useVouchers } from '../../lib/queries'
+import { useAccountNames, useVouchers } from '../../lib/queries'
 import type { Voucher } from '../../lib/types'
 import { Empty, Loaded } from '../../components/Feedback'
 
 export function VouchersModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const query = useVouchers(open)
+  const names = useAccountNames()
   return (
     <Modal.Backdrop isOpen={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <Modal.Container size="md" scroll="inside" placement="auto">
@@ -36,13 +37,13 @@ export function VouchersModal({ open, onClose }: { open: boolean; onClose: () =>
                     {withV.length === 0 && <Empty title="还没有抽到券" />}
                     {withV.map((a) => (
                       <section key={a.uid} className="flex flex-col gap-2">
-                        <h3 className="text-sm"><span className="font-semibold">{a.nickname || a.uid}</span> <span className="text-muted">{a.vouchers!.length} 张</span></h3>
+                        <h3 className="text-sm"><span className="font-semibold">{names.name(a.uid, a.nickname)}</span> <span className="text-muted">{a.vouchers!.length} 张</span></h3>
                         {a.vouchers!.map((v, i) => <VoucherCard key={v.code || i} v={v} />)}
                       </section>
                     ))}
                     {errs.length > 0 && (
                       <p className="text-sm text-warning">
-                        查询失败：{errs.map((a) => (a.nickname || a.uid.slice(0, 8)) + '（' + a.error + '）').join('、')}
+                        查询失败：{errs.map((a) => names.name(a.uid, a.nickname) + '（' + a.error + '）').join('、')}
                       </p>
                     )}
                     {withV.length > 0 && (

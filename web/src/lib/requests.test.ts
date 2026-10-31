@@ -57,5 +57,8 @@ describe('请求指标', () => {
     expect(pick({ q: '', outcome: 'http_error' })).toEqual(['req-2'])
     expect(pick({ q: '198.51', outcome: 'http_error' })).toEqual(['req-2'])
     expect(pick({ q: 'prompt too', outcome: '' })).toEqual(['req-2'])
+    // 账号现在的显示名（换成了备注）也能搜到，记录里的旧昵称照样能搜
+    expect([base, other].filter((e) => matchRequest(e, { q: '主力', outcome: '' }, e === base ? '主力(uid8)' : '')).map((e) => e.request_id)).toEqual(['req-1'])
+    expect(matchRequest(base, { q: '示例', outcome: '' }, '主力(uid8)')).toBe(true)
   })
 })

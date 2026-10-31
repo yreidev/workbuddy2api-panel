@@ -6,6 +6,7 @@
 // 「个人体验版」…），面额从 6 到 1500 不等，且按次发放。所以两个任务完成度完全一致的账号，
 // 余额可能差上千——差别只在包里。这里把逐包明细摊开，并给每个来源一个稳定配色，跨账号对比时同色即同类。
 // （纯函数从旧版 app.js 平移，口径不变，见 packages.test.ts）
+import { accountName } from './accounts'
 import type { Account, CreditPackage, PackageAccount } from './types'
 
 // 分类色：8 个固定槽位（CSS 变量，明暗两套，定义和校验说明见 index.css），按顺序分配、不循环复用，
@@ -183,7 +184,7 @@ export interface CreditSegment {
   accountName: string
 }
 
-type SegmentAccount = Pick<PackageAccount, 'uid' | 'remain'> & { nickname?: string; packages?: Partial<CreditPackage>[] | null; error?: string }
+type SegmentAccount = Pick<PackageAccount, 'uid' | 'remain'> & { nickname?: string; note?: string; packages?: Partial<CreditPackage>[] | null; error?: string }
 
 /** 账号余额按包拆成到期段：以账号总余额为上限逐包计入（上游偶有重复记录，避免膨胀），按到期先后排序 */
 export function pkAccountSegments(a: SegmentAccount, now: number): CreditSegment[] {
@@ -200,7 +201,7 @@ export function pkAccountSegments(a: SegmentAccount, now: number): CreditSegment
       days: expiresAt == null ? null : Math.max(0, Math.ceil((expiresAt - now) / PK_DAY_MS)),
       source: p.name || '积分',
       uid: String(a.uid || ''),
-      accountName: a.nickname || String(a.uid || '').slice(0, 8) || '未命名账号',
+      accountName: accountName({ ...a, uid: String(a.uid || '') }) || '未命名账号',
     })
     balance -= amount
   }

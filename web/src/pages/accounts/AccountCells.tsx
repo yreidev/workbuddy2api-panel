@@ -9,11 +9,14 @@ import { dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until
 import type { Account } from '../../lib/types'
 import { Hint } from '../../components/Hint'
 
+/** 账号名：有备注时备注当主名、昵称浅色跟在后面；下一行是 UID，所以没名字时写「未命名」 */
 export function AccountName({ a }: { a: Account }) {
+  const name = a.note || a.nickname
   return (
     <div className="min-w-0">
       <div className="flex items-center gap-1.5">
-        <span className={`truncate font-medium ${a.nickname ? '' : 'text-muted'}`}>{a.nickname || '未命名'}</span>
+        <span className={`truncate font-medium ${name ? '' : 'text-muted'}`}>{name || '未命名'}</span>
+        {a.note && a.nickname && <span className="truncate text-xs text-muted">{a.nickname}</span>}
         <RealmChips a={a} />
       </div>
       <div className="truncate font-mono text-xs text-muted">{a.uid.length > 16 ? a.uid.slice(0, 16) + '…' : a.uid}</div>

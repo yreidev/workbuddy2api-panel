@@ -42,6 +42,8 @@ export interface RateLimitedModel {
 export interface Account {
   uid: string
   nickname?: string
+  /** 面板里写的备注（只在面板上显示），各页的账号名优先用它，见 accounts.ts 的 accountName */
+  note?: string
   credits: number | null
   credits_total?: number
   credits_expiring?: number
@@ -253,6 +255,8 @@ export interface CreditPackage {
 export interface PackageAccount {
   uid: string
   nickname: string
+  /** 面板从总览补上的备注（接口不带），显示名用 accountName */
+  note?: string
   realm: string
   remain: number
   size: number

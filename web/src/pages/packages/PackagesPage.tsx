@@ -9,6 +9,7 @@ import { useMemo } from 'react'
 import { Accordion, Card, Label, ListBox, Select, Table } from '@heroui/react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ChevronDown } from '@gravity-ui/icons'
+import { accountName } from '../../lib/accounts'
 import { fmtTok } from '../../lib/format'
 import { useNow, useStoredChoice } from '../../lib/hooks'
 import type { TipProps } from '../../lib/chart'
@@ -17,7 +18,7 @@ import {
   pkDetailLimitValue, pkExpiryDateTime, pkExpiryText, pkSourceKey, PK_SORT_OPTIONS, summarizeCreditDays, VIZ_OTHER, type CreditDayRow,
   type PkSortMode,
 } from '../../lib/packages'
-import { useConfig, usePackages } from '../../lib/queries'
+import { useAccountNames, useConfig, usePackages } from '../../lib/queries'
 import type { CreditPackage, PackageAccount } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { Hint } from '../../components/Hint'
@@ -27,7 +28,9 @@ export function PackagesPage() {
   const query = usePackages()
   const cfg = useConfig()
   const limit = pkDetailLimit(cfg.data?.config)
-  const list = useMemo(() => query.data?.accounts || [], [query.data])
+  const names = useAccountNames()
+  // 接口不带备注，从总览补上，下面各处的账号名都用 accountName
+  const list = useMemo(() => (query.data?.accounts || []).map((a) => ({ ...a, note: names.note(a.uid) })), [query.data, names])
   const colorOf = useMemo(() => sourceColors(list), [list])
   const [sortMode, setSortMode] = useStoredChoice<PkSortMode>('wb2api.pkSort', PK_SORT_OPTIONS.map((o) => o.id), 'end_asc')
   const now = useNow(60_000)
@@ -131,7 +134,7 @@ function ExpiryDistribution({ list, now }: { list: PackageAccount[]; now: number
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
         {legend.map((a) => (
           <span key={a.uid} className="flex items-center gap-1.5">
-            <span className="size-2.5 rounded-sm" style={{ background: colors.get(a.uid) }} />{a.nickname || a.uid.slice(0, 8)}
+            <span className="size-2.5 rounded-sm" style={{ background: colors.get(a.uid) }} />{accountName(a)}
           </span>
         ))}
         {others > 0 && (
@@ -165,7 +168,7 @@ function Compare({ list, now }: { list: PackageAccount[]; now: number }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {list.map((a) => {
-        const name = a.nickname || a.uid.slice(0, 8)
+        const name = accountName(a)
         if (a.error) {
           return (
             <Card key={a.uid} variant="secondary" className="gap-1 p-4">
@@ -258,7 +261,7 @@ function PackTable({ packs, colorOf, label }: { packs: CreditPackage[]; colorOf:
 /** 单账号逐包明细：按排序规则（默认最早到期）展示前 N 条，其余未用完的包和已用完的包各自折叠 */
 function Detail({ a, limit, sortMode, colorOf }: { a: PackageAccount; limit: number; sortMode: PkSortMode; colorOf: (key: string) => string }) {
   const g = pkDetailGroups(a.packages || [], limit, sortMode)
-  const name = (a.nickname || a.uid.slice(0, 8)) + ' · ' + (a.realm || '')
+  const name = accountName(a) + ' · ' + (a.realm || '')
   return (
     <Panel
       title={name}

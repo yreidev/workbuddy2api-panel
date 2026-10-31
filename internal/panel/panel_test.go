@@ -396,6 +396,48 @@ func TestPanelAccountOps(t *testing.T) {
 	})
 }
 
+// 账号备注：去掉首尾空白后存下、正好 40 个字可以、空串清除；没有 note 字段、有换行、超长、
+// 账号不存在都拒绝，原来的备注不动。
+func TestPanelAccountNote(t *testing.T) {
+	p, _ := newPanelFor(t, Config{})
+	p.cfg.Pool.Add(taskTestAuth("u1", "一号"))
+	note := func() string { return mustStatus(t, p, "u1").Note }
+	autoWantCode(t, postJSON(t, p, "/panel/api/accounts/u1/note", `{"note":"  主力号 "}`), http.StatusOK)
+	if got := note(); got != "主力号" {
+		t.Fatalf("备注 = %q，应为 主力号", got)
+	}
+	for _, tc := range []struct {
+		name, path, body, want string
+		code                   int
+	}{
+		{"没有 note 字段", "u1", `{}`, "note 字段", http.StatusBadRequest},
+		{"不是 JSON", "u1", `x`, "note 字段", http.StatusBadRequest},
+		{"有换行", "u1", `{"note":"a\nb"}`, "换行", http.StatusBadRequest},
+		{"超过 40 个字", "u1", `{"note":"` + strings.Repeat("号", 41) + `"}`, "40 个字", http.StatusBadRequest},
+		{"账号不存在", "nope", `{"note":"x"}`, "not found", http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := postJSON(t, p, "/panel/api/accounts/"+tc.path+"/note", tc.body)
+			autoWantCode(t, rec, tc.code)
+			if msg := autoErrText(t, rec); !strings.Contains(msg, tc.want) {
+				t.Errorf("错误信息 = %q，应含 %q", msg, tc.want)
+			}
+			if got := note(); got != "主力号" {
+				t.Errorf("被拒后备注变成了 %q", got)
+			}
+		})
+	}
+	full := strings.Repeat("号", 40)
+	autoWantCode(t, postJSON(t, p, "/panel/api/accounts/u1/note", `{"note":"`+full+`"}`), http.StatusOK)
+	if got := note(); got != full {
+		t.Fatalf("40 个字应能存下，实际 %q", got)
+	}
+	autoWantCode(t, postJSON(t, p, "/panel/api/accounts/u1/note", `{"note":""}`), http.StatusOK)
+	if got := note(); got != "" {
+		t.Fatalf("空串应清除备注，实际 %q", got)
+	}
+}
+
 // 单号签到：个人号 / 已签到 / 普通失败 / 企业号 / 余额失败。
 func TestPanelAccountCheckin(t *testing.T) {
 	checkinPath := "/v2/billing/meter/daily-checkin"

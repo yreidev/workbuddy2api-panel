@@ -8,6 +8,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Chip, Table, ToggleButton, ToggleButtonGroup, type SortDescriptor } from '@heroui/react'
 import { fmtCredit, fmtCreditRatio, fmtModelRate, fmtTok } from '../../lib/format'
+import { useAccountNames } from '../../lib/queries'
 import { cacheLevel, cacheRate, cacheRateText } from '../../lib/requests'
 import type { CreditUsage, UsageResp } from '../../lib/types'
 import { Empty } from '../../components/Feedback'
@@ -79,6 +80,7 @@ export function CreditHistory({ data }: { data: UsageResp }) {
 }
 
 function CreditTable({ kind, rows }: { kind: Kind; rows: CreditUsage[] }) {
+  const names = useAccountNames()
   const [sort, setSort] = useState<SortDescriptor | undefined>()
   const sorted = useMemo(() => {
     const col = NUM_COLS.find((c) => c.id === sort?.column)
@@ -107,7 +109,7 @@ function CreditTable({ kind, rows }: { kind: Kind; rows: CreditUsage[] }) {
                 <Table.Cell>
                   {kind === 'account' ? (
                     <div className="flex flex-col">
-                      <span className="font-medium">{r.nickname || r.key.slice(0, 8) || '—'}</span>
+                      <span className="font-medium">{names.name(r.key, r.nickname) || '—'}</span>
                       <span className="font-mono text-xs text-muted">{[r.realm, r.key.slice(0, 8)].filter(Boolean).join(' · ')}</span>
                     </div>
                   ) : <span className="break-all">{r.key || '—'}</span>}

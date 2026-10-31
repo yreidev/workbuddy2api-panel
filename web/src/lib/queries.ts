@@ -4,7 +4,9 @@
 
 // 所有读接口的查询（TanStack Query）。打上游的接口（模型、积分包、任务、券码、补偿）不随窗口聚焦自动重查，
 // 只读网关内存的接口（总览、日志、队列、版本）按页面需要轮询；标签页切到后台时轮询自动暂停。
+import { useMemo } from 'react'
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
+import { accountName, notesOf, relabel } from './accounts'
 import { ApiError, acct, api, errorMessage } from './api'
 import { logArchiveQuery, type LevelFilter, type LogChannel } from './logs'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
@@ -52,6 +54,22 @@ export function useOverview(intervalMs = 30_000) {
     queryFn: () => api<Overview>('overview'),
     refetchInterval: intervalMs,
   })
+}
+
+const NO_NOTES = new Map<string, string>()
+
+/**
+ * 账号显示名（备注 > 昵称 > UID 前 8 位），给只带 uid 和昵称的接口数据（用量、积分、任务、补偿、请求记录…）
+ * 补上备注。备注取自外壳一直在轮询的总览缓存，这个钩子自己不发请求。
+ */
+export function useAccountNames() {
+  const { data: notes = NO_NOTES } = useQuery({ queryKey: qk.overview, queryFn: () => api<Overview>('overview'), enabled: false, select: notesOf })
+  return useMemo(() => ({
+    note: (uid: string) => notes.get(uid),
+    name: (uid: string, nickname?: string) => accountName({ uid, nickname, note: notes.get(uid) }),
+    /** 请求记录里的「昵称(uid8)」标签 */
+    label: (label: string) => relabel(label, notes),
+  }), [notes])
 }
 
 export function useLogs(live: boolean) {

@@ -4,11 +4,16 @@
 
 // 账号详情抽屉：展示后端已有、账号表放不下的运维信息——模型级限额台账、成本台账、
 // 最早到期批次、连败 / 熔断计数、最近一次请求。数据取自总览（随 5 秒轮询实时更新）。
-import type { ReactNode } from 'react'
-import { Chip, Drawer, Separator, Surface, useMediaQuery } from '@heroui/react'
-import { activeRateLimits, creditsText, ENTERPRISE_SWITCH_TIP, rateLimitInfo, type Health } from '../../lib/accounts'
+// 账号备注也在这里改（存在网关的号池状态里，各页的账号名都优先用它）。
+import { useState, type ReactNode } from 'react'
+import { Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, TextField, toast, useMediaQuery } from '@heroui/react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { activeRateLimits, creditsText, ENTERPRISE_SWITCH_TIP, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
+import { acct, post } from '../../lib/api'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
-import type { Account } from '../../lib/types'
+import { toastError } from '../../lib/hooks'
+import { qk } from '../../lib/queries'
+import type { Account, Overview } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
 import { HealthChip, RealmChips } from './AccountCells'
 import { ExportOneButton } from './ExportBar'
@@ -58,6 +63,35 @@ export function AccountDrawer({ account: a, health, now, busy, run, onClose }: {
   )
 }
 
+/** 改备注：改完点保存，清空再保存就是去掉备注。存好后直接改总览缓存，不等下一次轮询 */
+function NoteEditor({ a }: { a: Account }) {
+  const qc = useQueryClient()
+  const [value, setValue] = useState(a.note || '')
+  const note = value.trim()
+  const tooLong = [...note].length > NOTE_MAX
+  const save = useMutation({
+    mutationFn: () => post<{ note: string }>(acct(a.uid, 'note'), { note }),
+    onSuccess: (d) => {
+      qc.setQueryData<Overview>(qk.overview, (o) => o && { ...o, accounts: (o.accounts || []).map((x) => x.uid === a.uid ? { ...x, note: d.note } : x) })
+      setValue(d.note)
+      toast.success(d.note ? '备注已保存' : '备注已清除')
+    },
+    onError: toastError,
+  })
+  return (
+    <div className="flex items-start gap-2">
+      <TextField value={value} onChange={setValue} isInvalid={tooLong} autoComplete="off" className="min-w-0 flex-1">
+        <Label>备注</Label>
+        <Input placeholder="比如这个号是谁的、拿来做什么" />
+        {tooLong ? <FieldError>最多 {NOTE_MAX} 个字</FieldError> : <Description>只在面板上显示，各页的账号名优先用它</Description>}
+      </TextField>
+      <Button size="sm" variant="secondary" className="mt-6" isDisabled={tooLong || note === (a.note || '')} isPending={save.isPending} onPress={() => save.mutate()}>
+        保存
+      </Button>
+    </div>
+  )
+}
+
 function Body({ a, health, now, busy, run }: {
   a: Account
   health: Health
@@ -76,12 +110,15 @@ function Body({ a, health, now, busy, run }: {
     <>
       <Drawer.Header>
         <Drawer.Heading className="flex flex-wrap items-center gap-2">
-          {a.nickname || '未命名'}
+          {a.note || a.nickname || '未命名'}
+          {a.note && a.nickname && <span className="text-sm font-normal text-muted">{a.nickname}</span>}
           <RealmChips a={a} />
         </Drawer.Heading>
         <p className="select-all break-all font-mono text-xs text-muted">{a.uid}</p>
       </Drawer.Header>
       <Drawer.Body className="flex flex-col gap-5">
+        <NoteEditor key={a.uid} a={a} />
+
         <Section title="状态">
           <Row label="当前"><HealthChip health={health} now={now} /></Row>
           {a.enterprise_switch && <Row label="企业切换会话"><span className="text-warning">{ENTERPRISE_SWITCH_TIP}</span></Row>}

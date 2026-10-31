@@ -10,7 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { timeMs } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
-import { qk, useQueue } from '../../lib/queries'
+import { qk, useAccountNames, useQueue } from '../../lib/queries'
 import { growthTitles } from '../../lib/tasks'
 import type { QueueItem, QueueState, RunQueueResp, ScanAccount } from '../../lib/types'
 import { BusyButton, Empty } from '../../components/Feedback'
@@ -61,6 +61,7 @@ const STATUS: Record<string, { label: string; color: 'success' | 'accent' | 'dan
 
 export function TaskCenterPage() {
   const qc = useQueryClient()
+  const names = useAccountNames()
   const queue = useQueue()
   // 扫描结果放在查询缓存里：切到别的页面再回来，上次的扫描结果还在
   const scan = useQuery({
@@ -171,7 +172,7 @@ export function TaskCenterPage() {
           groups.map((g) => (
             <section key={g.uid} className="flex flex-col">
               <h3 className="flex items-baseline gap-2 pb-1 text-sm">
-                <span className="font-semibold">{g.nick || g.uid.slice(0, 12)}</span>
+                <span className="font-semibold">{names.name(g.uid, g.nick)}</span>
                 <span className="text-xs text-muted">{g.rows.length} 项</span>
               </h3>
               <ul className="flex flex-col divide-y divide-separator">

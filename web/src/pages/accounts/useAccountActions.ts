@@ -6,7 +6,7 @@
 import { useState } from 'react'
 import { toast } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
-import { creditsText } from '../../lib/accounts'
+import { accountName, creditsText } from '../../lib/accounts'
 import { acct, post } from '../../lib/api'
 import { toastError } from '../../lib/hooks'
 import { qk } from '../../lib/queries'
@@ -60,7 +60,7 @@ export function useAccountActions(openTasks: (uid: string) => void) {
     if (action === 'tasks') return openTasks(a.uid)
     if (action === 'remove') {
       return ask({
-        title: '移除账号「' + (a.nickname || a.uid.slice(0, 12)) + '」？',
+        title: '移除账号「' + accountName(a) + '」？',
         body: '移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。',
         confirmLabel: '移除',
         onConfirm: () => void exec(a.uid, 'remove'),
@@ -68,7 +68,7 @@ export function useAccountActions(openTasks: (uid: string) => void) {
     }
     if (action === 'disable') {
       return ask({
-        title: '禁用账号「' + (a.nickname || a.uid.slice(0, 12)) + '」？',
+        title: '禁用账号「' + accountName(a) + '」？',
         body: '禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。',
         confirmLabel: '禁用',
         onConfirm: () => void exec(a.uid, 'disable'),
