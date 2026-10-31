@@ -38,7 +38,7 @@ GitHub 上叫 workbuddy2api-panel 的仓库有好几个。本仓库是在原版 
 | | 本仓库 | 原版 |
 |---|---|---|
 | **Claude Code / Codex** | 原生提供 Anthropic Messages（`/v1/messages`）和 Responses（`/v1/responses`），填地址和密钥就能用；模型路由把它们的默认模型名改到上游模型，客户端不用配模型；Claude Code 自带的 WebSearch 直接能用，Codex 接网关的 MCP 服务器也能联网搜索 | 对话只有 `/v1/chat/completions`；联网搜索只有给 DSH 这类客户端调的 `/v1/search/messages` |
-| **出站请求** | 照官方桌面端安装包（国内版 5.9.3、国际版 5.8.4）逐项对齐 UA、请求头、会话 id、链路头和 TLS 握手指纹，每一项的依据和还没对齐的地方都写在[官方客户端对照](docs/official-client.md) | UA 停在 WorkBuddy 5.5.4，还带着官方已经不发的 Origin、Referer 等旧请求头 |
+| **出站请求** | 照官方桌面端安装包（国内版 5.9.3、国际版 5.9.4）逐项对齐 UA、请求头、会话 id、链路头和 TLS 握手指纹，每一项的依据和还没对齐的地方都写在[官方客户端对照](docs/official-client.md) | UA 停在 WorkBuddy 5.5.4，还带着官方已经不发的 Origin、Referer 等旧请求头 |
 | **网络容错** | 主入口出错切备用入口，DNS 失败或网关错误换 HTTPDNS 候选 IP，按入口熔断，规则照官方 | 单一入口，没有失败切换 |
 | **对话隐私** | 默认告诉上游不许拿你的对话做模型优化（`X-Private-Data`），面板里可改 | 不发 |
 | **企业号** | 用官方企业目录接口按账号拉模型，企业开通的 Claude 等模型只派给有它的号 | 所有企业号探测同一个旧端点 |
@@ -253,7 +253,7 @@ flowchart LR
   - [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)：自我介绍句、DeepSeek Harness、OhMyOpenCode 这几类渠道指纹的清洗规则，国际版号成批被 11140 风控时整域暂停的做法（issue #629），以及每段对话记下用过的号、换号时先回到这些号的做法。
   - [ithtelab/workbuddy-manager](https://github.com/ithtelab/workbuddy-manager)、[mmqz/cpa-multi-plugins](https://github.com/mmqz/cpa-multi-plugins)：渠道指纹在助手历史和用户消息里同样会被拦的实测。
   - [sofs2005/w2a](https://github.com/sofs2005/w2a)：用原始字节确认上游回的是数字码 `11128`。
-  - [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel)：AutoBot.yml 整理好的同类项目清单；对齐登录的提交提醒了授权被拒的登录业务码和毫秒的到期时间，网关对照官方安装包核实后补上。
+  - [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel)：AutoBot.yml 整理好的同类项目清单；对齐登录的提交提醒了授权被拒的登录业务码和毫秒的到期时间，网关对照官方安装包核实后补上；它的真机抓包里积分、签到用的是 `axios/1.16.1`，国际版后台请求的 UA 两段都是 `workbuddy-ai`，网关据此回安装包查实，改掉了这两处旧缺口。
   - [magpie-community/plugins](https://github.com/magpie-community/plugins) 的 WorkBuddy 插件：对齐桌面端 5.9.3 时对照了它的请求头，它的说明提醒了官方对话经 OpenAI SDK 发出、带 `X-Stainless-*` 头，网关对照官方安装包核实后记进了[官方客户端对照](docs/official-client.md#与桌面端-593-的对照)。
 - **其他 API 网关**：
   - [QuantumNous/new-api](https://github.com/QuantumNous/new-api)：调用日志单独成页、失败请求直接显示原因的做法。

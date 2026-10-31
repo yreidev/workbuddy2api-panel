@@ -215,9 +215,7 @@ func (c *Client) searchHeaders(req *http.Request, a *auth.Auth, meta ChatMeta) {
 		h.Set("Authorization", "Bearer "+at)
 	}
 	h.Set("X-Agent-Intent", "craft")
-	if rt := agentRuntime(a); rt != "" {
-		h.Set("X-Agent-Runtime", rt)
-	}
+	h.Set("X-Agent-Runtime", agentRuntime)
 	h.Set("X-Conversation-ID", meta.ConversationID)
 	h.Set("X-Conversation-Request-ID", meta.ConversationRequestID)
 	id := session.NewUUIDv7Hex()

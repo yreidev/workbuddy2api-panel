@@ -89,7 +89,7 @@ func TestSearchRequestShape(t *testing.T) {
 	}
 
 	// 没有白名单、时间范围时请求体不带这两个字段；没给会话 id 时新生成一个（带连字符的 UUID）。
-	// 国际版号发到国际版入口，没有 X-Agent-Runtime，版本取国际版的；企业号带部门全名，不带企业头。
+	// 国际版号发到国际版入口，同样带 X-Agent-Runtime，版本取国际版的；企业号带部门全名，不带企业头。
 	g := &auth.Auth{UID: "g1", AccessToken: "at-g", Domain: "www.workbuddy.ai", EnterpriseID: "e1", DepartmentFullName: "研发部"}
 	if _, err := c.Search(context.Background(), g, SearchQuery{Query: "ab"}, ChatMeta{}); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestSearchRequestShape(t *testing.T) {
 		t.Errorf("最简请求体 = %s", body)
 	}
 	h := got.Header
-	if got.URL.String() != "https://global.example/agenttool/v1/search" || h.Get("X-Agent-Runtime") != "" ||
+	if got.URL.String() != "https://global.example/agenttool/v1/search" || h.Get("X-Agent-Runtime") != "local-agent" ||
 		h.Get("User-Agent") != "CLI/"+defaultClientVersionGlobal || h.Get("X-IDE-Version") != defaultClientVersionGlobal {
 		t.Errorf("国际版请求 = %s，头 %v", got.URL, h)
 	}

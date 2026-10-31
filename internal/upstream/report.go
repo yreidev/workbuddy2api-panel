@@ -25,12 +25,20 @@ import (
 // reportPath 活跃上报通道（实测）。
 const reportPath = "/v2/report"
 
-// billingJSON 发 billing 域（billingBase，codebuddy.cn）请求并解信封；body 为 nil 时不带请求体。
-// 与 travel.go 的 growthJSON 对称（growth 域走 chatBase + BillingHeaders；billing 域走 billingBase）。
-// report/checkin 等 billing 端点共用：请求头统一 BillingHeaders，信封与错误语义同 doJSON。
-// extra 在 BillingHeaders 之后逐个调用，补个别接口才带的头（积分的 Accept-Language、签到的
+// billingJSON 发 billing 域（billingBase）请求并解信封；body 为 nil 时不带请求体。上报用它，请求头是
+// BillingHeaders；信封与错误语义同 doJSON。
+func (c *Client) billingJSON(a *auth.Auth, method, path string, body any) (json.RawMessage, error) {
+	return c.billingDo(a, method, path, body, c.BillingHeaders, nil)
+}
+
+// authServiceJSON 同 billingJSON，请求头换成后台服务 AuthService 的那组（authServiceHeaders）：积分查询、
+// 企业用量、签到状态与签到。extra 在它之后逐个调用，补个别接口才带的头（积分的 Accept-Language、签到的
 // X-Device-Token）。
-func (c *Client) billingJSON(a *auth.Auth, method, path string, body any, extra ...func(*http.Request)) (json.RawMessage, error) {
+func (c *Client) authServiceJSON(a *auth.Auth, method, path string, body any, extra ...func(*http.Request)) (json.RawMessage, error) {
+	return c.billingDo(a, method, path, body, c.authServiceHeaders, extra)
+}
+
+func (c *Client) billingDo(a *auth.Auth, method, path string, body any, headers func(*http.Request, *auth.Auth), extra []func(*http.Request)) (json.RawMessage, error) {
 	var rdr io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -43,7 +51,7 @@ func (c *Client) billingJSON(a *auth.Auth, method, path string, body any, extra 
 	if err != nil {
 		return nil, err
 	}
-	c.BillingHeaders(req, a)
+	headers(req, a)
 	for _, f := range extra {
 		f(req)
 	}
@@ -55,7 +63,7 @@ func withBillingLanguage(a *auth.Auth) func(*http.Request) {
 	return func(req *http.Request) { req.Header.Set("Accept-Language", billingAcceptLanguage(a)) }
 }
 
-// withDeviceToken 签到才带的 X-Device-Token（官方 getCheckinRequestHeaders）。
+// withDeviceToken 签到才带的 X-Device-Token（官方 AuthService 的 buildHeadersWithTuringToken）。
 func (c *Client) withDeviceToken(a *auth.Auth) func(*http.Request) {
 	return func(req *http.Request) { c.injectDeviceToken(req, a) }
 }

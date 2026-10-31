@@ -14,7 +14,7 @@ import (
 
 // TestChatHeadersOfficialShape chat 出站头对齐官方 CLI 的对话请求（10-19 生产逐项实测）：
 // 该带的都带，官方对话请求里没有的一个都不带；企业号加 X-Enterprise-Id 与同值的 X-Tenant-Id；
-// 国内版（5.9.3 内置 2.165.0）加 X-Agent-Runtime: local-agent，国际版（5.8.4 内置 2.161.0）不带。
+// 两域（国内版 5.9.3、国际版 5.9.4，都内置 2.165.0）都带 X-Agent-Runtime: local-agent。
 func TestChatHeadersOfficialShape(t *testing.T) {
 	auth.SetGlobalEnabled(true)
 	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
@@ -23,17 +23,16 @@ func TestChatHeadersOfficialShape(t *testing.T) {
 	glEnt := globalAuth()
 	glEnt.EnterpriseID = "corp-g"
 	cases := []struct {
-		name    string
-		a       *auth.Auth
-		domain  string
-		ent     string
-		runtime string
+		name   string
+		a      *auth.Auth
+		domain string
+		ent    string
 	}{
-		{"国内版个人号", cnAuth(), "www.codebuddy.cn", "", "local-agent"},
-		{"国内版企业号", cnEnt, "www.codebuddy.cn", "corp-cn", "local-agent"},
-		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "", "", "local-agent"},
-		{"国际版个人号", globalAuth(), "www.workbuddy.ai", "", ""},
-		{"国际版企业号", glEnt, "www.workbuddy.ai", "corp-g", ""},
+		{"国内版个人号", cnAuth(), "www.codebuddy.cn", ""},
+		{"国内版企业号", cnEnt, "www.codebuddy.cn", "corp-cn"},
+		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "", ""},
+		{"国际版个人号", globalAuth(), "www.workbuddy.ai", ""},
+		{"国际版企业号", glEnt, "www.workbuddy.ai", "corp-g"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,7 +49,7 @@ func TestChatHeadersOfficialShape(t *testing.T) {
 				"X-Tenant-Id":      tc.ent,
 				"X-Agent-Intent":   "craft",
 				"X-Agent-Type":     "main",
-				"X-Agent-Runtime":  tc.runtime,
+				"X-Agent-Runtime":  "local-agent",
 				"X-Agent-Purpose":  "conversation",
 				"X-Private-Data":   "true",
 				"X-Product":        "SaaS",

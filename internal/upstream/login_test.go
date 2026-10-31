@@ -53,7 +53,7 @@ func loginTestUA(global bool) string {
 		v, cli = defaultClientVersionGlobal, defaultCliVersionGlobal
 		app = "workbuddy-ai"
 	}
-	return app + "/" + v + " WorkBuddy/" + v + " CLI/" + cli
+	return app + "/" + v + " " + app + "/" + v + " CLI/" + cli
 }
 
 // loginWantHeaderAbsent 表里标「不带」的头必须为空。

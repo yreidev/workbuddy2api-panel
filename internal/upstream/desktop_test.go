@@ -1021,20 +1021,30 @@ func TestDesktopExpertSequences(t *testing.T) {
 	}
 }
 
-// TestDesktopFingerprintFollowsClientVersion 事件指纹的版本跟 UA 用同一个客户端版本，
-// commit / releaseDate 取国内版 5.9.3 安装包的值。
+// TestDesktopFingerprintFollowsClientVersion 事件指纹的版本跟 UA 用同一个客户端版本，commit / releaseDate
+// 按域取安装包的值（国内版 5.9.3、国际版 5.9.4），配了 client_version 也不变。
 func TestDesktopFingerprintFollowsClientVersion(t *testing.T) {
-	a := &auth.Auth{UID: "u-1"}
-	fp := (&Client{}).desktopFingerprint(a)
-	if fp["ideVersion"] != "5.9.3" || fp["extVersion"] != "5.9.3" {
-		t.Errorf("默认版本 = %v / %v，应为 5.9.3", fp["ideVersion"], fp["extVersion"])
-	}
-	if fp["commit"] != "d46924219e79332f49c37ccebf27292f87001b19" || fp["releaseDate"] != int64(1793093023713) {
-		t.Errorf("commit / releaseDate = %v / %v", fp["commit"], fp["releaseDate"])
-	}
-	fp = (&Client{ClientVersion: "6.0.0"}).desktopFingerprint(a)
-	if fp["ideVersion"] != "6.0.0" || fp["extVersion"] != "6.0.0" {
-		t.Errorf("配了 client_version 后版本 = %v / %v，应为 6.0.0", fp["ideVersion"], fp["extVersion"])
+	for _, tc := range []struct {
+		name, domain, ver, commit string
+		released                  int64
+	}{
+		{"国内版", "", "5.9.3", "d46924219e79332f49c37ccebf27292f87001b19", 1793093023713},
+		{"国际版", "www.workbuddy.ai", "5.9.4", "fa0a0901906addaa1a4259f6df347388a5563ded", 1793290653510},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &auth.Auth{UID: "u-1", Domain: tc.domain}
+			fp := (&Client{}).desktopFingerprint(a)
+			if fp["ideVersion"] != tc.ver || fp["extVersion"] != tc.ver {
+				t.Errorf("默认版本 = %v / %v，应为 %s", fp["ideVersion"], fp["extVersion"], tc.ver)
+			}
+			if fp["commit"] != tc.commit || fp["releaseDate"] != tc.released {
+				t.Errorf("commit / releaseDate = %v / %v", fp["commit"], fp["releaseDate"])
+			}
+			fp = (&Client{ClientVersion: "6.0.0"}).desktopFingerprint(a)
+			if fp["ideVersion"] != "6.0.0" || fp["extVersion"] != "6.0.0" || fp["commit"] != tc.commit {
+				t.Errorf("配了 client_version 后 = %v / %v / %v，版本应为 6.0.0、commit 不变", fp["ideVersion"], fp["extVersion"], fp["commit"])
+			}
+		})
 	}
 }
 

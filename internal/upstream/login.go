@@ -10,7 +10,8 @@
 // ExternalLinkAuthenticationProvider；发起授权另加
 // WorkbuddyAuthStateHeaderProvider 的 X-Custom-Channel-Id 与设备令牌（官方拿得到 qimei36 时
 // 还发 X-Device-Id-List，网关没有，不发）。10-20 读安装包确认形状，同日生产实测发起授权、
-// 轮询（未登录时返回 code=11217）、取账号正常；授权页地址与参数和旧版 CLI 相同。
+// 轮询（未登录时返回 code=11217）、取账号正常；授权页地址与参数和旧版 CLI 相同。10-31 与国内版
+// 5.9.3、国际版 5.9.4 按函数比对，这几个登录函数没变。
 //
 // 三个请求都不带旧 CLI 的 Origin / Referer，域固定为国内版 www.workbuddy.cn、国际版
 // www.workbuddy.ai（不读 ChatBaseCN 等配置）。

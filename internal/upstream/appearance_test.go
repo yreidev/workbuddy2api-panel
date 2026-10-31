@@ -70,32 +70,41 @@ func TestAppearanceThemesErrors(t *testing.T) {
 	}
 }
 
-// TestAccountEdition 版本档照官方：账号类型 ultimate / exclusive 直接取，企业号 ultimate，个人号按订阅包
-// 从旗舰到专业试用依次判，都没有为 free。
+// TestAccountEdition 版本档照官方：账号类型 ultimate / exclusive 直接取，企业号 ultimate；个人号先看汇总的
+// 订阅包，认不出再按逐包列表里的订阅包从 BuddyOne 会员到专业试用依次判，都没有为 free。
 func TestAccountEdition(t *testing.T) {
 	pkg := func(code string) string { return cyclePkg("包", 100, 50, `"PackageCode":"`+code+`"`) }
+	sub := func(code string) string { return `{"Packages":[],"SubscriptionPackageCode":"` + code + `"}` }
 	str := func(s string) *string { return &s }
 	for _, tc := range []struct {
-		name  string
-		auth  func(*auth.Auth)
-		packs []string
-		want  string
+		name    string
+		auth    func(*auth.Auth)
+		summary string
+		packs   []string
+		want    string
 	}{
-		{"无订阅包", nil, []string{pkg("TCACA_code_001_PqouKr6QWV")}, "free"},
-		{"没有包", nil, nil, "free"},
-		{"专业试用", nil, []string{pkg("TCACA_code_040_mi9rCYg46x")}, "pro_trial"},
-		{"专业版", nil, []string{pkg("TCACA_code_039_KRcQj7wUat"), pkg("TCACA_code_005_maRGyrHhw1")}, "pro"},
-		{"青春版", nil, []string{pkg("TCACA_code_002_AkiJS3ZHF5"), pkg("TCACA_code_023_4xbGhMrE6q")}, "youth"},
-		{"高级版", nil, []string{pkg("TCACA_code_026_BaESVICNoi"), pkg("TCACA_code_023_4xbGhMrE6q")}, "advanced"},
-		{"旗舰版", nil, []string{pkg("TCACA_code_026_BaESVICNoi"), pkg("TCACA_code_027_0FCGVA6vSa")}, "flagship"},
-		{"个人号类型", func(a *auth.Auth) { a.AccountType = str("personal") }, []string{pkg("TCACA_code_003_FAnt7lcmRT")}, "pro"},
-		{"账号类型 ultimate", func(a *auth.Auth) { a.AccountType = str("ultimate") }, nil, "ultimate"},
-		{"账号类型 exclusive", func(a *auth.Auth) { a.AccountType = str("exclusive"); a.EnterpriseID = "e1" }, nil, "exclusive"},
-		{"企业号", func(a *auth.Auth) { a.EnterpriseID = "e1" }, nil, "ultimate"},
+		{"无订阅包", nil, "", []string{pkg("TCACA_code_001_PqouKr6QWV")}, "free"},
+		{"没有包", nil, "", nil, "free"},
+		{"专业试用", nil, "", []string{pkg("TCACA_code_040_mi9rCYg46x")}, "pro_trial"},
+		{"专业版", nil, "", []string{pkg("TCACA_code_039_KRcQj7wUat"), pkg("TCACA_code_005_maRGyrHhw1")}, "pro"},
+		{"青春版", nil, "", []string{pkg("TCACA_code_002_AkiJS3ZHF5"), pkg("TCACA_code_023_4xbGhMrE6q")}, "youth"},
+		{"高级版", nil, "", []string{pkg("TCACA_code_026_BaESVICNoi"), pkg("TCACA_code_023_4xbGhMrE6q")}, "advanced"},
+		{"旗舰版", nil, "", []string{pkg("TCACA_code_026_BaESVICNoi"), pkg("TCACA_code_027_0FCGVA6vSa")}, "flagship"},
+		{"个人号类型", func(a *auth.Auth) { a.AccountType = str("personal") }, "", []string{pkg("TCACA_code_003_FAnt7lcmRT")}, "pro"},
+		{"账号类型 ultimate", func(a *auth.Auth) { a.AccountType = str("ultimate") }, "", nil, "ultimate"},
+		{"账号类型 exclusive", func(a *auth.Auth) { a.AccountType = str("exclusive"); a.EnterpriseID = "e1" }, "", nil, "exclusive"},
+		{"企业号", func(a *auth.Auth) { a.EnterpriseID = "e1" }, "", nil, "ultimate"},
+		{"BuddyOne 会员", nil, "", []string{pkg("TCACA_code_027_0FCGVA6vSa"), pkg("TCACA_code_043_6oIkxT7Z0S")}, "buddyonevip"},
+		{"汇总的订阅包优先", nil, sub("TCACA_code_002_AkiJS3ZHF5"), []string{pkg("TCACA_code_027_0FCGVA6vSa")}, "pro"},
+		{"汇总的订阅包是免费包", nil, sub("TCACA_code_001_PqouKr6QWV"), []string{pkg("TCACA_code_026_BaESVICNoi")}, "free"},
+		{"汇总的订阅包是体验包", nil, sub("TCACA_code_040_mi9rCYg46x"), nil, "pro_trial"},
+		{"汇总的订阅包是 BuddyOne 会员", nil, sub("TCACA_code_043_6oIkxT7Z0S"), nil, "buddyonevip"},
+		{"汇总的订阅包认不出看逐包", nil, sub("TCACA_code_999_unknown"), []string{pkg("TCACA_code_023_4xbGhMrE6q")}, "youth"},
+		{"汇总没有订阅包看逐包", nil, `{"Packages":[]}`, []string{pkg("TCACA_code_026_BaESVICNoi")}, "advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newUpFake(t)
-			f.onResources("", tc.packs...)
+			f.onResources(tc.summary, tc.packs...)
 			a := upAuth()
 			if tc.auth != nil {
 				tc.auth(a)
@@ -104,7 +113,7 @@ func TestAccountEdition(t *testing.T) {
 			if err != nil || got != tc.want {
 				t.Fatalf("edition = %q, err = %v, want %q", got, err, tc.want)
 			}
-			if tc.packs == nil && tc.want != "free" && len(f.seen()) != 0 {
+			if tc.auth != nil && tc.packs == nil && tc.want != "free" && len(f.seen()) != 0 {
 				t.Fatalf("账号类型或企业号定了版本档，不应查积分包：%d 个请求", len(f.seen()))
 			}
 		})

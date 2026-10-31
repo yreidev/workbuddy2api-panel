@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// headers.go 构造上游请求头：对话（ChatHeaders）、桌面端后台服务（BillingHeaders）、
-// 刷新令牌（RefreshHeaders），以及它们共用的官方请求框架形状（frameworkHeaders）。
+// headers.go 构造上游请求头：对话（ChatHeaders）、桌面端后台服务经请求框架发的请求（BillingHeaders）、
+// 后台服务 AuthService 自己发的积分与签到（authServiceHeaders）、刷新令牌（RefreshHeaders），以及请求
+// 框架的公共形状（frameworkHeaders）。
 package upstream
 
 import (
@@ -14,18 +15,18 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/session"
 )
 
-// 官方取值依据：WorkBuddy 桌面端安装包（国内版 WorkBuddy-darwin-arm64-5.9.3，内置 CLI
-// @tencent-ai/codebuddy-code 2.165.0；国际版 5.8.4，内置 2.161.0）。对话、刷新令牌、模型目录由内置
+// 官方取值依据：WorkBuddy 桌面端安装包（国内版 WorkBuddy-darwin-arm64-5.9.3、国际版 5.9.4，都内置 CLI
+// @tencent-ai/codebuddy-code 2.165.0）。对话、刷新令牌、模型目录由内置
 // CLI 发；积分、签到、成长任务、旅行、上报由桌面端后台服务发。两者用同一套请求框架，UA 段序不同。
 const (
 	// defaultClientVersionCN / defaultClientVersionGlobal 两域桌面端版本（UA 与 X-IDE-Version）。
 	// config upstream.client_version 可覆盖（两域共用一个值，空 = 内置默认）。
 	defaultClientVersionCN     = "5.9.3"
-	defaultClientVersionGlobal = "5.8.4"
+	defaultClientVersionGlobal = "5.9.4"
 	// defaultCliVersionCN / defaultCliVersionGlobal 两域桌面端内置 CLI 的版本（UA 的 `CLI/<ver>` 段）。
 	// config upstream.cli_version 可覆盖（两域共用一个值，空 = 内置默认）。
 	defaultCliVersionCN     = "2.165.0"
-	defaultCliVersionGlobal = "2.161.0"
+	defaultCliVersionGlobal = "2.165.0"
 	// deploymentType 两域 product.json 的 deploymentType。官方请求框架的 ProductEndpointHttpInterceptor
 	// 把它作为 X-Product 加到经过框架的每个请求上（对话、刷新令牌、模型目录、积分等都在内）。
 	deploymentType = "SaaS"
@@ -40,8 +41,8 @@ const (
 	stainlessTimeout        = "1200"
 	stainlessRetryCount     = "0"
 	// nodeRuntimeVersionCN / nodeRuntimeVersionGlobal 两域桌面端 Electron 内置的 Node 版本
-	// （X-Stainless-Runtime-Version = process.version）。国内版 5.9.3 的 Electron 37.10.3 内置 v22.21.1
-	// （2026-10-28 读 Electron Framework 实测，与 5.8.3 相同）。
+	// （X-Stainless-Runtime-Version = process.version）。国内版 5.9.3、国际版 5.9.4 都是 Electron 37.10.3
+	// 内置 v22.21.1（2026-10-28、10-31 读 Electron Framework 实测，与 5.8.x 相同）。
 	nodeRuntimeVersionCN     = "v22.21.1"
 	nodeRuntimeVersionGlobal = "v22.21.1"
 )
@@ -79,21 +80,26 @@ func applicationNameFor(a *auth.Auth) string {
 
 // defaultCLIUA 内置 CLI 的 UA（UserAgentHttpInterceptor）：
 // `<platform>/<ver> <applicationName>/<ver> CLI/<cli>`，platform 由桌面端固定传 "WorkBuddy"。
-// 国内版 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，国际版 `WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`。
+// 国内版 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，国际版 `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。
 func (c *Client) defaultCLIUA(a *auth.Auth) string {
 	v := c.clientVersion(a)
 	return "WorkBuddy/" + v + " " + applicationNameFor(a) + "/" + v + " CLI/" + c.cliVersion(a)
 }
 
-// defaultDaemonUA 桌面端后台服务的 UA（WorkbuddyUserAgentHttpInterceptor）：applicationName 段在前，
-// `<applicationName>/<ver> WorkBuddy/<ver> CLI/<cli>`。国内版两段同名，与 CLI 的 UA 一样。
+// defaultDaemonUA 桌面端后台服务的 UA（WorkbuddyUserAgentHttpInterceptor）：
+// `<applicationName>/<ver> <platform>/<ver> CLI/<cli>`。后台服务的 platform 取产品配置的
+// applicationName（WorkbuddyClientInfoProvider.initClientInfo）：桌面端只给内置 CLI 的进程设
+// CLIENT_INFO_PLATFORM=WorkBuddy，后台服务的子进程环境里没有（buildDaemonProcessEnv），所以两段都是
+// 应用名。国内版 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，和 CLI 的 UA 一样；国际版
+// `workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。2026-10-31 读 5.8.3、5.9.4 安装包核对，同类项目
+// misakano7545/workbuddy2api-panel 的真机抓包也是这样；1.8.0 及以前国际版第二段发的是 WorkBuddy。
 func (c *Client) defaultDaemonUA(a *auth.Auth) string {
-	v := c.clientVersion(a)
-	return applicationNameFor(a) + "/" + v + " WorkBuddy/" + v + " CLI/" + c.cliVersion(a)
+	app, v := applicationNameFor(a), c.clientVersion(a)
+	return app + "/" + v + " " + app + "/" + v + " CLI/" + c.cliVersion(a)
 }
 
-// userAgent 内置 CLI 发的请求（对话、刷新令牌、模型目录）的 UA。
-// config user_agent 显式覆盖优先（两类请求共用这一个值）。
+// userAgent 内置 CLI 发的请求（对话、模型目录）的 UA。
+// config user_agent 显式覆盖优先（几类请求共用这一个值）。
 func (c *Client) userAgent(a *auth.Auth) string {
 	if c != nil && c.UserAgent != "" {
 		return c.UserAgent
@@ -101,7 +107,7 @@ func (c *Client) userAgent(a *auth.Auth) string {
 	return c.defaultCLIUA(a)
 }
 
-// daemonUserAgent 桌面端后台服务发的请求（积分、签到、成长任务、旅行、上报）的 UA。
+// daemonUserAgent 桌面端后台服务经请求框架发的请求（登录、刷新令牌、上报）的 UA。
 // config user_agent 显式覆盖优先；显式 client_name="SaaS"（旧行为）时不设 UA。
 func (c *Client) daemonUserAgent(a *auth.Auth) string {
 	if c != nil && c.UserAgent != "" {
@@ -111,6 +117,17 @@ func (c *Client) daemonUserAgent(a *auth.Auth) string {
 		return ""
 	}
 	return c.defaultDaemonUA(a)
+}
+
+// refreshUserAgent 刷新令牌和刷新后取账号的 UA。桌面端的令牌由后台服务刷新（common2.js 里两个登录
+// 提供者的 refreshSession，走后台服务的请求框架），所以取后台服务的 UA；国内版和对话的 UA 一样，国际版
+// 两段都是 workbuddy-ai（1.8.0 及以前用的是对话的 UA）。client_name="SaaS"（旧行为）时后台服务的请求
+// 不带 UA，刷新仍照以前带对话的 UA。
+func (c *Client) refreshUserAgent(a *auth.Auth) string {
+	if ua := c.daemonUserAgent(a); ua != "" {
+		return ua
+	}
+	return c.userAgent(a)
 }
 
 // resolveDeviceToken 解析本次请求的 X-Device-Token 取值。
@@ -130,7 +147,7 @@ func (c *Client) resolveDeviceToken(a *auth.Auth) string {
 }
 
 // injectDeviceToken 在 req 注入 X-Device-Token 头（仅当取到非空 token）。用在签到
-// （官方 getCheckinRequestHeaders）、登录前的 auth/state，以及对话上。官方的对话也带：桌面端后台
+// （官方 buildHeadersWithTuringToken）、登录前的 auth/state，以及对话上。官方的对话也带：桌面端后台
 // 服务每次提问前现取图灵盾设备令牌加在模型请求上（取不到时改发 X-Device-Token-Error，两样都没有
 // 时都不发）。网关在 Linux 做不出真令牌，对话只在使用者填了 device_token 时照发，没填就不发——对应
 // 官方「两样都没有」的状态，不造 X-Device-Token-Error，见 docs/official-client.md「几类请求」。
@@ -190,7 +207,7 @@ func injectDepartment(req *http.Request, a *auth.Auth) {
 }
 
 // billingAcceptLanguage 积分包查询的 Accept-Language：官方按界面语言只发 "zh" 或 "en"
-// （resolveBillingAcceptLanguage），国内版取 zh、国际版取 en。
+// （AuthService 的 resolveAcceptLanguage），国内版取 zh、国际版取 en。
 func billingAcceptLanguage(a *auth.Auth) string {
 	if a != nil && a.IsGlobal() {
 		return "en"
@@ -212,16 +229,15 @@ type ChatMeta struct {
 	Protected             bool   // X-Moderation-Type: ["protected"]：云端 / 付费专家的对话才发（见 MarketExpert.Protected）
 }
 
-// ChatHeaders 设置 chat 出站请求头。形状对齐桌面端内置 CLI 的对话请求（国内版 2.165.0、国际版
-// 2.161.0，见文件头），10-19 生产用国内版、国际版个人号逐项实测均 200（当时两域都是 2.161.0）：
+// ChatHeaders 设置 chat 出站请求头。形状对齐桌面端内置 CLI 的对话请求（两域都是 2.165.0，见文件头），
+// 10-19 生产用国内版、国际版个人号逐项实测均 200（当时两域都是 2.161.0）：
 //   - 官方对话请求不带 Origin / Referer / Accept-Language / X-CodeBuddy-Request / X-Machine-ID /
 //     X-Session-ID，也不带 X-No-*（那几个只在登录前的 auth/state、auth/token 上发）。
 //   - 账号头：Authorization、X-User-Id；企业号加 X-Enterprise-Id 与同值的 X-Tenant-Id，个人号
 //     两个都不发；有部门全名时加 X-Department-Info；X-Domain 取登录域（国际版固定
 //     www.workbuddy.ai），没有就不发。
 //   - X-Agent-Intent=craft、X-Agent-Type=main（主对话）、X-Private-Data（见 privateDataValue）。
-//   - 国内版加 X-Agent-Runtime=local-agent：2.165.0 每条对话都带，取会话的 agentRuntime，桌面端
-//     5.9.3 给本地对话（含专家对话）设的就是 local-agent；国际版 5.8.4 内置的 2.161.0 没有这个头。
+//   - X-Agent-Runtime=local-agent（见 agentRuntime）。
 //   - UA、X-IDE-* 取桌面端传给内置 CLI 的值（见 defaultCLIUA、injectAttribution）；X-Product 是
 //     请求框架给每个请求加的 deploymentType。
 //   - Accept 与 8 个 X-Stainless-* 照 OpenAI SDK 的 buildHeaders 发（见 injectSDKHeaders）：官方对话
@@ -259,9 +275,7 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	}
 	req.Header.Set("X-Agent-Intent", "craft")
 	req.Header.Set("X-Agent-Type", "main")
-	if rt := agentRuntime(a); rt != "" {
-		req.Header.Set("X-Agent-Runtime", rt)
-	}
+	req.Header.Set("X-Agent-Runtime", agentRuntime)
 	req.Header.Set("X-Private-Data", c.privateDataValue(a))
 	req.Header.Set("X-Product", deploymentType)
 	// 用量归属头（X-Agent-Purpose / X-IDE-*）与 OpenAI SDK 的对话头（Accept、X-Stainless-*）：
@@ -298,14 +312,10 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	c.injectConversationHeaders(req, meta)
 }
 
-// agentRuntime 对话和联网搜索的 X-Agent-Runtime：2.165.0 取会话的 agentRuntime，桌面端 5.9.3 给本地对话
-// 设的是 local-agent；国际版 5.8.4 内置的 2.161.0 没有这个头，返回空串（不发）。
-func agentRuntime(a *auth.Auth) string {
-	if a.IsGlobal() {
-		return ""
-	}
-	return "local-agent"
-}
+// agentRuntime 对话和联网搜索的 X-Agent-Runtime：2.165.0 每条都带，取会话的 agentRuntime，两域桌面端
+// （国内版 5.9.3、国际版 5.9.4）给本地对话（含专家对话）设的都是 local-agent。国际版 5.8.4 内置的
+// 2.161.0 没有这个头，网关 2026-10-31 随国际版换到 5.9.4 起两域都发。
+const agentRuntime = "local-agent"
 
 // chatDomain chat 出站的 X-Domain：国际版固定 www.workbuddy.ai（与国际版登录域相同，不回退
 // 登录会话原值——对齐 intl 项目出站头）；国内版取登录域，没有就不发。
@@ -317,10 +327,10 @@ func chatDomain(a *auth.Auth) string {
 }
 
 // privateDataValue X-Private-Data 取值，告诉上游这段对话能不能拿去做模型优化。默认一律
-// "true"（不允许）。国际版 5.8.4 内置的 2.161.0 在用户没动过「模型优化」开关时也发 "true"（产品
-// 配置开了 DisableYuanbaoChannel）；国内版 5.9.3 内置的 2.165.0 改了：没动过时按产品开关
-// DefaultModelOptimizationOff（包里是 false）算，个人版发 "false"、企业版发 "true"，所以对国内版来说
-// 网关的默认等于用户在桌面端手动关了这个开关。2026-10-28 用户定：默认仍不允许。
+// "true"（不允许）。两域内置的 2.165.0 在用户没动过「模型优化」开关时按产品开关
+// DefaultModelOptimizationOff 算：国际版 5.9.4 包里是 true，个人版、企业版都发 "true"，和网关的默认
+// 一样；国内版 5.9.3 包里是 false，个人版发 "false"、企业版发 "true"，所以对国内版来说网关的默认
+// 等于用户在桌面端手动关了这个开关。2026-10-28 用户定：默认仍不允许。
 // upstream.model_optimization 打开后个人版发 "false"；企业版（有企业 id，或账号类型是 ultimate /
 // exclusive，同官方 isEnterpriseEditionAccount）仍发 "true"，和官方没动过开关时一样。
 func (c *Client) privateDataValue(a *auth.Auth) string {
@@ -523,18 +533,57 @@ func ExtractClientIP(r *http.Request) string {
 	return ""
 }
 
-// BillingHeaders 桌面端后台服务发的请求（积分、签到、成长任务、旅行、上报、补偿）的请求头：
-// 官方请求框架的形状（frameworkHeaders）+ 后台服务的 UA。
+// BillingHeaders 桌面端后台服务经请求框架发的请求（上报）的请求头：官方请求框架的形状
+// （frameworkHeaders）+ 后台服务的 UA。积分、签到不走这里，见 authServiceHeaders。
 func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
 	c.frameworkHeaders(req, a, c.daemonUserAgent(a))
 }
 
-// RefreshHeaders 刷新令牌的请求头（X-Refresh-Token 只允许出现在这里）。官方内置 CLI 的
-// refreshSession：请求框架的头 + X-Domain（登录域，没有就用产品入口域）+ X-Refresh-Token +
-// X-Auth-Refresh-Source: plugin。官方另带的链路头（X-Trace-ID、b3、X-B3-*）由 RefreshToken
-// 按这次刷新的根 span 补上（trace.go）。
+// axiosUserAgent 桌面端后台进程打包的 axios（1.16.1）不设 UA 时自带的 User-Agent。AuthService 的积分、
+// 签到和容量排队的查询、取消都是它。
+const axiosUserAgent = "axios/1.16.1"
+
+// authServiceHeaders 桌面端后台服务 AuthService 发的请求（积分查询的汇总与两个逐包列表、企业用量、
+// 签到状态与签到）的请求头。官方这几个请求不走请求框架，用 AuthService 自己的 axios 实例
+// （authority-snapshot.js 的 get http：axios.create，keepAlive、proxy:false），头只有 buildHeaders 的
+// Accept: application/json、Authorization、Content-Type: application/json、X-User-Id（没有 uid 时是
+// 空串）、企业号的 X-Enterprise-Id 与同值的 X-Tenant-Id、X-Domain，加上拦截器补的 X-Request-ID 和
+// axios 自带的 User-Agent、Accept-Encoding；没有请求框架的 X-Requested-With、X-Product、
+// X-Department-Info。积分查询另带 Accept-Language、签到另带 X-Device-Token，由调用方加。
+//
+// 5.8.3 起就是这样（2026-10-31 读 5.8.3、5.9.4 安装包核对，同类项目 misakano7545/workbuddy2api-panel
+// 的真机抓包里这几个请求的 UA 也是 axios/1.16.1）；1.8.0 及以前网关按请求框架发（BillingHeaders）。
+// config user_agent 显式覆盖照样生效；client_name="SaaS"（旧行为）时同以前不带 UA。
+func (c *Client) authServiceHeaders(req *http.Request, a *auth.Auth) {
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Encoding", acceptEncodingAxios)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", session.NewMessageID())
+	switch {
+	case c != nil && c.UserAgent != "":
+		req.Header.Set("User-Agent", c.UserAgent)
+	case c.attributionClientName() != "SaaS":
+		req.Header.Set("User-Agent", axiosUserAgent)
+	}
+	if at := a.AccessTokenValue(); at != "" {
+		req.Header.Set("Authorization", "Bearer "+at)
+	}
+	req.Header.Set("X-User-Id", a.UID)
+	if a.IsEnterprise() {
+		req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
+		req.Header.Set("X-Tenant-Id", a.EnterpriseID)
+	}
+	if d := chatDomain(a); d != "" {
+		req.Header.Set("X-Domain", d)
+	}
+}
+
+// RefreshHeaders 刷新令牌的请求头（X-Refresh-Token 只允许出现在这里）。官方后台服务的 refreshSession
+// （内置 CLI 里也有同一份）：请求框架的头 + X-Domain（登录域，没有就用产品入口域）+ X-Refresh-Token +
+// X-Auth-Refresh-Source: plugin，UA 见 refreshUserAgent。官方另带的链路头（X-Trace-ID、b3、X-B3-*）由
+// RefreshToken 按这次刷新的根 span 补上（trace.go）。
 func (c *Client) RefreshHeaders(req *http.Request, a *auth.Auth) {
-	c.frameworkHeaders(req, a, c.userAgent(a))
+	c.frameworkHeaders(req, a, c.refreshUserAgent(a))
 	d := chatDomain(a)
 	if d == "" {
 		d = "www.workbuddy.cn" // 国内版产品入口 https://www.workbuddy.cn 的 authority

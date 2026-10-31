@@ -6,15 +6,15 @@
 
 | 项 | 国内版 | 国际版 |
 |---|---|---|
-| 桌面端安装包 | WorkBuddy 5.9.3（macOS arm64） | WorkBuddy AI 5.8.4（macOS arm64） |
-| 内置 CLI（`@tencent-ai/codebuddy-code`） | 2.165.0 | 2.161.0 |
+| 桌面端安装包 | WorkBuddy 5.9.3（macOS arm64） | WorkBuddy AI 5.9.4（macOS arm64） |
+| 内置 CLI（`@tencent-ai/codebuddy-code`） | 2.165.0 | 2.165.0 |
 | `applicationName`（product.json） | `WorkBuddy` | `workbuddy-ai` |
 
-2026-10-20 从官网下载两个安装包（国内版当时是 5.8.3），只解包阅读，没有运行；2026-10-28 国内版出了 5.9.3，照同样的做法重新对过，见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)。要看的文件有三处：
+2026-10-20 从官网下载两个安装包（当时国内版是 5.8.3、国际版是 5.8.4），只解包阅读，没有运行；国内版 5.9.3（2026-10-28）、国际版 5.9.4（2026-10-31）出来后照同样的做法重新对过，见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)和[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。要看的文件有三处：
 
-- `app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs`：内置 CLI，对话、刷新令牌、模型目录、备用入口切换都由它做；
+- `app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs`：内置 CLI，对话、模型目录、联网搜索、备用入口切换都由它做；
 - `app.asar.unpacked/cli/product.json`：版本、`applicationName`、产品开关与备用入口配置；
-- `app.asar` 里的 `main/`：桌面端后台服务，积分、签到、登录、上报、外观、专家列表由它发；每次提问前它还给内置 CLI 的模型请求另加几个头，见[几类请求](#几类请求)里的对话。
+- `app.asar` 里的 `main/`：桌面端后台服务，积分、签到、登录、刷新令牌、上报、外观、专家列表由它发（积分、签到在 `authority-snapshot.js`，5.8.3 是 `tar.js`；登录、刷新令牌在 `common2.js`；压缩后的文件名会随版本变）；每次提问前它还给内置 CLI 的模型请求另加几个头，见[几类请求](#几类请求)里的对话。
 
 成长中心、积分补偿、新手礼包、试用只在官网网页上，同日读了 `www.workbuddy.cn` 成长中心页的前端代码。
 
@@ -48,7 +48,7 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 
 - 版本号：桌面端 5.9.3，内置 CLI 2.165.0。国际版仍是 5.8.4 和 2.161.0，所以 UA 里 `CLI/` 的版本改成按账号的域取（`defaultCliVersionCN`、`defaultCliVersionGlobal`）。`applicationName` 没变，还是 `WorkBuddy`。
 - 上报的 `commit`、`releaseDate` 换成 mac 包 `product.json` 的 `d46924219e79332f49c37ccebf27292f87001b19`、`2026-10-27T09:23:43.713Z`（Windows 包的 `commit` 相同，`date` 晚 27 秒）。
-- 对话请求多了 `X-Agent-Runtime: local-agent`。2.165.0 的对话头（`getCustomHeaders`）和 2.161.0 比只多了这一个，取法见[与 npm 2.174.0 的对照](#与-npm-21740-的对照)；桌面端在本机会话（`transport` 为 `local`）的元数据里放 `agentRuntime: local-agent`（`conversations.js`）。网关对国内版的对话都发这个值，国际版不发。
+- 对话请求多了 `X-Agent-Runtime: local-agent`。2.165.0 的对话头（`getCustomHeaders`）和 2.161.0 比只多了这一个，取法见[与 npm 2.174.0 的对照](#与-npm-21740-的对照)；桌面端在本机会话（`transport` 为 `local`）的元数据里放 `agentRuntime: local-agent`（`conversations.js`）。网关对国内版的对话都发这个值，国际版当时不发（国际版 5.9.4 也内置 2.165.0，2026-10-31 起两域都发，见下一节）。
 - `X-Private-Data` 的算法换了，见[几类请求](#几类请求)里的对话。网关默认仍发 `"true"`（2026-10-28 定）；`upstream.model_optimization` 打开时，判断企业版改照官方的 `isEnterpriseEditionAccount`，多认账号类型 `ultimate`、`exclusive`。
 
 没变的：两个 UA 拦截器、请求框架的公共头、上报事件的处理器（只多了下面的 `oneId`）、后台服务每次提问前加的头。
@@ -63,23 +63,67 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 同类项目怎么做（2026-10-28 在 GitHub 上搜代码、读默认分支的源码）：
 
 - 版本：[magpie-community/plugins](https://github.com/magpie-community/plugins/tree/main/packages/workbuddy) 的 WorkBuddy 插件当天也换成国内版 5.9.3 / 2.165.0、国际版 5.8.4 / 2.161.0，[YahooYuan666/BargainProxy](https://github.com/YahooYuan666/BargainProxy) 的测试里也是 5.9.3；[maiphucgiang/codebuddy2api](https://github.com/maiphucgiang/codebuddy2api)、[kzxheli-commits/dsh-workbuddy-pool](https://github.com/kzxheli-commits/dsh-workbuddy-pool) 停在 5.9.2（也带 2.165.0）。
-- `X-Agent-Runtime`：magpie、BargainProxy 只对国内版发 `local-agent`，和网关一样；[workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)、[Parrot](https://github.com/danger-dream/Parrot)、[Cartethyia](https://github.com/risunCodex/Cartethyia) 发 `other`，它们仿的是独立 CLI，不是桌面端。
+- `X-Agent-Runtime`：magpie、BargainProxy 只对国内版发 `local-agent`，和网关当时一样；[workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)、[Parrot](https://github.com/danger-dream/Parrot)、[Cartethyia](https://github.com/risunCodex/Cartethyia) 发 `other`，它们仿的是独立 CLI，不是桌面端。
 - `X-Private-Data`：仿桌面端的都发 `"true"`（workbuddy2api-hub、codebuddy2api、[CangShui/workbuddy-gateway](https://github.com/CangShui/workbuddy-gateway)、[modelmux](https://github.com/bluechonk/modelmux) 等）；仿独立 CLI 的个人号发 `false`、企业号发 `true`。codebuddy2api 也把账号类型 `ultimate`、`exclusive` 当企业号。
 - `X-Moderation-Type`：同类项目没有一家发；网关 2026-10-28 起在专家对话里按该专家的云端 / 付费属性发。
 - `X-Device-Token`：没有一家自己造。magpie、CangShui/workbuddy-gateway 对话不带；workbuddy2api-hub（只对国内版）、modelmux、[codebuddy-intl-cpa](https://github.com/zidanefaqih/codebuddy-intl-cpa)、BargainProxy 在使用者填了真令牌时才带；[jzh-1228/wb2api](https://github.com/jzh-1228/wb2api)、[weecliz/workbuddy2api](https://github.com/weecliz/workbuddy2api) 在装了桌面端的 Windows 机器上调官方的图灵盾 SDK 现取。workbuddy2api-hub 仿 VSCode 插件时，个人号没有令牌就发 `X-Device-Token-Error: sdk_not_initialized`，仿桌面端时不发。
 - `X-Stainless-*`：magpie 照官方补齐了 8 个，`OS`、`Arch` 取它自己所在机器的值；workbuddy2api-hub 仿独立 CLI 时发，仿桌面端时要设 `WB_DESKTOP_CHAT_COMPAT=1` 才发，而且不带 `Timeout`（它注明桌面端的超时没核对；内置 CLI 的客户端超时是 1200 秒，桌面端没有用 `CODEBUDDY_FIRST_TOKEN_TIMEOUT_MS` 改它）。网关 2026-10-28 也补齐了 8 个，但 `OS`、`Arch` 不取网关所在机器（网关在 Linux），而是照设备指纹（`deviceOS` / `deviceArch`，Mac arm64）映射，和设备信息同源，`Runtime-Version` 取桌面端 Electron 的 Node 版本。
-- 链路头：magpie 的说明写官方「只在服务端追踪打开时」才发 `traceparent`。实际上两域 5.9.3 / 5.8.4 的 `product.json` 里 `telemetry.tracing.enabled` 和 `galileo.enable` 默认都是 `true`，桌面端后台每次提问建 `daemon.prompt.forward` span 把 `traceparent` 塞进 `_meta`，内置 CLI 的 `injectOtelSpanHeaders` 据此发 `traceparent` / `b3` / `X-B3-*`——也就是官方默认就在发，网关每条都发是对的（10-20 对齐），magpie 那句对默认配置不成立。采样器 `fraction: 1e-4` 但 `enableParentSample: true`，父 span 由后台建好，所以子请求跟着采。
+- 链路头：magpie 的说明写官方「只在服务端追踪打开时」才发 `traceparent`。实际上两域 5.9.3 / 5.8.4（以及国际版 5.9.4）的 `product.json` 里 `telemetry.tracing.enabled` 和 `galileo.enable` 默认都是 `true`，桌面端后台每次提问建 `daemon.prompt.forward` span 把 `traceparent` 塞进 `_meta`，内置 CLI 的 `injectOtelSpanHeaders` 据此发 `traceparent` / `b3` / `X-B3-*`——也就是官方默认就在发，网关每条都发是对的（10-20 对齐），magpie 那句对默认配置不成立。采样器 `fraction: 1e-4` 但 `enableParentSample: true`，父 span 由后台建好，所以子请求跟着采。
+
+### 与国际版桌面端 5.9.4 的对照
+
+2026-10-30 国际版桌面端出了 5.9.4（更新接口给的版本是 `5.9.4.42593613`），内置 CLI 2.165.0。监控仓库当天自动下载 macOS 和 Windows 两个包、比对出变化；2026-10-31 人工解开 macOS 包（只解包阅读），主要拿它和国内版 5.9.3 比，涉及 5.9 新改动的地方再和 5.8.3 / 5.8.4 按函数比：
+
+- 内置 CLI：去掉压缩后的变量名，和国内版 5.9.3 内置的 2.165.0 相同，只差构建产物。所以对话、模型目录、联网搜索、备用入口这些由内置 CLI 发的请求，两域现在同一个形状。
+- 后台服务 `main/`：327 个文件逐个归一化后和国内版 5.9.3 比，只有三处不同：`account.js` 的订阅档压低（见下）；`main-bootstrap.js` 的 Windows 下载地址（mac 包里是空的）；`server.js` 的 `wrapFacade`、`wrapHttpWithLogging` 改成只在已有活动 span 时才建 span，只影响官方自己上报的链路数据，后台没有往请求头里注入链路的代码，请求头不变。
+- 界面 `renderer/`：和国内版 5.9.3 比只差界面上的东西（订阅档压低的同一处改动、多语言开关的默认值、专家列表的加载状态、样式和图标）。
+- `product.json`：`applicationName` 还是 `workbuddy-ai`，`deploymentType` 还是 `SaaS`；Electron 37.10.3、内置 Node `v22.21.1` 和 5.8.4 相同。产品开关比 5.8.4 多了日、法、韩语界面、记忆平台 v2、PDF 外部包，少了消息中心入口和安全中心两项，都和网关无关；和国内版的差异见[产品开关](#产品开关)。
+
+变了、网关跟着改的：
+
+- 版本号：桌面端 5.9.4，内置 CLI 2.165.0（`defaultClientVersionGlobal`、`defaultCliVersionGlobal`），两域的 CLI 现在是同一版。
+- 上报的 `commit`、`releaseDate` 改成按账号所在的域取，国际版是 mac 包 `product.json` 的 `fa0a0901906addaa1a4259f6df347388a5563ded`、`2026-10-29T16:17:33.510Z`。以前国际版号的每日活跃上报带的是国内版的值。
+- 两域的对话和联网搜索都发 `X-Agent-Runtime: local-agent`：国际版 5.9.4 的会话元数据同样放 `agentRuntime: local-agent`（`conversations.js` 和国内版相同）。
+- `X-Private-Data`：国际版换成 2.165.0 的算法，产品开关 `DefaultModelOptimizationOff` 在国际版包里是 `true`，没动过「模型优化」开关时个人号、企业号都发 `"true"`，和网关的默认相同，取值不用改，见[几类请求](#几类请求)里的对话。
+- 积分查询照 5.9.x 改了四处，见[积分与签到](#积分与签到)：付费包多了 BuddyOne 会员；国内版纯免费号不查付费包；版本档先看汇总的订阅包；汇总没查到时，同时有几个订阅档只算排在最前的一个。前三处国内版 5.9.3 里就有，1.8.0 对齐 5.9.3 时只比了请求头和上报，漏看了积分；第四处 5.9.3 只对国内版做，5.9.4 改成两域都做，体验包的两档也是 5.9.4 才排进去。另外，国际版的免费月包和礼包官方一直（5.8.3 起）当一次性的包显示，网关以前当刷新的包算到期，这次一起改了，见[积分包的到期时刻](#积分包的到期时刻)。
+
+没变的：两个 UA 拦截器、请求框架的公共头、后台服务每次提问前加的头、上报事件的处理器、容量排队（`conversations.js` 和 `server.js` 里的两套都相同）。登录的几个函数（`fetchAuthState`、`loopGetToken`、`loopGetAccount`、`fetchAccounts`、`getAccountSnapshot`）从 5.8.3 到 5.9.x 也没变；签到的四个函数只多了产品开关 `DisableCheckin` 的判断（国际版是 `true`，官方国际版不签到，网关本来就对国际版跳过）。
+
+新出现、网关没跟的：
+
+- `oneId`、AICC 保密模型通道、业务码 `11145`：同国内版 5.9.3，见上一节。
+- 5.9 起每次查积分汇总都另报一条 `wb.api_response` 日志（`reportApiResponseLog`，进官方遥测）。网关不发客户端日志，不跟。
+- 5.9 起专家列表有页缓存（`ExpertRequestCache`：没有关键词、不要付费资产时才缓存），请求形状不变。
+- 5.9 起窗口切回前台时（30 秒内最多一次），令牌 10 分钟内到期就先刷新（`refreshSession` 的 `minValidityMs`）。只是刷新的时机，网关按自己的节奏刷新，不跟。
+
+核对时看到的旧缺口，没改：国际版的上报事件官方另带本机的公网 IP（`clientIp`，只有国际版查）和系统时区；网关不带 `clientIp`，时区固定 `Asia/Shanghai`。网关给国际版号发的上报只有每日活跃上报一种。
+
+同类项目怎么做（2026-10-31 在 GitHub 上搜代码、读默认分支的源码）：
+
+- [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel) 10-30 已跟到国际版 5.9.4（[che246/ddy2panel](https://github.com/che246/ddy2panel) 是同一份代码），两版都有真机抓包：对话的 UA 和网关相同；后台服务的请求是 `<应用名>/<版本> <应用名>/<版本> CLI/<cli>`；积分、签到这类请求是 `axios/1.16.1`；`/v3/config` 是两段的 `WorkBuddy/<版本> CLI/<cli>`。它的 `releaseDate` 取自真机（Windows 包）的上报，和 mac 包 `product.json` 的 `date` 不同（国际版早约 31 分钟）；网关的设备指纹是 Mac，取 mac 包的值。
+- [YahooYuan666/BargainProxy](https://github.com/YahooYuan666/BargainProxy)、[jin66god/workbuddy2api-panel](https://github.com/jin66god/workbuddy2api-panel) 也换成了国际版 5.9.4 / 2.165.0，后台请求的 UA 两段都是 `workbuddy-ai`；BargainProxy 两域都发 `X-Agent-Runtime: local-agent`。
+- [magpie-community/plugins](https://github.com/magpie-community/plugins/tree/main/packages/workbuddy) 国际版写的是 5.9.3（注释说是 10-29 更新接口给的版本），两域都发 `X-Agent-Runtime: local-agent`。监控仓库看到的国际版是 5.8.4 直接到 5.9.4，它说的 5.9.3 没核实。
+- [BegoniaHe/wokbuddy-demon](https://github.com/BegoniaHe/wokbuddy-demon) 已把 BuddyOne 会员包 `TCACA_code_043` 加进付费包。
+
+核对同类项目时发现的旧缺口（1.1.2 起就有，2026-10-31 回官方 5.8.3、5.9.4 安装包核实后改了）：
+
+- 积分查询（汇总和两个逐包列表）、企业用量、签到状态和签到这 6 个请求，官方后台服务不走请求框架，用 `AuthService` 自己的 axios 实例发（`authority-snapshot.js` 的 `get http`，5.8.3 在 `tar.js`），头见[积分与签到](#积分与签到)。网关以前按请求框架发（后台服务的 UA 加 `X-Requested-With`、`X-Product`、`X-Department-Info` 等）：1.1.2 对齐时读的是 `account.js` 里的 `BackendProvider`，它用到 `document`、`localStorage`，是界面层的代码，读错了地方。
+- 后台服务的 UA：后台服务的 `platform` 取产品配置的 `applicationName`（`WorkbuddyClientInfoProvider.initClientInfo`）。桌面端只给内置 CLI 的进程设 `CLIENT_INFO_PLATFORM=WorkBuddy`，后台服务（默认作为子进程启动，环境变量见 `buildDaemonProcessEnv`）没有这个变量，所以国际版后台请求的 UA 两段都是 `workbuddy-ai`。网关以前第二段发 `WorkBuddy`；国内版两段本来都是 `WorkBuddy`，不受影响。
+- 刷新令牌：桌面端由后台服务刷新（`common2.js` 里两个登录提供者的 `refreshSession`），UA 是后台服务的。网关以前用对话的 UA，国际版第一段对不上；刷新后取账号一起改了。
+- 没改的：官方 `/v3/config` 也由后台服务拉（`CloudProductProvider`），带查询参数 `repos`（本机 git 仓库的信息）。后台服务在产品配置载入前用兜底的客户端信息，那时 UA 只有 `WorkBuddy/<版本> CLI/<cli>` 两段，载入后是上面的三段；内置 CLI 也可能自己拉。什么时机发哪种 UA、`repos` 为空时怎么发，未确认。网关仍按对话的 UA 拉，不带 `repos`。
 
 ## 几类请求
 
-| | 对话 | 积分、签到、上报、外观、专家列表、登录 | 刷新令牌 | 成长中心、积分补偿、新手礼包、试用、账号资料 | 联网搜索 |
+| | 对话 | 上报、外观、专家列表、登录、刷新令牌 | 积分、签到 | 成长中心、积分补偿、新手礼包、试用、账号资料 | 联网搜索 |
 |---|---|---|---|---|---|
-| 谁发 | 内置 CLI | 后台服务 | 内置 CLI | 官网网页（桌面端在浏览器里打开） | 内置 CLI 的 WebSearch 工具 |
-| UA | `WorkBuddy/<版本> <应用名>/<版本> CLI/<cli>` | `<应用名>/<版本> WorkBuddy/<版本> CLI/<cli>` | 同对话 | 浏览器的 UA | `CLI/<版本>` |
-| 来源 | `UserAgentHttpInterceptor` | `WorkbuddyUserAgentHttpInterceptor` | `refreshSession` | 官网前端的 axios 实例，靠 Cookie 认人 | `performWebSearch`，Node 原生 `fetch` |
-| 网关实现 | `ChatHeaders` | `BillingHeaders`、`frameworkHeaders` | `RefreshHeaders`、`RefreshToken` | `webHeaders`、`webJSON`、`websession.go` | `searchHeaders`、`Search` |
+| 谁发 | 内置 CLI | 后台服务 | 后台服务的 `AuthService` | 官网网页（桌面端在浏览器里打开） | 内置 CLI 的 WebSearch 工具 |
+| UA | `WorkBuddy/<版本> <应用名>/<版本> CLI/<cli>` | `<应用名>/<版本> <应用名>/<版本> CLI/<cli>` | `axios/1.16.1` | 浏览器的 UA | `CLI/<版本>` |
+| 来源 | `UserAgentHttpInterceptor` | `WorkbuddyUserAgentHttpInterceptor` | `AuthService` 自己的 axios 实例（`get http`），头是 `buildHeaders` | 官网前端的 axios 实例，靠 Cookie 认人 | `performWebSearch`，Node 原生 `fetch` |
+| 网关实现 | `ChatHeaders` | `BillingHeaders`、`frameworkHeaders`、`RefreshHeaders`、`RefreshToken` | `authServiceHeaders`、`authServiceJSON` | `webHeaders`、`webJSON`、`websession.go` | `searchHeaders`、`Search` |
 
-前三类请求都经过官方请求框架（`restOperations`），联网搜索不经过，头见[联网搜索](#联网搜索)。内置 CLI 和后台服务各有一套框架，挂的拦截器相同，所以共用这些头：
+国内版的应用名是 `WorkBuddy`，对话和后台服务的 UA 一样；国际版是 `workbuddy-ai`，两种 UA 第一段不同。后台服务的 UA 两段都是应用名、刷新令牌由后台服务发，是 2026-10-31 核对后改的，见[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。
+
+对话和后台服务这两类请求经过官方请求框架（`restOperations`）；积分、签到和联网搜索不经过，头分别见[积分与签到](#积分与签到)和[联网搜索](#联网搜索)。内置 CLI 和后台服务各有一套框架，挂的拦截器相同，所以共用这些头：
 
 - `Accept: application/json, text/plain, */*`（对话例外，见下文），有请求体的请求带 `Content-Type: application/json`（桌面端的 axios 对对象请求体只发这个值）；
 - `X-Requested-With: XMLHttpRequest`；
@@ -90,23 +134,22 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - 账号有部门全名（`account.departmentFullName`，企业号才有）时带 `X-Department-Info`，值原样（`AuthenticationHttpInterceptor`）。网关从 1.1.2 起把它存进凭证文件的 `account.departmentFullName`：登录时取，刷新令牌后随取账号更新。官方用 Node 发请求，值里有超出 Latin-1 的字符（比如中文）时 Node 会直接报错，所以上游返回的大概是 ASCII 或编码过的值；没有企业号实测过，网关照原样发；
 - `Accept-Encoding: gzip, compress, deflate, br`：axios 的 http 适配器自动加的（内置 CLI 的 `advertiseZstdAcceptEncoding` 默认关，不带 zstd），官方没有在哪个请求上改写。网关按 `Content-Encoding` 解压（`encoding.go`）。
 
-官方这三类请求都不发 `Origin`、`Referer`、`X-CodeBuddy-Request`、`X-Machine-ID`、`X-Session-ID`。个别请求另带的头：
+官方这两类请求都不发 `Origin`、`Referer`、`X-CodeBuddy-Request`、`X-Machine-ID`、`X-Session-ID`。个别请求另带的头：
 
 | 头 | 只出现在 | 官方来源 |
 |---|---|---|
-| `Accept-Language: zh` / `en` | 积分包查询 | `resolveBillingAcceptLanguage` |
-| `X-Device-Token` | 签到状态与签到、登录的发起授权；对话也带，见下文 | `getCheckinRequestHeaders`、`WorkbuddyAuthStateHeaderProvider` |
+| `X-Device-Token` | 登录的发起授权；对话也带，见下文 | `WorkbuddyAuthStateHeaderProvider` |
 | `X-Refresh-Token`、`X-Auth-Refresh-Source: plugin` | 刷新令牌 | `refreshSession` |
 | `Content-Type: application/json;charset=UTF-8` | 上报 `/v2/report` | `StandardEventService.send` |
 
 对话请求另有这些头和字段：
 
-- 对话请求由 OpenAI Node SDK 6.25.0 组好，再经内置 CLI 的 `axiosToFetchAdapter` 交给请求框架发出：SDK 加的头只去掉 `Authorization` 和 `User-Agent`，其余照发（只有设了跳过内部头的环境变量时才删）。所以对话的 `Accept` 是 SDK 的 `application/json`（`chat/completions` 不是二进制端点，走 `buildHeaders` 的默认 `Accept`；这版 SDK 流式也不改 `Accept`，由请求体 `stream:true` 决定流式），另带 8 个 `X-Stainless-*`：`Retry-Count: 0`（`maxRetries` 为 0，只发一次）、`Timeout: 1200`（SDK 把请求级超时回落到客户端超时，桌面端 `resolveRequestTimeoutMs` 默认 1200000ms，/1000）、`Lang: js`、`Package-Version: 6.25.0`、`OS: MacOS`（`normalizePlatform(process.platform)`，darwin → MacOS）、`Arch: arm64`（`normalizeArch(process.arch)`）、`Runtime: node`、`Runtime-Version`（运行 CLI 的 Node 的版本：桌面端以 `ELECTRON_RUN_AS_NODE` 在 Electron 里跑 CLI，两域 5.9.3 / 5.8.4 的 mac 包都是 Electron 37.10.3、内置 Node `v22.21.1`，2026-10-28 分别读 `Electron Framework` 实测）。SDK 所在的分块（`lazy-lite-wb/3043.50ee4dca.mjs`）5.8.3 和 5.9.3 一字不差。网关 2026-10-28 起照这组值发（`injectSDKHeaders`）：`OS` / `Arch` 不取网关所在机器而是照设备指纹（`deviceOS` / `deviceArch`）映射，与设备信息同源；`client_name="SaaS"`（旧行为）不伪装桌面端，不发 `X-Stainless-*`，`Accept` 回落 `application/json, text/event-stream`；
+- 对话请求由 OpenAI Node SDK 6.25.0 组好，再经内置 CLI 的 `axiosToFetchAdapter` 交给请求框架发出：SDK 加的头只去掉 `Authorization` 和 `User-Agent`，其余照发（只有设了跳过内部头的环境变量时才删）。所以对话的 `Accept` 是 SDK 的 `application/json`（`chat/completions` 不是二进制端点，走 `buildHeaders` 的默认 `Accept`；这版 SDK 流式也不改 `Accept`，由请求体 `stream:true` 决定流式），另带 8 个 `X-Stainless-*`：`Retry-Count: 0`（`maxRetries` 为 0，只发一次）、`Timeout: 1200`（SDK 把请求级超时回落到客户端超时，桌面端 `resolveRequestTimeoutMs` 默认 1200000ms，/1000）、`Lang: js`、`Package-Version: 6.25.0`、`OS: MacOS`（`normalizePlatform(process.platform)`，darwin → MacOS）、`Arch: arm64`（`normalizeArch(process.arch)`）、`Runtime: node`、`Runtime-Version`（运行 CLI 的 Node 的版本：桌面端以 `ELECTRON_RUN_AS_NODE` 在 Electron 里跑 CLI，两域 5.9.3 / 5.8.4 的 mac 包都是 Electron 37.10.3、内置 Node `v22.21.1`，2026-10-28 分别读 `Electron Framework` 实测，国际版 5.9.4 也一样）。SDK 所在的分块（`lazy-lite-wb/3043.50ee4dca.mjs`）5.8.3 和 5.9.3 一字不差，国际版 5.9.4 内置的 CLI 和国内版 5.9.3 相同。网关 2026-10-28 起照这组值发（`injectSDKHeaders`）：`OS` / `Arch` 不取网关所在机器而是照设备指纹（`deviceOS` / `deviceArch`）映射，与设备信息同源；`client_name="SaaS"`（旧行为）不伪装桌面端，不发 `X-Stainless-*`，`Accept` 回落 `application/json, text/event-stream`；
 - `X-Agent-Intent: craft`、`X-Agent-Type: main`、`X-Agent-Purpose: conversation`；
-- `X-Agent-Runtime: local-agent`：国内版 5.9.3（内置 2.165.0）起才有，取会话元数据的 `agentRuntime`，桌面端给本机的会话设 `local-agent`；国际版 5.8.4 内置的 2.161.0 不发。网关同样只对国内版发；
+- `X-Agent-Runtime: local-agent`：2.165.0 起才有（国内版 5.9.3、国际版 5.9.4），取会话元数据的 `agentRuntime`，桌面端给本机的会话设 `local-agent`；国际版 5.8.4 内置的 2.161.0 不发。网关两域都发（国际版 2026-10-31 起）；
 - `X-IDE-Name` / `X-IDE-Type: WorkBuddy`，`X-IDE-Version` 为桌面端版本；
-- `X-Private-Data`：告诉上游能不能拿这段对话做模型优化，`"true"` 是不允许。2.161.0（国际版 5.8.4，以及国内版 5.8.3）：设置里的 `enableModelOptimization` 设过就照设置；没设过、且产品开关 `DisableYuanbaoChannel` 为真（两个域的安装包都是）时发 `"true"`。2.165.0（国内版 5.9.3）改了：设过照设置；没设过时先看产品开关 `DefaultModelOptimizationOff`（包里是 `false`，经 `abTestService` 读，远端配置会不会改它未确认），再看是不是企业版（`isEnterpriseEditionAccount`：有企业 id，或账号类型是 `ultimate`、`exclusive`），结果是个人号发 `"false"`、企业号发 `"true"`。网关默认一律发 `"true"`，对国内版等于用户在桌面端手动关了这个开关（2026-10-28 定）；打开 `upstream.model_optimization` 时个人号发 `"false"`、企业号仍发 `"true"`，和 5.9.3 没动过开关时一样（5.9.3 手动打开的话企业号也发 `"false"`，网关取保守的一边）；
-- 后台服务每次提问前另加的头（`createWorkbuddyAppServerBeforePromptExpertActivation`）：经 `switchExpertPluginForSession` 设成内置 CLI 的 `internalModelRequestHeaders`，内置 CLI 只加在官方模型的请求上（`shouldApplyInternalModelRequestHeaders`，自定义模型不加）。5.8.3 和 5.9.3 的这段代码相同：
+- `X-Private-Data`：告诉上游能不能拿这段对话做模型优化，`"true"` 是不允许。2.161.0（国际版 5.8.4，以及国内版 5.8.3）：设置里的 `enableModelOptimization` 设过就照设置；没设过、且产品开关 `DisableYuanbaoChannel` 为真（两个域的安装包都是）时发 `"true"`。2.165.0（国内版 5.9.3、国际版 5.9.4）改了：设过照设置；没设过时先看产品开关 `DefaultModelOptimizationOff`（国内版包里是 `false`、国际版是 `true`，为真时直接发 `"true"`；经 `abTestService` 读，远端配置会不会改它未确认），再看是不是企业版（`isEnterpriseEditionAccount`：有企业 id，或账号类型是 `ultimate`、`exclusive`），结果国内版个人号发 `"false"`、企业号发 `"true"`，国际版都发 `"true"`。网关默认一律发 `"true"`，国际版和官方没动过开关时一样，对国内版等于用户在桌面端手动关了这个开关（2026-10-28 定）；打开 `upstream.model_optimization` 时个人号发 `"false"`、企业号仍发 `"true"`，和 5.9.3 没动过开关时一样（5.9.3 手动打开的话企业号也发 `"false"`，网关取保守的一边）；
+- 后台服务每次提问前另加的头（`createWorkbuddyAppServerBeforePromptExpertActivation`）：经 `switchExpertPluginForSession` 设成内置 CLI 的 `internalModelRequestHeaders`，内置 CLI 只加在官方模型的请求上（`shouldApplyInternalModelRequestHeaders`，自定义模型不加）。5.8.3、5.9.3 和国际版 5.9.4 的这段代码相同：
   - `X-Device-Token`：腾讯图灵盾（TuringShield）原生 SDK 给的设备令牌（`getTuringDeviceToken`；mac 包里是 arm64 的 `native/turing-sdk/build/Release/turing_sdk.node`，SDK 只支持 macOS 和 Windows）。令牌缓存着用，到了刷新间隔就在后台换新；没有令牌而有错误码时改发 `X-Device-Token-Error`（错误码只留 ASCII 可见字符、截到 64 个），两样都没有时都不发。远端产品开关 `TuringDeviceToken` 为 `false` 时停用；
   - `X-Moderation-Type: ["protected"]`（值就是这串字符，带方括号和引号）：专家是云端专家（`expertIsCloud`）或付费专家（`expertPayMode`），或启用的技能里有云端技能时加（`shouldProtectSession`）；
   - 专家对话的 `X-Expert-Id` 和团队专家的 `X-Expert-Team-Task: true`，见本节最后一条。
@@ -116,14 +159,14 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - `X-Conversation-Request-ID`：轮次 id，每次用户发言开一轮时生成，是 `uuidv7()` 去掉连字符（`generateConversationRequestId`）；
 - `X-Conversation-Message-ID`、`X-Request-ID`：同一个模型消息 id，每次调模型新生成，同样是 `uuidv7()` 去掉连字符（`withModelMessageCorrelation`）。上报事件里的会话 id、轮次 id、消息 id 也是这三种形状。网关客户端没给会话 id 时的做法见[会话粘性](gateway.md#会话粘性)；
 - 链路头 `traceparent`、`b3` 与 `X-B3-*`；
-- 请求体带了思考档位（`reasoning_effort` 或 `reasoning.effort`）时补 `reasoning_summary: "auto"`（`injectReasoningSummaryIfNeeded`）。2.161.0 不发 `cache_retention`，也不发 `prompt_cache_key`；
+- 请求体带了思考档位（`reasoning_effort` 或 `reasoning.effort`）时补 `reasoning_summary: "auto"`（`injectReasoningSummaryIfNeeded`）。2.161.0、2.165.0 都不发 `cache_retention`，也不发 `prompt_cache_key`；
 - 任务中心的专家对话就是一次普通对话，只多带 `X-Expert-Id`（专家插件激活时追加）；团队专家（专家列表里 `expertType` 为 `team`）另带 `X-Expert-Team-Task: true`（后台服务的 `applyPreparedExpertSettings`），网关按专家列表里的类型带。
 
-模型目录：内置 CLI 用对话的 UA，按 GET 拉 `/v3/config`，带 `Connection: close`。企业号另拉企业模型，见[企业号模型目录](#企业号模型目录)。
+模型目录：网关用对话的 UA，按 GET 拉 `/v3/config`，带 `Connection: close`。官方后台服务也拉（`CloudProductProvider`，另带查询参数 `repos`），UA 跟时机有关，未确认，见[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。企业号另拉企业模型，见[企业号模型目录](#企业号模型目录)。
 
 ## 联网搜索
 
-内置 CLI 的 WebSearch 工具（2.165.0 的 `performWebSearch`，2026-10-31 读国内版 5.9.3 安装包核对）不经请求框架，用 Node 原生 `fetch` 发 `POST <对话入口>/agenttool/v1/search`，20 秒超时。网关照这份发（`upstream/search.go`），不复用对话的头（原版 linguo2625469 是复用 `ChatHeaders` 再改几项）：
+内置 CLI 的 WebSearch 工具（2.165.0 的 `performWebSearch`，2026-10-31 读国内版 5.9.3 安装包核对；国际版 5.9.4 内置的是同一份 CLI）不经请求框架，用 Node 原生 `fetch` 发 `POST <对话入口>/agenttool/v1/search`，20 秒超时。网关照这份发（`upstream/search.go`），不复用对话的头（原版 linguo2625469 是复用 `ChatHeaders` 再改几项）：
 
 - 请求头只有这些：`Accept: application/json`、`Content-Type: application/json;charset=UTF-8`、`X-Requested-With: XMLHttpRequest`、`User-Agent: CLI/<版本>`（版本是客户端信息里的 `platformVersion`，取产品配置的 `productVersion`，在桌面端里就是桌面端版本；`CLI` 是默认平台名常量）、`Authorization`、`X-Agent-Intent`（会话的模式，默认 `craft`）、`X-Agent-Runtime`（同对话，见[几类请求](#几类请求)）、`X-Conversation-ID`、`X-Conversation-Request-ID`（没有时是空串）、`X-Conversation-Message-ID` 与同值的 `X-Request-ID`（每次新生成的 `uuidv7()` 去连字符）、`X-Product`、`X-IDE-Type`、`X-IDE-Name`、`X-IDE-Version`（同 UA 里的版本）、`X-User-Id`、`X-Department-Info`（总是带，没有部门时是空串）。不带企业头（`X-Enterprise-Id`、`X-Tenant-Id`）、`X-Domain`、`X-Stainless-*` 和链路头；`Accept-Language: *`、`Sec-Fetch-Mode: cors`、`Accept-Encoding: br, gzip, deflate` 是原生 fetch（undici）自己加的。内网版（IOA）的默认头、专家会话的自定义头官方另加，网关都不涉及。`client_name` 配成 `SaaS`（旧行为）时同对话，不带 `X-IDE-*`；
 - 请求体：`{"query": <搜索词>, "type": "text2text", "max_results": 5, "allowed_domains": [...], "freshness": "..."}`，后两个有才带，字段顺序照官方；域名黑名单不单独传，拼在搜索词后面：`<搜索词> (-site:a.com -site:b.com)`。搜索词至少 2 个字、`freshness` 的写法（`d`、`d1`～`d30`、`m`、`m1`～`m12`、`y`、`y1`～`y5`），官方在发请求前就校验，网关同样；
@@ -132,13 +175,22 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 
 没确认的：
 
-- 国际版：只读了国内版 5.9.3 的包，国际版的搜索代码没读（等对齐国际版 5.9.4 时核实）。网关的国际版号照同样的形状搜，`X-Agent-Runtime` 和对话一样不带；
 - 会话头：官方带的是当前会话的 id，网关转客户端给的 `X-Conversation-ID`、`X-Conversation-Request-ID`，没给就各生成一个，和主对话的会话 id 不关联，上游会不会核对未确认；
 - 搜一次扣不扣积分、扣多少：没在真实账号上测。
 
 ## 积分与签到
 
-积分查询照官方桌面端（`BackendProvider` 的 `fetchUserResources`）同时发三个请求，两个域路径相同，都不带 `/v2`，都带 `Accept-Language`：
+官方桌面端的积分、签到由后台服务的 `AuthService` 发（5.9.x 在 `authority-snapshot.js`，5.8.3 在 `tar.js`），不经请求框架：它自己建一个 axios 实例（`get http`：keep-alive，拦截器只挂代理、记日志、加 `X-Request-ID`，401 时刷新），请求头只有 `buildHeaders` 给的这些：
+
+- `Accept: application/json`、`Content-Type: application/json`；
+- `User-Agent: axios/1.16.1`：没人设 UA，axios 的 http 适配器补默认值（后台服务打包的 axios 是 1.16.1）；`Accept-Encoding: gzip, compress, deflate, br` 同样是 axios 补的；
+- `X-Request-ID`：每个请求新生成；
+- `Authorization`、`X-User-Id`（没有 uid 时是空串），企业号再带 `X-Enterprise-Id` 与同值的 `X-Tenant-Id`；有登录域时带 `X-Domain`；
+- 签到状态和签到另带 `X-Device-Token`（`buildHeadersWithTuringToken`，令牌和错误码的规则同对话，见[几类请求](#几类请求)）；积分查询另带 `Accept-Language`（`resolveAcceptLanguage`：界面语言是中文发 `zh`、英文发 `en`，都不是时国际版 `en`、国内版 `zh`，网关按域取）。
+
+不带 `X-Requested-With`、`X-Product`、`X-Department-Info`、`X-IDE-*` 和链路头。网关照这组发（`authServiceHeaders`、`authServiceJSON`），配了 `upstream.user_agent` 时 UA 照配置；`client_name="SaaS"`（旧行为）时不带 UA，交给 Go 的默认值。1.8.0 及以前按请求框架的形状发，见[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。
+
+积分查询（`getPersonalUsage` → `account.js` 的 `fetchUserResources`）发三个请求，两个域路径相同，都不带 `/v2`：
 
 | 请求 | 请求体 |
 |---|---|
@@ -146,26 +198,32 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 | `POST /billing/meter/get-user-resource-paid-packages` | 付费包代码、`Status: [0, 3]`、`NeedRenewInfo: true`，每页 200 条，最多 10 页 |
 | `POST /billing/meter/get-user-resource-free-packages` | 免费包代码、`Status: [0, 3]`，加上当天（台湾时间）的 `SlicePeriodStartTime` / `SlicePeriodEndTime` |
 
+- 国际版三个同时发。国内版先发汇总和免费包，汇总显示是纯免费号（`isFreeOnlySummary`：`IsPaidUser` 为假、订阅包没有或是免费包、各档都是免费包，一档都没有不算）就不查付费包（`skipPaidForFreeUser`，5.9 起；调用方带 `force` 时照查，网关一律按不带算）；汇总没查到照查。
+- 付费包代码 5.9 起多了 BuddyOne 会员 `TCACA_code_043`，5.8.3 / 5.8.4 没有。
 - 两个列表按 `ResourceId` 去重；按天发放的包（`CapacityType` 4）有当天的发放明细时用明细，其余用 `CycleCapacitySizePrecise` / `CycleCapacityRemainPrecise`（字符串）。
-- 余额以汇总为准；汇总失败时用逐包合计。两个列表任一失败算查询失败。
+- 余额以汇总为准；汇总没查到时用逐包合计，同时有几个订阅档只算排在最前的一个（`excludeSuppressedPlanBase`：先比档位，BuddyOne 会员、旗舰、高级、专业、青春、专业试用、免费月包依次往后，再让没用完的、额度大的在前）。这条 5.9.3 只对国内版做，5.9.4 起两域都做，专业试用那两档也是 5.9.4 才排进去。
+- 官方三个请求任一失败，这次查询就整次算失败、不显示积分（`refusing to report incomplete credits`）。网关从宽：两个列表任一失败算查询失败，汇总失败时照用逐包合计（2026-10-20 生产实测两者一致）。
+- 版本档（外观上报的 `editionType`）先看汇总的订阅包（5.9 起），认不出再看逐包列表里有哪档订阅包。
+- 5.9 起官方每次查汇总都另报一条 `wb.api_response` 日志，网关不发。
 - 1.1.2 以前用 `/v2/billing/meter/get-user-resource`，官方 5.8.3 里已经没有这个接口。2026-10-20 生产对比：新旧接口给的包相同，按整数字段算出的旧余额和汇总对不上，按官方算法算的一致。
-- 企业号查 `POST /v2/billing/meter/get-enterprise-user-usage`，带 `X-Enterprise-Id`（与以前相同）。
+- 企业号查 `POST /v2/billing/meter/get-enterprise-user-usage`（`getEnterpriseUsage`），头同上，带企业头。
+- 1.8.0 对齐国内版 5.9.3 时只比了请求头和上报，漏看了积分查询，BuddyOne 会员、纯免费号不查付费包、版本档先看汇总这三处 2026-10-31 对齐国际版 5.9.4 时才补上。
 
 ### 积分包的到期时刻
 
-桌面端 5.9.3（`app/main/account.js` 的 `getCurrentPlan`）按包类型取时刻，网关的到期提醒、快照和快过期加权都照这个办法（`resourceAccount.expiry`）：
+官方后台服务的 `getPersonalUsage` 按包类型取时刻（5.8.3 起如此；界面层 `account.js` 的 `getCurrentPlan` 是同一套，只是不分域：免费月包 `008` 一律当刷新的，礼包 `006` 两样都显示），网关的到期提醒、快照和快过期加权都照这个办法（`resourceAccount.expiry`）：
 
 | 包 | 官方显示 | 网关算作废的时刻 |
 |---|---|---|
 | 每日免费包（`TCACA_code_001`） | 到期：`CycleEndTime` | `CycleEndTime` |
-| 一次性发放的包：活动包 `007`（签到、任务发的裂变包）、加油包 `009` / `038`、`029`、`030`、国际版加油包 `036` | 到期：`DeductionEndTime`，不显示刷新 | `DeductionEndTime`，缺失时依次用 `ExpiredTime`、`CycleEndTime`（同官方 `toExpiredCreditPackage`） |
-| 其余（订阅、体验类：`002`、`003`、`005`、`008`、`023`、`026`、`027`、`028`、`035`、国际版 Bonus Pack `037`、`039`、`040`、`043`；`006` 两样都显示） | 刷新：`CycleEndTime` | `CycleEndTime`，缺失时同上回落 |
+| 一次性发放的包：活动包 `007`（签到、任务发的裂变包）、加油包 `009` / `038`、`029`、`030`、国际版加油包 `036`；国际版另有免费月包 `008`、礼包 `006` | 到期：`DeductionEndTime`，不显示刷新 | `DeductionEndTime`，缺失时依次用 `ExpiredTime`、`CycleEndTime`（同官方 `toExpiredCreditPackage`） |
+| 其余（订阅、体验类：`002`、`003`、`005`、`023`、`026`、`027`、`028`、`035`、国际版 Bonus Pack `037`、`039`、`040`、`043`，以及国内版的 `008`、`006`） | 刷新：`CycleEndTime` | `CycleEndTime`，缺失时同上回落 |
 
 - 刷新的包按「刷新时没用完的作废」算，会不会结转未确认；
 - 2026-10-01 实测上游按 `DeductionEndTime` 先到期先扣（两个号一致）；
-- 1.8.0 及以前，面板「检查」一律先读 `DeductionEndTime`（订阅、体验类包会显示成好几年后到期），快照和快过期加权一律读 `CycleEndTime`，两边对不上。
+- 1.8.0 及以前，面板「检查」一律先读 `DeductionEndTime`（订阅、体验类包会显示成好几年后到期），快照和快过期加权一律读 `CycleEndTime`，两边对不上；国际版的 `008`、`006` 也当刷新的包算。
 
-签到照官方（`DesktopAccountRepo`）先查状态再签：`POST /v2/billing/meter/checkin-activity-status`，活动没开（`active` 为假）就不签，今天已签（`today_checked_in`）也不签；状态查不到时照常签。两条都带 `X-Device-Token`。
+签到照官方先查状态再签（`AuthService` 的 `getCheckinStatus`、`claimDailyCheckin`，头见上文）：`POST /v2/billing/meter/checkin-activity-status`，活动没开（`active` 为假）就不签，今天已签（`today_checked_in`）也不签；状态查不到时照常签，再 `POST /v2/billing/meter/daily-checkin`。产品开关 `DisableCheckin` 为真（国际版）时官方两条都不发，网关的签到同样跳过国际版号。
 
 ### 积分获取的积分数
 
@@ -205,7 +263,7 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 
 ## 刷新令牌
 
-内置 CLI 与后台服务的 `refreshSession` 一样：
+桌面端由后台服务刷新（`common2.js` 里两个登录提供者的 `refreshSession`，国内版 `AccountScopedExternalLinkAuthenticationProvider`、国际版 `ExternalLinkAuthenticationProvider`），经后台服务的请求框架发，UA 是后台服务的 `<应用名>/<版本> <应用名>/<版本> CLI/<cli>`（`refreshUserAgent`；国际版两段都是 `workbuddy-ai`）。内置 CLI 里也有同一份代码，桌面端里它会不会自己刷新没完全确认，形状一样。1.8.0 及以前网关刷新令牌和刷新后取账号用的是对话的 UA，国内版两者相同，国际版第一段不同。
 
 1. `POST /v2/plugin/auth/token/refresh`，请求体 `{}`，头是请求框架的公共头加 `X-Domain`、`X-Refresh-Token`、`X-Auth-Refresh-Source: plugin` 和根 span 的链路头（见[登录](#登录)）；
 2. 用新令牌取账号：国内版 `GET /v2/plugin/account`（`fetchCurrentAccount`），国际版 `GET /v2/plugin/accounts`（`getAccountSnapshot`），带同一条链路；
@@ -355,11 +413,13 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 
 ## 产品开关
 
-国际版 `product.json` 里有这几项，国内版都没开：
+国际版 `product.json` 里有这几项（5.8.4、5.9.4 都有），国内版都没开：
 
 - `DisableCheckin: true`、`UserGrowth: false`：国际版没有签到和成长任务，网关对国际版账号也都跳过；
 - `DisableActivityBanner: true`；
-- `DefaultModelOptimizationOff: true`。
+- `DefaultModelOptimizationOff: true`：5.8.4 内置的 2.161.0 不读它，5.9.4 内置的 2.165.0 起影响 `X-Private-Data`。
+
+国际版 5.9.4 比 5.8.4 多了 `DisableMemoryPlatformV2`、`EnableFrenchLocale`、`EnableJapaneseLocale`、`EnableKoreanLocale`、`ExternalPackagePdfCli`，少了 `DisableMessageCenterEntry`、`EnableSecurityCenter`，都只管界面和本地功能，网关不用跟。
 
 国内版 5.9.3 的 `product.json` 新写了 `DefaultModelOptimizationOff: false`（5.8.3 没有这一项），影响 `X-Private-Data`，见[几类请求](#几类请求)里的对话；`DisableYuanbaoChannel` 两个域都是 `true`，2.165.0 起不再参与 `X-Private-Data`。
 
@@ -401,7 +461,7 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 
 ### 容量排队
 
-上游这一路满了时，对话请求回业务码 `6020` 和排位，客户端在原来的号上排队，到号了原样重发。依据是国内版桌面端 5.9.3 安装包（2026-10-31 读包）：渲染层 `app/renderer/assets/workbuddy-provider-*.js` 的 `QueuePollingManager` 管排队（受 `featureToggles.QueueBanner` 开关控制，没关就开），查询和取消交给主进程 `app/main/server.js` 的 `queue:getStatus`、`queue:cancel` 去发。
+上游这一路满了时，对话请求回业务码 `6020` 和排位，客户端在原来的号上排队，到号了原样重发。依据是国内版桌面端 5.9.3 安装包（2026-10-31 读包）：渲染层 `app/renderer/assets/workbuddy-provider-*.js` 的 `QueuePollingManager` 管排队（受 `featureToggles.QueueBanner` 开关控制，没关就开），查询和取消交给主进程 `app/main/server.js` 的 `queue:getStatus`、`queue:cancel` 去发。国际版 5.9.4 的这两处代码和国内版相同（2026-10-31 按函数比对）。
 
 - 码：`6020` `WAITING` 排进队了；`6021` `FULL` 队列满，只提示；`6022` `USER_LIMIT` 这个用户排队的数量到上限，只提示。
 - 6020 回应里的排位 `queue_position` 和 `retry_after`（秒）：渲染层直接从错误数据里读，主进程先取 `data` 再看 `data.data`，网关按顶层、`data`、`data.data` 依次找。
@@ -482,23 +542,27 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - 对话请求里官方有、网关没发的（2026-10-28 对 5.9.3 时发现，5.8.3 里就有），同类项目的做法见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)。其中 OpenAI SDK 的 8 个 `X-Stainless-*` 与 `Accept: application/json` 2026-10-28 已补上（读了两域 mac 包核对 Electron，见[几类请求](#几类请求)里的对话）；另外两个 2026-10-28 也处理了：
   - `X-Device-Token`：2026-10-28 起对话也带了，但只在使用者填了 `device_token`（账号 / config / 文件）时——网关跑在 Linux 上，图灵盾 SDK 只支持 macOS 和 Windows，自己做不出真令牌，没填就不发（对应官方「令牌和错误码都没有时都不发」，不造 `X-Device-Token-Error`）。1.1.2 以前对话带过配置里的 `device_token`，1.1.2 按当时「官方对话不带」的错误结论去掉，现已恢复并修正。令牌能不能多个号共用、填进去的多久失效，仍没实测（未确认）；
   - `X-Moderation-Type`：2026-10-28 起专家对话按该专家是不是云端（`is_cloud===1`）或付费（`pay_detail` 的 `pay_mode` / `payMode`，回落 `need_pay===1`）决定带不带 `["protected"]`（`MarketExpert.Protected`，对齐官方 `shouldProtectSession`；官方还判「启用的技能里有云端技能」，网关的专家对话不加载技能，这条恒假）。任务中心的专家（`expert_5`、`expert_use_*`、`WorkBuddy_Valorant`）从市场列表拿到这些字段就按实发；列表里没查到、用占位专家时默认不带。这几个任务专家实际是不是云端 / 付费，没在真实账号上核对（未确认）。
-- 联网搜索照国内版 5.9.3 读包实现：国际版的搜索代码没读，搜一次扣不扣积分没实测，见[联网搜索](#联网搜索)。
+- 联网搜索照国内版 5.9.3 读包实现（国际版 5.9.4 内置的是同一份 CLI）：搜一次扣不扣积分没实测，见[联网搜索](#联网搜索)。
 - 容量排队（`6020`、`6022`）照国内版 5.9.3 读包实现，没见过实际响应，见[容量排队](#容量排队)：
   - 只认 HTTP 出错回应里的 `6020`；流开了以后才来的错误帧里要是带 `6020`，照普通错误处理（官方渲染层是从错误数据里读，上游会用哪种形态回，未确认）；
-  - 重发沿用排进队那一轮的 `X-Conversation-Request-ID`。官方带原样 `_meta` 重发，CLI 会不会给重发的请求换新的请求 id，未确认；
-  - 国际版安装包的排队代码没读过（等对齐国际版 5.9.4 时核实），国际版号照国内版的形状排。
+  - 重发沿用排进队那一轮的 `X-Conversation-Request-ID`。官方带原样 `_meta` 重发，CLI 会不会给重发的请求换新的请求 id，未确认。
 - 错误码：生产日志（10-19 至 10-23）只见过 `6004`、`14003`、`11101`、`11128`、`11140`、`11158`，其余业务码照官方枚举归类，没有真遇到过；`14002` 的含义没确认，见[错误码](#错误码)。`11140` 只见过 `request illegal` 一种文案（账号级风控，见上），限流那种文案没遇到过；`11158` 是个人免费号调 GPT、Gemini、Grok 时回「该用户类型不能用这个模型」（`model [...] is not allowed for user type [personal_free_user]`），官方客户端里没有这个码；网关照上游 linguo2625469 `6ee5491` 和 `11102` 一样处理：这个号的这个模型记负缓存、换号，可选的号都没权限时回 400 `model_unavailable`（以前按其他客户端错误换号，所有号都没权限时报 503 没有可用账号）。
+- 积分、签到、企业用量改发 `AuthService` 那组头（UA `axios/1.16.1`），国际版后台服务和刷新令牌的 UA 两段改成 `workbuddy-ai`：都是 2026-10-31 照安装包改的，同类项目的真机抓包也是这样，网关自己还没在生产上跑过新形状。
+- `X-Request-ID`（请求框架、`AuthService` 补的那个，不是对话的消息 id）：官方是 `crypto.randomUUID()` 去掉连字符，32 位十六进制里第 13 位固定是 `4`、第 17 位是 `8`～`b`；网关是 16 个随机字节的十六进制，长度一样，这两位不固定。没改。
+- 模型目录 `/v3/config`：官方后台服务拉的时候带 `repos` 参数，UA 跟启动时机有关（产品配置载入前是两段的 `WorkBuddy/<版本> CLI/<cli>`），内置 CLI 也可能自己拉，哪种是常态未确认；网关用对话的 UA、不带 `repos`。
 - 小程序的埋点事件（开学季活动）照的是一次 Windows 版 PC 微信的抓包，系统写 `windows`、`machineId` 是抓包里的固定值；小程序 web-view 的 UA 却是 iPhone 微信，开学季接口和埋点请求从 1.1.2 起也用这个 UA（以前没设，发的是 Go 默认的 `Go-http-client/1.1`）。没有小程序的包、也没有 PC 微信的 UA 抓包可对照，系统和 UA 两边都没改成一致，见[官网网页的请求](#官网网页的请求)。
 
 ## 官方升级后怎么核对
 
 1. 从官网下载两个域的新安装包，各自解到一个空目录，只读，不运行。
 2. 在 `cli/product.json` 里读版本、`applicationName`、`commit`、`date` 与 `productFeatures`。
-3. 在内置 CLI 和 `main/` 里搜上文表格列出的函数名，逐项对照取值。
+3. 在内置 CLI 和 `main/` 里搜上文表格列出的函数名，逐项对照取值。压缩后的变量名、文件名每版都变，直接比文件看不出东西：先去掉变量名、按目录逐个文件比，有差别的文件再按函数切开比（2026-10-31 对国际版 5.9.4 就是这样比出 `main/` 只有三处不同）。
 4. 有变化就改这几处常量，再按改动补测试、写更新日志：
    - `internal/upstream/headers.go` 的 `defaultClientVersionCN`、`defaultClientVersionGlobal`、`defaultCliVersionCN`、`defaultCliVersionGlobal`（两个域的桌面端不一定同时升级，CLI 的版本各取各的安装包）；
    - 对话请求头在 `internal/upstream/headers.go` 的 `ChatHeaders`：内置 CLI 里搜 `getCustomHeaders`、`resolveAgentRuntime`、`axiosToFetchAdapter`，`X-Private-Data` 搜 `resolveModelOptimizationEnabled`、`isEnterpriseEditionAccount`；后台服务每次提问前加的头搜 `BeforePromptExpertActivation`、`getTuringDeviceToken`、`shouldProtectSession`；OpenAI SDK 的 `X-Stainless-*` 在 `lazy-lite-wb/` 里搜 `X-Stainless-Package-Version`（版本号）、`buildHeaders`（取值）、`normalizePlatform` / `normalizeArch`（OS / Arch 映射），`X-Stainless-Runtime-Version` 要按 Electron 内置的 Node 定——`unzip -p … 'Electron Framework' | strings | grep '^v2'` 读 `Electron Framework.framework`，`Info.plist` 里是 Electron 版本（改 `nodeRuntimeVersionCN` / `nodeRuntimeVersionGlobal`）；
-   - `internal/upstream/desktop.go` 的 `desktopCommit`、`desktopReleaseDate`；
+   - 后台服务的 UA（`defaultDaemonUA`）：后台服务里搜 `WorkbuddyUserAgentHttpInterceptor`、`initClientInfo`，后台服务进程的环境变量搜 `buildDaemonProcessEnv`（有没有 `CLIENT_INFO_PLATFORM`）；
+   - 积分、签到的请求头（`authServiceHeaders`）：后台服务里搜 `buildHeadersWithTuringToken`，同一个类里的 `get http`、`buildHeaders`；积分查询（`internal/upstream/resources.go`）搜 `getPersonalUsage`、`fetchUserResources`、`isFreeOnlySummary`、`excludeSuppressedPlanBase`，axios 的版本看 `main/axios.js`；
+   - `internal/upstream/desktop.go` 的 `desktopCommitCN`、`desktopReleaseDateCN`、`desktopCommitGlobal`、`desktopReleaseDateGlobal`（按域各取各的安装包）；
    - 刷新令牌后的账号合并与身份比对在 `internal/upstream/refresh_identity.go`（取账号在 `client.go` 的 `refreshAccountCheck`）：内置 CLI 里搜 `mergeCurrentAccountDetails`、`getAuthenticationAuthorityKey`、`normalizeAndAssertRefreshedAuthority`；
    - `cli/product.json` 的 `productFeaturesConfig.NetworkFailover` 变了，改 `internal/upstream/failover.go` 的入口与熔断参数；
    - HTTPDNS 的 token、启动 IP、备用 IP 在 `internal/upstream/httpdns_consts.go`（官方代码里搜 `719980335`、`119.29.29.99`），超时与缓存时长在 `internal/upstream/httpdns.go`；

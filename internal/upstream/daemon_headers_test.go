@@ -37,9 +37,8 @@ func wantHeaders(t *testing.T, h http.Header, want map[string]string) {
 	}
 }
 
-// TestBillingHeadersOfficialShape 积分、签到、成长任务等请求是桌面端后台服务的形状：官方请求框架的头
-// （含 X-Product、X-Request-ID）+ 后台服务的 UA（应用名段在前）；官方不发的头一个都不带，
-// Accept-Language 与 X-Device-Token 由个别请求另加。
+// TestBillingHeadersOfficialShape 上报这类后台服务经请求框架发的请求：官方请求框架的头（含 X-Product、
+// X-Request-ID）+ 后台服务的 UA（两段都是应用名）；官方不发的头一个都不带。
 func TestBillingHeadersOfficialShape(t *testing.T) {
 	auth.SetGlobalEnabled(true)
 	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
@@ -53,14 +52,14 @@ func TestBillingHeadersOfficialShape(t *testing.T) {
 	}{
 		{"国内版个人号 POST", http.MethodPost, cnAuth(), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.codebuddy.cn", "", "application/json"},
 		{"国内版企业号 POST", http.MethodPost, cnEnt, "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.codebuddy.cn", "corp-cn", "application/json"},
-		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.8.4 WorkBuddy/5.8.4 CLI/2.161.0", "www.workbuddy.ai", "", ""},
+		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0", "www.workbuddy.ai", "", ""},
 	}
 	prevID := ""
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := tc.a
 			a.DeviceToken = "dev-tok"
-			req, _ := http.NewRequest(tc.method, "https://x/v2/billing/meter/get-user-resource", nil)
+			req, _ := http.NewRequest(tc.method, "https://x/v2/report", nil)
 			(&Client{}).BillingHeaders(req, a)
 			wantHeaders(t, req.Header, map[string]string{
 				"Accept":           "application/json, text/plain, */*",
@@ -116,8 +115,9 @@ func TestBillingExtraHeaders(t *testing.T) {
 	}
 }
 
-// TestRefreshHeadersOfficialShape 刷新令牌是内置 CLI 的 refreshSession：请求框架的头 + 登录域（没有就用
-// 国内版产品入口域）+ X-Refresh-Token + X-Auth-Refresh-Source: plugin，UA 用 CLI 的拼法。
+// TestRefreshHeadersOfficialShape 刷新令牌是后台服务的 refreshSession：请求框架的头 + 登录域（没有就用
+// 国内版产品入口域）+ X-Refresh-Token + X-Auth-Refresh-Source: plugin，UA 是后台服务的（国际版两段都是
+// workbuddy-ai）。
 func TestRefreshHeadersOfficialShape(t *testing.T) {
 	auth.SetGlobalEnabled(true)
 	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
@@ -128,7 +128,7 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 	}{
 		{"国内版", cnAuth(), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.codebuddy.cn"},
 		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.workbuddy.cn"},
-		{"国际版", globalAuth(), "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0", "www.workbuddy.ai"},
+		{"国际版", globalAuth(), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0", "www.workbuddy.ai"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := tc.a
@@ -151,6 +151,75 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 			})
 			wantRequestID(t, req.Header, "")
 		})
+	}
+}
+
+// TestAuthServiceHeadersOfficialShape 积分查询、企业用量、签到是后台服务 AuthService 自己的 axios 实例发的：
+// 只有 buildHeaders 那几个头 + X-Request-ID + axios 的 UA 与 Accept-Encoding，没有请求框架的 X-Requested-With、
+// X-Product、X-Department-Info；Accept-Language、X-Device-Token 由调用方另加。
+func TestAuthServiceHeadersOfficialShape(t *testing.T) {
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	cnEnt := cnAuth()
+	cnEnt.EnterpriseID = "corp-cn"
+	cnEnt.DepartmentFullName = "dept-a"
+	cases := []struct {
+		name       string
+		c          *Client
+		a          *auth.Auth
+		ua, domain string
+		ent        string
+	}{
+		{"国内版个人号", &Client{}, cnAuth(), axiosUserAgent, "www.codebuddy.cn", ""},
+		{"国内版企业号", &Client{}, cnEnt, axiosUserAgent, "www.codebuddy.cn", "corp-cn"},
+		{"国际版个人号", &Client{}, globalAuth(), axiosUserAgent, "www.workbuddy.ai", ""},
+		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, cnAuth(), "MyUA/1", "www.codebuddy.cn", ""},
+		{"client_name=SaaS 不带 UA", &Client{ClientName: "SaaS"}, cnAuth(), "", "www.codebuddy.cn", ""},
+	}
+	prevID := ""
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := tc.a
+			a.DeviceToken = "dev-tok"
+			req, _ := http.NewRequest(http.MethodPost, "https://x/billing/meter/get-user-resource-summary", nil)
+			tc.c.authServiceHeaders(req, a)
+			wantHeaders(t, req.Header, map[string]string{
+				"Accept":          "application/json",
+				"Accept-Encoding": "gzip, compress, deflate, br",
+				"Content-Type":    "application/json",
+				"User-Agent":      tc.ua,
+				"Authorization":   "Bearer tok",
+				"X-User-Id":       a.UID,
+				"X-Domain":        tc.domain,
+				"X-Enterprise-Id": tc.ent,
+				"X-Tenant-Id":     tc.ent,
+				// AuthService 的请求里没有请求框架的头，也没有部门全名。
+				"X-Requested-With": "", "X-Product": "", "X-Department-Info": "",
+				"Origin": "", "Referer": "", "Accept-Language": "", "X-CodeBuddy-Request": "",
+				"X-Machine-ID": "", "X-Session-ID": "", "X-Device-Token": "", "X-Refresh-Token": "",
+			})
+			prevID = wantRequestID(t, req.Header, prevID)
+		})
+	}
+}
+
+// TestRefreshUserAgent 刷新令牌取后台服务的 UA；显式 user_agent 优先；client_name="SaaS"（旧行为）时后台
+// 服务的请求不带 UA，刷新仍带对话的 UA。
+func TestRefreshUserAgent(t *testing.T) {
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	for _, tc := range []struct {
+		name string
+		c    *Client
+		want string
+	}{
+		{"默认", &Client{}, "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
+		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, "MyUA/1"},
+		{"client_name=SaaS", &Client{ClientName: "SaaS"}, "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
+	} {
+		if got := tc.c.refreshUserAgent(globalAuth()); got != tc.want {
+			t.Errorf("%s: refreshUserAgent = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

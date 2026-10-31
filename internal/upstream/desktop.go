@@ -3,7 +3,8 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // desktop.go 桌面客户端行为指纹上报（事件链业务字段按 WorkBuddy Desktop 5.8.3 安装包核对，
-// 公共字段与请求头照 5.8.3 安装包，2026-10-28 对过 5.9.3 没变，见 eventFingerprint）。
+// 公共字段与请求头照 5.8.3 安装包，2026-10-28 对过 5.9.3、10-31 对过国际版 5.9.4 没变，见
+// eventFingerprint）。
 //
 // 来源：2026-09-12 Sunny 抓包实测（data/desktop-task-protocol.md）。桌面端点亮
 // 「需电脑端」类任务的关键不是独立端点，而是同一 POST /v2/report 通道上
@@ -61,12 +62,23 @@ const (
 // 不受 user_agent 覆盖影响（同以前）。
 func (c *Client) desktopUA(a *auth.Auth) string { return c.defaultDaemonUA(a) }
 
-// 国内版桌面端 5.9.3（macOS arm64）安装包 cli/product.json 的 commit 与 date（毫秒）。任务中心只对
-// 国内版个人号开放，这里只需要国内版的值。配了 client_version 时版本号跟着变，这两项不变。
+// 两域桌面端（macOS arm64）安装包 cli/product.json 的 commit 与 date（毫秒）：国内版 5.9.3、国际版
+// 5.9.4。上报事件按账号所在的域取：任务中心只对国内版个人号开放，每日活跃上报两域都发。配了
+// client_version 时版本号跟着变，这两项不变。
 const (
-	desktopCommit      = "d46924219e79332f49c37ccebf27292f87001b19"
-	desktopReleaseDate = int64(1793093023713) // 2026-10-27T09:23:43.713Z
+	desktopCommitCN          = "d46924219e79332f49c37ccebf27292f87001b19"
+	desktopReleaseDateCN     = int64(1793093023713) // 2026-10-27T09:23:43.713Z
+	desktopCommitGlobal      = "fa0a0901906addaa1a4259f6df347388a5563ded"
+	desktopReleaseDateGlobal = int64(1793290653510) // 2026-10-29T16:17:33.510Z
 )
+
+// desktopBuild 账号所在域的桌面端 commit 与发布时间。
+func desktopBuild(a *auth.Auth) (commit string, releaseDate int64) {
+	if a.IsGlobal() {
+		return desktopCommitGlobal, desktopReleaseDateGlobal
+	}
+	return desktopCommitCN, desktopReleaseDateCN
+}
 
 // desktopBase 桌面端 /v2/report 与 user-asset 走 chatBase（国内版 www.workbuddy.cn）。
 func (c *Client) desktopBase(a *auth.Auth) string { return c.chatBase(a) }
@@ -138,7 +150,7 @@ func rendererEvent(ev DesktopEvent) DesktopEvent {
 }
 
 // eventFingerprint 官方上报服务给每个事件补的公共字段（5.8.3 后台服务与内置 CLI 的事件处理器，
-// 两边相同；5.9.3 的一样）：
+// 两边相同；国内版 5.9.3、国际版 5.9.4 的一样）：
 //   - ProductInfo：product、releaseDate（product.json 的 date 转毫秒）、commit；
 //   - Userinfo：userId、username 与 userNickname（官方都取昵称）、企业号的 enterpriseId 与
 //     enterprise（部门全名）；
@@ -147,10 +159,11 @@ func rendererEvent(ev DesktopEvent) DesktopEvent {
 //     sessionId。
 //
 // 官方有、网关没有值的不带：downloadChannel（安装包没配）、qimei36（macOS 版拿不到）、
-// clientIp（只有国际版查，任务中心不对国际版开放）、buddyId / buddyName、expKeys，以及 5.9.3
-// 新加的 oneId（账号绑了 BuddyOne 才有）。
+// clientIp（官方只有国际版查本机的公网 IP；网关给国际版号发的只有每日活跃上报，没跟）、
+// buddyId / buddyName、expKeys，以及 5.9.3 新加的 oneId（账号绑了 BuddyOne 才有）。
 func (c *Client) eventFingerprint(a *auth.Auth, sessionID string) map[string]any {
 	ver := c.clientVersion(a)
+	commit, released := desktopBuild(a)
 	fp := map[string]any{
 		"timestamp":    time.Now().UnixMilli() - eventReportDelay,
 		"reportDelay":  eventReportDelay,
@@ -159,8 +172,8 @@ func (c *Client) eventFingerprint(a *auth.Auth, sessionID string) map[string]any
 		"username":     a.Nickname,
 		"userNickname": a.Nickname,
 		"product":      "SaaS",
-		"releaseDate":  desktopReleaseDate,
-		"commit":       desktopCommit,
+		"releaseDate":  released,
+		"commit":       commit,
 		"ideName":      "WorkBuddy",
 		"ideType":      "WorkBuddy",
 		"ideVersion":   ver,

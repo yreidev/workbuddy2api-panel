@@ -776,7 +776,8 @@ func TestCreditPackageBranches(t *testing.T) {
 }
 
 // TestPackageExpiryByType 到期时刻照桌面端按包类型取：一次性发放的包看 DeductionEndTime，
-// 每日免费包和按周期刷新的包看 CycleEndTime（刷新的包标 refresh），缺字段时依次回落。
+// 每日免费包和按周期刷新的包看 CycleEndTime（刷新的包标 refresh），缺字段时依次回落；国际版另把
+// freeMon、gift 算作一次性的。
 func TestPackageExpiryByType(t *testing.T) {
 	deduct := time.Date(2026, 11, 20, 23, 59, 59, 0, softRateResetLoc)
 	cycle := "2026-11-01 00:00:00"
@@ -785,15 +786,21 @@ func TestPackageExpiryByType(t *testing.T) {
 		name, code, fields string
 		want               string // 到期日（北京时间）
 		refresh            bool
+		global             bool
 	}{
-		{"活动包看 DeductionEndTime", "TCACA_code_007_nzdH5h4Nl0", both, "2026-11-20", false},
-		{"加油包看 DeductionEndTime", "TCACA_code_009_0XmEQc2xOf", both, "2026-11-20", false},
-		{"一次性的包缺 DeductionEndTime 回落 ExpiredTime", "TCACA_code_007_nzdH5h4Nl0", `"ExpiredTime":"2026-11-05 00:00:00","CycleEndTime":"` + cycle + `"`, "2026-11-05", false},
-		{"一次性的包只有 CycleEndTime", "TCACA_code_036_lupO5WgNdG", `"CycleEndTime":"` + cycle + `"`, "2026-11-01", false},
-		{"每日免费包看 CycleEndTime", "TCACA_code_001_PqouKr6QWV", both, "2026-11-01", false},
-		{"体验包看刷新时间", "TCACA_code_039_KRcQj7wUat", both, "2026-11-01", true},
-		{"国际版 Bonus Pack 看刷新时间", "TCACA_code_037_WxOD3MpI2o", both, "2026-11-01", true},
-		{"刷新的包缺 CycleEndTime 回落 DeductionEndTime", "TCACA_code_002_AkiJS3ZHF5", `"DeductionEndTime":` + strconv.FormatInt(deduct.UnixMilli(), 10), "2026-11-20", true},
+		{"活动包看 DeductionEndTime", "TCACA_code_007_nzdH5h4Nl0", both, "2026-11-20", false, false},
+		{"加油包看 DeductionEndTime", "TCACA_code_009_0XmEQc2xOf", both, "2026-11-20", false, false},
+		{"一次性的包缺 DeductionEndTime 回落 ExpiredTime", "TCACA_code_007_nzdH5h4Nl0", `"ExpiredTime":"2026-11-05 00:00:00","CycleEndTime":"` + cycle + `"`, "2026-11-05", false, false},
+		{"一次性的包只有 CycleEndTime", "TCACA_code_036_lupO5WgNdG", `"CycleEndTime":"` + cycle + `"`, "2026-11-01", false, false},
+		{"每日免费包看 CycleEndTime", "TCACA_code_001_PqouKr6QWV", both, "2026-11-01", false, false},
+		{"体验包看刷新时间", "TCACA_code_039_KRcQj7wUat", both, "2026-11-01", true, false},
+		{"国际版 Bonus Pack 看刷新时间", "TCACA_code_037_WxOD3MpI2o", both, "2026-11-01", true, false},
+		{"刷新的包缺 CycleEndTime 回落 DeductionEndTime", "TCACA_code_002_AkiJS3ZHF5", `"DeductionEndTime":` + strconv.FormatInt(deduct.UnixMilli(), 10), "2026-11-20", true, false},
+		{"国内版 freeMon 看刷新时间", "TCACA_code_008_cfWoLwvjU4", both, "2026-11-01", true, false},
+		{"国际版 freeMon 是一次性的", "TCACA_code_008_cfWoLwvjU4", both, "2026-11-20", false, true},
+		{"国内版 gift 看刷新时间", "TCACA_code_006_DbXS0lrypC", both, "2026-11-01", true, false},
+		{"国际版 gift 是一次性的", "TCACA_code_006_DbXS0lrypC", both, "2026-11-20", false, true},
+		{"国际版体验包照样看刷新时间", "TCACA_code_039_KRcQj7wUat", both, "2026-11-01", true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -801,6 +808,7 @@ func TestPackageExpiryByType(t *testing.T) {
 			if err := json.Unmarshal([]byte(`{"PackageCode":"`+tc.code+`",`+tc.fields+`}`), &r); err != nil {
 				t.Fatal(err)
 			}
+			r.global = tc.global
 			_, at, ok := r.expiry()
 			if !ok || at.In(softRateResetLoc).Format(time.DateOnly) != tc.want {
 				t.Fatalf("expiry = %v %v，want %s", at, ok, tc.want)

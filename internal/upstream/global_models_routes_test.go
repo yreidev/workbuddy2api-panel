@@ -39,7 +39,7 @@ func TestNonChatModelGenerationTags(t *testing.T) {
 }
 
 // TestDesktopUAForRealm 两域桌面端的 UA：内置 CLI 是 `WorkBuddy/<ver> <applicationName>/<ver> CLI/<cli>`，
-// 后台服务 applicationName 段在前；国际版 applicationName 是 workbuddy-ai（不是 productName「WorkBuddy AI」）。
+// 后台服务两段都是 applicationName；国际版 applicationName 是 workbuddy-ai（不是 productName「WorkBuddy AI」）。
 func TestDesktopUAForRealm(t *testing.T) {
 	c := New()
 	global := &auth.Auth{UID: "u1", Domain: "www.workbuddy.ai"}
@@ -49,8 +49,8 @@ func TestDesktopUAForRealm(t *testing.T) {
 	for _, tc := range []struct {
 		name, got, want string
 	}{
-		{"国际版 CLI", c.defaultCLIUA(global), "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"},
-		{"国际版后台服务", c.defaultDaemonUA(global), "workbuddy-ai/5.8.4 WorkBuddy/5.8.4 CLI/2.161.0"},
+		{"国际版 CLI", c.defaultCLIUA(global), "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
+		{"国际版后台服务", c.defaultDaemonUA(global), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
 		{"国内版 CLI", c.defaultCLIUA(cn), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"},
 		{"国内版后台服务", c.defaultDaemonUA(cn), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"},
 	} {

@@ -35,8 +35,6 @@ import (
 const (
 	queueStatusPath = "/v2/chat/queue/status"
 	queueCancelPath = "/v2/chat/queue/cancel"
-	// queueUserAgent 主进程 axios 默认实例的 UA（5.9.3 主进程打包的 axios 是 1.16.1）。
-	queueUserAgent = "axios/1.16.1"
 	// queueRequestTimeout 查询、取消的超时，同官方。
 	queueRequestTimeout = 15 * time.Second
 	// queueFirstPollDefault 6020 没带 retry_after 时第一次查询前等多久，同官方。
@@ -164,7 +162,7 @@ func (c *Client) queueCall(ctx context.Context, a *auth.Auth, path, model string
 	}
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", queueUserAgent)
+	req.Header.Set("User-Agent", axiosUserAgent) // 主进程 axios 默认实例的 UA
 	req.Header.Set("Accept-Encoding", acceptEncodingAxios)
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("X-Conversation-Request-ID", meta.ConversationRequestID)

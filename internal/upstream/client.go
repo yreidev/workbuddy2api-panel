@@ -712,15 +712,16 @@ type Client struct {
 	OnEarning func(Earning)
 
 	// UserAgent 出站 User-Agent 显式覆盖（非空时除任务中心桌面端上报外都用它）。
-	// 空 = 按账号域取官方桌面端的 UA：对话 / 刷新令牌 / 模型目录用 userAgent（内置 CLI），
-	// 积分 / 签到 / 成长任务 / 上报用 daemonUserAgent（后台服务），见 headers.go。
+	// 空 = 按账号域取官方桌面端的 UA：对话 / 模型目录用 userAgent（内置 CLI），登录 / 刷新令牌 /
+	// 上报用 daemonUserAgent（后台服务），积分 / 签到用 axios 的默认 UA（后台服务的 AuthService），
+	// 成长中心这类官网网页的请求用浏览器的 UA，见 headers.go、web.go。
 	UserAgent string
 
 	// ClientVersion 桌面端版本（UA 版本段 + X-IDE-Version），两域共用。
-	// 空 = 内置默认：国内版 5.8.3、国际版 5.8.4。
+	// 空 = 内置默认：国内版 5.9.3、国际版 5.9.4。
 	ClientVersion string
 
-	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认 2.161.0。
+	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认 2.165.0（两域相同）。
 	CliVersion string
 
 	// ClientName 对话请求的归属头 X-IDE-Name / X-IDE-Type 取值。空 = "WorkBuddy"（同官方桌面端）；
@@ -856,8 +857,8 @@ func (c *Client) globalOn(a *auth.Auth) bool {
 // 路径，此注释即"坏了再说"的锚点。
 const chatCompletionsPath = "/v2/chat/completions"
 
-// 签到：官方桌面端 DesktopAccountRepo（billingPrefix 为 /v2，两个域相同）。界面先查签到状态，
-// 用户点了再签到；两条都带设备令牌（getCheckinRequestHeaders）。
+// 签到：官方桌面端后台服务 AuthService 的 getCheckinStatus / claimDailyCheckin（两个域都带 /v2）。
+// 先查签到状态再签到；两条都带设备令牌（buildHeadersWithTuringToken）。
 const (
 	checkinStatusPath = "/v2/billing/meter/checkin-activity-status"
 	dailyCheckinPath  = "/v2/billing/meter/daily-checkin"
@@ -1369,7 +1370,7 @@ func (c *Client) refreshAccountCheck(ctx context.Context, base string, global bo
 	if err != nil {
 		return nil, err
 	}
-	c.frameworkHeaders(req, a, c.userAgent(a))
+	c.frameworkHeaders(req, a, c.refreshUserAgent(a))
 	d := a.Domain
 	if global {
 		d = "www.workbuddy.ai"
@@ -1785,7 +1786,7 @@ func mergeModelInfos(primary, secondary []ModelInfo) []ModelInfo {
 }
 
 // enterpriseModelsPath 企业模型目录端点路径模板。
-// 依据：官方桌面端内置 CLI 2.161.0（两个域相同）的 ModelsProductProvider——只有账号有
+// 依据：官方桌面端内置 CLI 的 ModelsProductProvider（2.161.0 起，两域现在的 2.165.0 相同）——只有账号有
 // enterpriseId 才调，GET <endpoint>/console/enterprises/{enterpriseId}/config/models，
 // 走请求框架并带内置 CLI 的 UA，超时 5 秒。响应 {"code":0,"data":[模型对象, ...]}，
 // data 直接是数组（10-20 生产用个人号请求 /console/enterprises/personal/config/models
@@ -2602,7 +2603,7 @@ const (
 //
 // 上游口径（实测 2026-10-07，企业号 a6239ec8）：
 //
-//	POST /v2/billing/meter/get-enterprise-user-usage   （X-Enterprise-Id 由 BillingHeaders 注入）
+//	POST /v2/billing/meter/get-enterprise-user-usage   （X-Enterprise-Id 由 authServiceHeaders 注入）
 //	{"credit":812.45,"limitNum":2000,
 //	 "cycleStartTime":"2026-09-27 00:00:00","cycleEndTime":"2026-10-26 23:59:59",
 //	 "cycleResetTime":"2026-10-27 00:00:00"}
@@ -2620,7 +2621,7 @@ func (c *Client) enterpriseResource(a *auth.Auth, soon time.Duration) (remain, t
 	var data json.RawMessage
 	err = c.retryBillingTransient(func() error {
 		var e error
-		data, e = c.billingJSON(a, http.MethodPost, "/v2/billing/meter/get-enterprise-user-usage", map[string]any{})
+		data, e = c.authServiceJSON(a, http.MethodPost, "/v2/billing/meter/get-enterprise-user-usage", map[string]any{})
 		return e
 	})
 	if err != nil {
@@ -2691,12 +2692,9 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 		return 0, 0, 0, time.Time{}, 0, err
 	}
 	now := time.Now()
-	var sumLeft, sumSize float64
 	var earliestDay string // 最早一批的北京时间日期：同一天到期的合成一批，和面板「检查」一致
 	for _, p := range packs {
-		size, left := p.capacity()
-		sumLeft += left
-		sumSize += size
+		_, left := p.capacity()
 		r := credits(left)
 		if r <= 0 {
 			continue
@@ -2720,6 +2718,7 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 		}
 	}
 	// 余额与总额取汇总（官方桌面端显示的剩余积分就是汇总相加）；汇总没查到时用逐包合计。
+	sumSize, sumLeft := packageTotals(packs)
 	if summary != nil {
 		sumLeft, sumSize = summary.left, summary.total
 	}
@@ -2737,7 +2736,7 @@ func (c *Client) DailyCheckin(a *auth.Auth) error {
 	var data json.RawMessage
 	err := c.retryBillingTransient(func() error {
 		var e error
-		data, e = c.billingJSON(a, http.MethodPost, checkinStatusPath, map[string]any{}, c.withDeviceToken(a))
+		data, e = c.authServiceJSON(a, http.MethodPost, checkinStatusPath, map[string]any{}, c.withDeviceToken(a))
 		return e
 	})
 	var st struct {
@@ -2754,7 +2753,7 @@ func (c *Client) DailyCheckin(a *auth.Auth) error {
 	}
 	err = c.retryBillingTransient(func() error {
 		var e error
-		data, e = c.billingJSON(a, http.MethodPost, dailyCheckinPath, map[string]any{}, c.withDeviceToken(a))
+		data, e = c.authServiceJSON(a, http.MethodPost, dailyCheckinPath, map[string]any{}, c.withDeviceToken(a))
 		return e
 	})
 	if err != nil {

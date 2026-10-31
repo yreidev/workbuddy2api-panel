@@ -4,9 +4,10 @@
 
 // trace.go 官方后台服务登录、刷新令牌请求的链路头。
 //
-// 依据（10-20 读官方桌面端 5.8.3 / 5.8.4 安装包）：两个安装包 product.json 的
-// telemetry.tracing.enabled 都是 true，登录（发起授权、轮询令牌、取账号）与刷新令牌都把当前
-// span 的 requestHeaders 展开进请求头（OpenTelemetrySpan.requestHeaders）：
+// 依据（10-20 读官方桌面端 5.8.3 / 5.8.4 安装包；10-31 与国内版 5.9.3、国际版 5.9.4 按函数比对，
+// 没变）：这几个安装包 product.json 的 telemetry.tracing.enabled 都是 true，登录（发起授权、
+// 轮询令牌、取账号）与刷新令牌都把当前 span 的 requestHeaders 展开进请求头
+// （OpenTelemetrySpan.requestHeaders）：
 //
 //	X-Trace-ID: <traceId>
 //	b3: <traceId>-<spanId>-<traceFlags>-<父 spanId>

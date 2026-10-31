@@ -250,15 +250,15 @@ func TestUserAgentClientVersionOverride(t *testing.T) {
 	}
 }
 
-// TestBillingUA_WhenClientNameSet billing/checkin 路径：client_name 非空时用桌面端后台服务的 UA
-// （`<applicationName>/<ver> WorkBuddy/<ver> CLI/<cli>`）。
+// TestBillingUA_WhenClientNameSet 积分查询（后台服务的 AuthService）：client_name 非空时是 axios 的默认 UA，
+// 不随 client_version 变；显式 user_agent 仍优先。
 func TestBillingUA_WhenClientNameSet(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	// 默认 client_version → 5.9.3
 	c := &Client{
 		HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			if got := r.Header.Get("User-Agent"); got != billingUAWorkBuddy {
-				t.Errorf("billing UA = %q want %q (path=%s)", got, billingUAWorkBuddy, r.URL.Path)
+			if got := r.Header.Get("User-Agent"); got != axiosUserAgent {
+				t.Errorf("billing UA = %q want %q (path=%s)", got, axiosUserAgent, r.URL.Path)
 			}
 			return jsonResp(200, `{"code":0,"data":{"response":{"data":{"accounts":[{"PackageName":"x","CycleCapacitySize":100,"CycleCapacityUsed":0}]}}}}`), nil
 		})},
@@ -272,8 +272,8 @@ func TestBillingUA_WhenClientNameSet(t *testing.T) {
 	// 自定义 client_version → 6.0.0
 	c2 := &Client{
 		HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			if got := r.Header.Get("User-Agent"); got != billingUACustomVer {
-				t.Errorf("billing UA = %q want %q", got, billingUACustomVer)
+			if got := r.Header.Get("User-Agent"); got != axiosUserAgent {
+				t.Errorf("billing UA = %q want %q", got, axiosUserAgent)
 			}
 			return jsonResp(200, `{"code":0,"data":{"response":{"data":{"accounts":[{"PackageName":"x","CycleCapacitySize":100,"CycleCapacityUsed":0}]}}}}`), nil
 		})},
@@ -303,8 +303,8 @@ func TestBillingUA_WhenClientNameSet(t *testing.T) {
 	}
 }
 
-// TestBillingUA_WhenClientNameEmpty client_name 空 = 默认对齐官方桌面端：
-// billing UA 为桌面端后台服务的三段式；显式 client_name="SaaS" 才不设 UA。
+// TestBillingUA_WhenClientNameEmpty client_name 空 = 默认对齐官方桌面端：积分查询是 axios 的默认 UA，
+// 后台服务经请求框架的请求是三段式；显式 client_name="SaaS" 时两样都不设 UA。
 func TestBillingUA_WhenClientNameEmpty(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	var (
@@ -326,8 +326,8 @@ func TestBillingUA_WhenClientNameEmpty(t *testing.T) {
 	if _, _, err := c.UserResource(a); err != nil {
 		t.Errorf("userResource: %v", err)
 	}
-	if ua != billingUACustomVer {
-		t.Errorf("billing UA = %q want %s (default desktop fingerprint)", ua, billingUACustomVer)
+	if ua != axiosUserAgent {
+		t.Errorf("billing UA = %q want %s (default desktop fingerprint)", ua, axiosUserAgent)
 	}
 	if got := c.daemonUserAgent(a); got != billingUACustomVer {
 		t.Errorf("daemonUserAgent() = %q want %s", got, billingUACustomVer)
@@ -336,6 +336,12 @@ func TestBillingUA_WhenClientNameEmpty(t *testing.T) {
 	c.ClientName = "SaaS"
 	if got := c.daemonUserAgent(a); got != "" {
 		t.Errorf("daemonUserAgent() SaaS = %q want empty", got)
+	}
+	if _, _, err := c.UserResource(a); err != nil {
+		t.Errorf("userResource SaaS: %v", err)
+	}
+	if ua != "" {
+		t.Errorf("billing UA SaaS = %q want empty", ua)
 	}
 }
 

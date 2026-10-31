@@ -482,7 +482,7 @@ func TestSearchRealm(t *testing.T) {
 	if rec := post(h, "/v1/search/messages", searchMessagesBody); rec.Code != 200 {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
 	}
-	if c := rig.last(); c.token != "at-g" || c.header.Get("X-Agent-Runtime") != "" {
+	if c := rig.last(); c.token != "at-g" {
 		t.Errorf("国际版的号: %+v", c)
 	}
 	if e := rl.Snapshot().Recent[0]; e.Model != "global:web_search" || e.Path != "/v1/search/messages" || e.Attempts != 1 || !e.OK {

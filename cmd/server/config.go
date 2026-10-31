@@ -184,9 +184,9 @@ type Config struct {
 		// 请求前两段对调（applicationName 国内版 WorkBuddy、国际版 workbuddy-ai）。
 		UserAgent string `json:"user_agent"`
 		// ClientVersion 桌面端版本（UA 的版本段与 X-IDE-Version），两域共用一个值。
-		// 空 = 内置默认：国内版 5.8.3、国际版 5.8.4（官方安装包）。
+		// 空 = 内置默认：国内版 5.9.3、国际版 5.9.4（官方安装包）。
 		ClientVersion string `json:"client_version"`
-		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认 2.161.0（两域桌面端内置的 CLI）。
+		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认 2.165.0（两域桌面端内置的 CLI）。
 		CliVersion string `json:"cli_version"`
 		// ClientName 对话请求的归属头 X-IDE-Name / X-IDE-Type 取值。空 = "WorkBuddy"，同官方
 		// 桌面端（带 X-Agent-Purpose 与 X-IDE-*）；配 "SaaS" 还原旧行为：对话不带这几个头，

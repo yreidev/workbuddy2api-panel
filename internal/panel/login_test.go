@@ -404,7 +404,8 @@ func TestLoginPollCNPersonalSuccess(t *testing.T) {
 	autoWantCode(t, loginPollState(p, state), http.StatusNotFound)
 }
 
-// 国内企业号成功：跳过签到，照常查企业额度；部门全名落盘，查额度带 X-Department-Info。
+// 国内企业号成功：跳过签到，照常查企业额度；部门全名落盘。查额度是后台服务 AuthService 的请求，带企业头、
+// 不带 X-Department-Info（同官方）。
 func TestLoginPollCNEnterpriseSuccess(t *testing.T) {
 	p, up, dir := newLoginPanel(t)
 	loginRouteToken(up, loginCNHost, `{"accessToken":"at-ent","refreshToken":"rt-ent","expiresIn":3600,"domain":"copilot.tencent.com"}`)
@@ -428,8 +429,8 @@ func TestLoginPollCNEnterpriseSuccess(t *testing.T) {
 	if a := loadAuth(t, dir, "u-ent"); a.EnterpriseID != "corp-9" || a.DepartmentFullName != "研发部" {
 		t.Fatalf("企业 ID / 部门全名未落盘: %+v", a)
 	}
-	if got := usage[0].Header.Get("X-Department-Info"); got != "研发部" {
-		t.Errorf("查企业额度的 X-Department-Info = %q", got)
+	if h := usage[0].Header; h.Get("X-Enterprise-Id") != "corp-9" || h.Get("X-Department-Info") != "" {
+		t.Errorf("查企业额度的 X-Enterprise-Id = %q、X-Department-Info = %q", h.Get("X-Enterprise-Id"), h.Get("X-Department-Info"))
 	}
 }
 

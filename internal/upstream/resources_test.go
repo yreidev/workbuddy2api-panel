@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +58,8 @@ func cyclePkg(name string, size, remain int, extra string) string {
 	return s + "}"
 }
 
-// TestUserResourcesOfficialRequests 三个接口的路径、请求体、Accept-Language 与官方桌面端一致，两域都不带 /v2。
+// TestUserResourcesOfficialRequests 三个接口的路径、请求体、请求头（AuthService 那组加 Accept-Language）与官方
+// 桌面端一致，两域都不带 /v2。
 func TestUserResourcesOfficialRequests(t *testing.T) {
 	for _, tc := range []struct {
 		name, lang string
@@ -81,7 +83,8 @@ func TestUserResourcesOfficialRequests(t *testing.T) {
 			day := time.Now().In(softRateResetLoc).Format("2006-01-02")
 			bodies := map[string]map[string]any{}
 			for _, r := range f.seen() {
-				if r.method != http.MethodPost || r.header.Get("Accept-Language") != tc.lang || r.header.Get("X-Product") != "SaaS" {
+				if r.method != http.MethodPost || r.header.Get("Accept-Language") != tc.lang ||
+					r.header.Get("User-Agent") != axiosUserAgent || r.header.Get("X-Product") != "" {
 					t.Errorf("%s 请求头不对：%v", r.path, r.header)
 				}
 				var b map[string]any
@@ -97,7 +100,10 @@ func TestUserResourcesOfficialRequests(t *testing.T) {
 					t.Errorf("分页或状态不对：%v", b)
 				}
 			}
-			if paid["NeedRenewInfo"] != true || len(paid["PackageCodes"].([]any)) != len(paidPackageCodes) {
+			// 包代码和顺序照官方 5.9.x 的 Fs（buddyOneVip 是 5.9 起加的）。
+			if paid["NeedRenewInfo"] != true || fmt.Sprint(paid["PackageCodes"]) != "[TCACA_code_002_AkiJS3ZHF5 TCACA_code_005_maRGyrHhw1 "+
+				"TCACA_code_003_FAnt7lcmRT TCACA_code_023_4xbGhMrE6q TCACA_code_026_BaESVICNoi TCACA_code_027_0FCGVA6vSa "+
+				"TCACA_code_043_6oIkxT7Z0S TCACA_code_009_0XmEQc2xOf TCACA_code_038_OhvqZtiPKr TCACA_code_036_lupO5WgNdG]" {
 				t.Errorf("付费包请求体不对：%v", paid)
 			}
 			if free["SlicePeriodStartTime"] != day+" 00:00:00" || free["SlicePeriodEndTime"] != day+" 23:59:59" ||
@@ -105,6 +111,110 @@ func TestUserResourcesOfficialRequests(t *testing.T) {
 				t.Errorf("免费包请求体不对：%v", free)
 			}
 		})
+	}
+}
+
+// TestUserResourcesSkipPaidForFreeUser 国内版等汇总回来再定查不查付费包：汇总显示只有免费包就不查
+// （官方 skipPaidForFreeUser），付费用户、订阅包或某一档不是免费包、一档都没有、汇总没查到时照查；
+// 国际版三个同时发、总是查。查到的包按域定哪些算一次性的：freeMon 国际版算、国内版不算。
+func TestUserResourcesSkipPaidForFreeUser(t *testing.T) {
+	old := billingRetryDelay
+	billingRetryDelay = 0
+	t.Cleanup(func() { billingRetryDelay = old })
+	freeOnly := `{"Packages":[{"PackageCode":"TCACA_code_001_PqouKr6QWV"},{"PackageCode":"TCACA_code_039_KRcQj7wUat"}]`
+	for _, tc := range []struct {
+		name, summary string
+		global, paid  bool
+	}{
+		{"纯免费号", freeOnly + `}`, false, false},
+		{"订阅包是免费包", freeOnly + `,"SubscriptionPackageCode":"TCACA_code_040_mi9rCYg46x"}`, false, false},
+		{"不是付费用户", freeOnly + `,"IsPaidUser":false}`, false, false},
+		{"付费用户是 null", freeOnly + `,"IsPaidUser":null}`, false, false},
+		{"付费用户", freeOnly + `,"IsPaidUser":true}`, false, true},
+		{"付费用户是数字", freeOnly + `,"IsPaidUser":1}`, false, true},
+		{"付费用户是字符串", freeOnly + `,"IsPaidUser":"y"}`, false, true},
+		{"付费用户是对象", freeOnly + `,"IsPaidUser":{}}`, false, true},
+		{"订阅包是付费包", freeOnly + `,"SubscriptionPackageCode":"TCACA_code_002_AkiJS3ZHF5"}`, false, true},
+		{"有一档是付费包", `{"Packages":[{"PackageCode":"TCACA_code_001_PqouKr6QWV"},{"PackageCode":"TCACA_code_009_0XmEQc2xOf"}]}`, false, true},
+		{"一档都没有", `{"Packages":[]}`, false, true},
+		{"汇总没查到", "", false, true},
+		{"汇总解析不了", freeOnly + `,"IsPaidUser":tru}`, false, true},
+		{"国际版不跳过", freeOnly + `}`, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUpFake(t)
+			f.onResources(tc.summary, cyclePkg("免费", 10, 5, `"PackageCode":"TCACA_code_008_cfWoLwvjU4","CycleEndTime":"2026-11-01 00:00:00"`))
+			c := upClient(f)
+			a := cnAuth()
+			if tc.global {
+				c.ChatBaseGlobal, c.BillingBaseGlobal = upBase, upBase
+				a = globalAuth()
+			}
+			packs, _, _, err := c.CreditPackages(a)
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			var order []string
+			for _, r := range f.seen() {
+				order = append(order, r.path)
+			}
+			paidAt := slices.Index(order, resourcePaidPath)
+			if (paidAt >= 0) != tc.paid {
+				t.Fatalf("查付费包 = %v，want %v：%v", paidAt >= 0, tc.paid, order)
+			}
+			if paidAt >= 0 && !tc.global && paidAt < slices.Index(order, resourceSummaryPath) {
+				t.Fatalf("国内版应等汇总回来再查付费包：%v", order)
+			}
+			if len(packs) != 1 || packs[0].Refresh == tc.global {
+				t.Fatalf("freeMon 国际版算一次性的、国内版按周期刷新：%+v", packs)
+			}
+		})
+	}
+}
+
+// TestPackageTotalsSuppressLowerPlans 汇总没查到时的逐包合计照官方 excludeSuppressedPlanBase：同时有几个
+// 订阅档只算排在最前的一个（先比档位，再让没用完的优先，再比额度，最后先到期的优先），其余包照算；
+// freeMon 只有国内版算订阅档。
+func TestPackageTotalsSuppressLowerPlans(t *testing.T) {
+	pkg := func(code string, size, left float64, deduct int64, global bool) resourceAccount {
+		return resourceAccount{PackageCode: code, CycleCapacitySizePrecise: preciseCount(size),
+			CycleCapacityRemainPrecise: preciseCount(left), DeductionEndTime: deduct, global: global}
+	}
+	const (
+		proMon, proMonPlus, proYear = "TCACA_code_002_AkiJS3ZHF5", "TCACA_code_005_maRGyrHhw1", "TCACA_code_003_FAnt7lcmRT"
+		youth, flagship, buddyOne   = "TCACA_code_023_4xbGhMrE6q", "TCACA_code_027_0FCGVA6vSa", "TCACA_code_043_6oIkxT7Z0S"
+		trial, freeMon, freeMonIntl = "TCACA_code_039_KRcQj7wUat", "TCACA_code_008_cfWoLwvjU4", "TCACA_code_035_ArVxJcGDsm"
+		activity, extra             = "TCACA_code_007_nzdH5h4Nl0", "TCACA_code_009_0XmEQc2xOf"
+	)
+	for _, tc := range []struct {
+		name        string
+		packs       []resourceAccount
+		total, left float64
+	}{
+		{"体验包让位给专业版", []resourceAccount{pkg(trial, 100, 100, 0, false), pkg(proMon, 1000, 500, 0, false), pkg(activity, 50, 50, 0, false)}, 1050, 550},
+		{"BuddyOne 会员排最前", []resourceAccount{pkg(flagship, 5000, 10, 0, false), pkg(buddyOne, 100, 50, 0, false)}, 100, 50},
+		{"同档用完的让位", []resourceAccount{pkg(proMon, 1000, 0, 0, false), pkg(proYear, 800, 300, 0, false)}, 800, 300},
+		{"同档额度大的优先", []resourceAccount{pkg(proMon, 500, 100, 0, false), pkg(proYear, 800, 50, 0, false)}, 800, 50},
+		{"都一样先到期的优先", []resourceAccount{pkg(proMon, 500, 100, 2000, false), pkg(proMonPlus, 500, 200, 1000, false)}, 500, 200},
+		{"都一样到期也一样取先列出的", []resourceAccount{pkg(proMon, 500, 100, 1000, false), pkg(proMonPlus, 500, 200, 1000, false)}, 500, 100},
+		{"国内版 freeMon 是订阅档", []resourceAccount{pkg(freeMon, 100, 100, 0, false), pkg(youth, 300, 10, 0, false)}, 300, 10},
+		{"国际版 freeMon 照算", []resourceAccount{pkg(freeMon, 100, 100, 0, true), pkg(youth, 300, 10, 0, true)}, 400, 110},
+		{"freeMonIntl 排最后", []resourceAccount{pkg(freeMonIntl, 900, 900, 0, true), pkg(trial, 100, 1, 0, true)}, 100, 1},
+		{"没有订阅档全算", []resourceAccount{pkg(activity, 50, 20, 0, false), pkg(extra, 30, 30, 0, false)}, 80, 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if total, left := packageTotals(tc.packs); total != tc.total || left != tc.left {
+				t.Fatalf("total/left = %v/%v，want %v/%v", total, left, tc.total, tc.left)
+			}
+		})
+	}
+
+	// 接到余额上：汇总查不到时余额按压低后的合计算。
+	f := newUpFake(t)
+	f.onResources("", cyclePkg("体验", 100, 100, `"PackageCode":"`+trial+`"`), cyclePkg("专业", 1000, 500, `"PackageCode":"`+proMon+`"`))
+	remain, total, _, _, _, err := upClient(f).UserResourceDetailedWithExpiry(upAuth(), 0)
+	if err != nil || remain != 500 || total != 1000 {
+		t.Fatalf("remain/total = %d/%d err=%v，want 500/1000", remain, total, err)
 	}
 }
 

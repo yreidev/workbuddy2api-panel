@@ -26,7 +26,7 @@ func TestEventFingerprintMacOS(t *testing.T) {
 	want := map[string]any{
 		"reportDelay": eventReportDelay, "timezone": "Asia/Shanghai",
 		"userId": "u-1", "username": "测试号", "userNickname": "测试号",
-		"product": "SaaS", "releaseDate": desktopReleaseDate, "commit": desktopCommit,
+		"product": "SaaS", "releaseDate": desktopReleaseDateCN, "commit": desktopCommitCN,
 		"ideName": "WorkBuddy", "ideType": "WorkBuddy", "ideVersion": "5.9.3",
 		"machineId": desktopMachineID(a), "sessionId": "",
 		"extName": "workbuddy-desktop", "extVersion": "5.9.3",
