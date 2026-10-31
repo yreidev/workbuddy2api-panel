@@ -446,13 +446,7 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 		after, _ = p.taskByCodeWaiting(a, code)
 	}
 	if after != nil && after.Claimable {
-		var credit, energy int64
-		var cerr error
-		if isMP {
-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, code)
-		} else {
-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, code)
-		}
+		credit, energy, cerr := claimTaskReward(p, a, code)
 		if cerr == nil && (credit > 0 || energy > 0) {
 			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", credit, energy)
 		}

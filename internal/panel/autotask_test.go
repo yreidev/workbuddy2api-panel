@@ -1063,6 +1063,7 @@ func TestAccountTaskAutoAllTaskStatuses(t *testing.T) {
 			autoTaskJSON("RichMeow_Chat", 0, 0, "claimed"),
 		)))
 		up.onMPTasks(autoOK(autoTasksJSON()))
+		up.onWebClaim("chat_5", autoOK(autoEnvelope(`{"already_claimed":true}`)))
 		rec := postJSON(t, p, "/panel/api/accounts/u1/tasks/auto_all", `{}`)
 		autoWantCode(t, rec, http.StatusOK)
 		items := autoItems(t, autoDecode(t, rec))
@@ -1074,6 +1075,45 @@ func TestAccountTaskAutoAllTaskStatuses(t *testing.T) {
 			if msg, _ := it["message"].(string); !strings.HasPrefix(msg, "已完成") {
 				t.Fatalf("%s 完成说明不对: %v", code, it)
 			}
+		}
+		if msg, _ := autoItem(t, items, "chat_5")["message"].(string); !strings.HasSuffix(msg, "；奖励此前已领取") {
+			t.Fatalf("领过的达标任务应说明奖励此前已领取: %q", msg)
+		}
+		if got := up.requestsTo(http.MethodPost, autoWebHost, "/activity/growth/tasks/RichMeow_Chat/claim", "web"); len(got) != 0 {
+			t.Fatalf("已领取的任务不该再领奖，实际 %d 次", len(got))
+		}
+	})
+
+	t.Run("已达标未领先补领再跳过", func(t *testing.T) {
+		p, up := newAutoPanel(t)
+		up.onDefaultTasks(autoOK(autoTasksJSON(autoTaskJSON("chat_5", 5, 5, "accepted"))))
+		up.onMPTasks(autoOK(autoTasksJSON(autoTaskJSON("Sequential_Tasks_1", 1, 1, "accepted"))))
+		up.onWebClaim("chat_5", autoOK(autoClaimJSON(100, 5)))
+		up.onMPClaim("Sequential_Tasks_1", autoFail(500, `{"code":500,"msg":"claim boom"}`))
+		rec := postJSON(t, p, "/panel/api/accounts/u1/tasks/auto_all", `{}`)
+		autoWantCode(t, rec, http.StatusOK)
+		items := autoItems(t, autoDecode(t, rec))
+
+		it := autoItem(t, items, "chat_5")
+		if it["status"] != "skipped" || it["claimed"] != true || it["credit"] != float64(100) || it["energy"] != float64(5) {
+			t.Fatalf("达标未领应补领并记下数额: %v", it)
+		}
+		if msg, _ := it["message"].(string); !strings.HasSuffix(msg, "；已补领 +100 分 +5 能") {
+			t.Fatalf("补领说明不对: %q", msg)
+		}
+		if got := up.requestsTo(http.MethodPost, autoWebHost, "/activity/growth/tasks/chat_5/claim", "web"); len(got) != 1 {
+			t.Fatalf("chat_5 应领奖一次，实际 %d 次", len(got))
+		}
+
+		mp := autoItem(t, items, "Sequential_Tasks_1")
+		if mp["status"] != "skipped" || mp["claimed"] != nil {
+			t.Fatalf("补领失败仍记 skipped、不记 claimed: %v", mp)
+		}
+		if e, _ := mp["claim_error"].(string); !strings.Contains(e, "claim boom") {
+			t.Fatalf("补领失败要带上错误: %v", mp)
+		}
+		if msg, _ := mp["message"].(string); !strings.HasSuffix(msg, "；补领失败（可在列表手动重试）") {
+			t.Fatalf("补领失败说明不对: %q", msg)
 		}
 	})
 
