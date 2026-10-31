@@ -722,6 +722,36 @@ func TestBalanceRefreshDefaults(t *testing.T) {
 	}
 }
 
+// TestLivenessDefaults 定时测活：缺省开、每 30 分钟；可改分钟数；关掉时间隔为 0；开着但分钟数 <=0 回落 30。
+func TestLivenessDefaults(t *testing.T) {
+	c := Default()
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Schedule.LivenessEnabled || c.LivenessInterval != 30*time.Minute {
+		t.Errorf("缺省: enabled=%v interval=%v", c.Schedule.LivenessEnabled, c.LivenessInterval)
+	}
+	fp := filepath.Join(t.TempDir(), "c.json")
+	for body, want := range map[string]time.Duration{
+		`{"schedule":{"liveness_minutes":10}}`:       10 * time.Minute,
+		`{"schedule":{"liveness_enabled":false}}`:    0,
+		`{"schedule":{"liveness_minutes":-5}}`:       30 * time.Minute,
+		`{"schedule":{"liveness_minutes":0}}`:        30 * time.Minute,
+		`{"schedule":{"balance_refresh_minutes":1}}`: 30 * time.Minute,
+	} {
+		if err := os.WriteFile(fp, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(fp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.LivenessInterval != want {
+			t.Errorf("%s: interval=%v want %v", body, c.LivenessInterval, want)
+		}
+	}
+}
+
 // TestPromptDefaultPassthrough 默认 prompt.mode=passthrough（对齐上游：透传客户端
 // 原始 system 是更保守的缺省）；custom 由用户显式选择，此时 PromptText 为内置默认（非空）。
 func TestPromptDefaultPassthrough(t *testing.T) {

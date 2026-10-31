@@ -88,6 +88,8 @@
 | `schedule.<任务>_enabled` | `true` | 每类任务各自的开关：`checkin` / `growth` / `travel` / `activity` / `keepalive` / `blackcat` |
 | `schedule.balance_refresh_enabled` | `true` | 后台周期刷新全部账号余额 |
 | `schedule.balance_refresh_minutes` | `5` | 余额刷新间隔（分钟） |
+| `schedule.liveness_enabled` | `true` | 定时测活：给整个号在限流冷却、熔断中的号发一条最短的真实对话，测通就提前恢复（见[测活](panel.md#测活)） |
+| `schedule.liveness_minutes` | `30` | 定时测活间隔（分钟） |
 | `schedule.include_disabled_in_tasks` | `false` | 让签到、活跃上报、保活、余额刷新对**已禁用**账号也执行（禁用账号仍不参与选号） |
 
 注意：`*_hours` 写空数组或 `null` 表示「未配置，用默认值」，**不是关闭**；关闭请用对应的 `*_enabled: false`。关闭时小时配置原样保留，改回 `true` 即恢复。小时必须是 0–23，非法值启动即报错。

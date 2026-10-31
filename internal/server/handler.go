@@ -677,12 +677,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(peek.Model)
 	hidden := h.loadLive().HiddenModels
+	// 测活（见 liveness.go）：钉死一个号只试一次，域跟着那个号走（模型名带它的域前缀），不跨域、不看 models.hidden。
+	pinned := livenessFrom(r.Context())
 	// 跨域负载均衡（pool.cross_realm，热生效）：只管不带前缀的模型名，带前缀的照旧钉死该域。
 	// 改写 realm 为目录里有这个模型的域；两域都有时合池为 ""，下方选号即在两域合池里挑；国内版优先时
 	// 先定成此刻该用的域，选号循环每次再按国内版有没有能接的号重定（cnFirstRealm）。
 	// models.hidden 里只藏了一个域的，当那个域没有这个模型。
 	crossRouted, cnFirst := false, false
-	if mode := h.loadLive().CrossRealm; bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && crossRealmOn(mode) {
+	if mode := h.loadLive().CrossRealm; pinned == "" && bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && crossRealmOn(mode) {
 		realm = crossRealmFor(bareModel, func(r, m string) bool {
 			_, hide := hidden[r+":"+m]
 			return !hide && h.cfg.Upstream.RealmHasModel(r, m)
@@ -709,7 +711,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// models.hidden：点名调用被藏起来的模型直接拒，不选号、不发上游（只藏列表不够，知道名字照样能调）。
 	// 按改写后实际发上游的模型判；跨域合池时上面选域已经避开被藏的域（realm 为 "" 时不会命中）。
-	if _, hide := hidden[realm+":"+bareModel]; hide {
+	if _, hide := hidden[realm+":"+bareModel]; hide && pinned == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "model_unavailable",
 			fmt.Sprintf("model %s is hidden by gateway configuration (models.hidden), try another model", peek.Model))
 		st.status, st.outcome = http.StatusBadRequest, reqlog.OutcomeHTTPError
@@ -719,6 +721,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 客户端密钥：白名单按改写后实际发上游的模型判，过了再按上限放行并计一次请求。被拦下的也记一行
 	// 请求日志（带模型名），看得出是哪个模型、哪项上限不让用。
 	keyOwner := principalFrom(r.Context())
+	usageKey := keyOwner.usageKey()
+	if pinned != "" {
+		usageKey = livenessUsageKey
+	}
 	admitted := time.Now()
 	if status := h.admitKey(w, keyOwner, bareModel, admitted); status != 0 {
 		st.status, st.outcome = status, reqlog.OutcomeHTTPError
@@ -745,6 +751,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	sessKey := session.ExtractKey(body)
 	// 认对话用的摘要在提示词改写之前取：降级开关切换会换系统提示词，不能让出站会话 id 跟着变。
 	conv := session.ParseConversation(body)
+	if pinned != "" {
+		// 测活不碰会话粘性和出站会话 id 的记录：一句「hi」不能和以「hi」开头的真实对话串到一起。
+		sessKey, conv = "", session.Conversation{}
+	}
 	stickyUID := ""
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
@@ -763,6 +773,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 入键（防不同会话同轮文本互撞）。
 	// 必须在下方 prompt.Rewrite 之前取——改写会动 messages 内容，之后取会让键漂移。
 	turn := session.ParseTurn(body)
+	if pinned != "" {
+		turn = session.Turn{} // 同上，也不记轮次
+	}
 	turnKey := turn.Key
 
 	// gateway_hint 判定所需的请求形态（image_url part）：在改写前取（与 turnKey
@@ -866,7 +879,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				HasLatency:       delta.HasLatencyMs,
 				TokensPerSecond:  delta.TokensPerSecond,
 				HasTPS:           delta.HasTokensPerSecond,
-				Key:              keyOwner.usageKey(),
+				Key:              usageKey,
 			}, delta.HasTotalTokens || delta.HasCompletionTokens || delta.HasPromptTokens)
 		}
 		if keyOwner.key != nil {
@@ -962,7 +975,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
-		if stickyUID != "" {
+		if pinned != "" {
+			// 测活：不管冷却、禁用，就用这个号，失败了也不换号。
+			if acct = h.cfg.Pool.AuthByUID(pinned); acct == nil || i > 0 {
+				break
+			}
+		}
+		if acct == nil && stickyUID != "" {
 			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, bareModel)
 			if acct == nil || (realm != "" && acct.Realm() != realm) {
 				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
@@ -1012,6 +1031,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
 		if !acquireInFlight(h.cfg.Pool, acct.UID) {
+			if pinned != "" {
+				// 测活不等名额：这个号在途已满，说明正在接请求，回 503 让人稍后再测。
+				st.status, st.outcome = http.StatusServiceUnavailable, reqlog.OutcomeHTTPError
+				writeOpenAIError(w, http.StatusServiceUnavailable, "account_busy", "account is at its in-flight limit, test again later")
+				return
+			}
 			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
 			// 满载粘性号再浪费一次 PickByUID 往返（语义与 fail()/PickByUID-nil 的解绑一致）。
 			if stickyUID != "" && acct.UID == stickyUID {
@@ -1811,9 +1836,14 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		//     14016 企业未激活同样软冷却，原因文案带上业务码。
 		// 大小写不敏感（与 Classify 的 marker 匹配同口径）。
 		if strings.Contains(strings.ToLower(body), "request illegal") {
+			// 已经禁用的号（测活时）再回 11140 不是新的风控，不记风控波：不然复测两个早就被限制的号
+			// 就会把整个域其余的号暂停。
+			before, _ := h.cfg.Pool.Status(uid)
 			h.cfg.Pool.Disable(uid, "account restricted by upstream (11140 request illegal); "+
 				"appeal via official WorkBuddy support, re-login usually does not help")
-			h.cfg.Pool.NoteRestriction(uid)
+			if !before.Disabled {
+				h.cfg.Pool.NoteRestriction(uid)
+			}
 			return
 		}
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, h.softCooldown(), upstream.AccountFaultReason(body))

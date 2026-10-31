@@ -19,7 +19,7 @@ export function AccountButtons({ a, health, busy, run, nowrap, compact, extra }:
   health: Health
   /** 表格里一行放下，不折行（卡片和抽屉里允许折行） */
   nowrap?: boolean
-  /** 按钮收紧间距（卡片用），放不下照样折行 */
+  /** 按钮收紧间距（卡片用，按钮之间不留空隙，靠按钮自身的内边距隔开），放不下照样折行 */
   compact?: boolean
   /** 额外按钮（如抽屉里的「导出凭证」），放在「移除」之前，让危险操作留在最后 */
   extra?: ReactNode
@@ -39,11 +39,12 @@ export function AccountButtons({ a, health, busy, run, nowrap, compact, extra }:
     </Button>
   )
   return (
-    <div className={`flex items-center ${nowrap ? 'flex-nowrap gap-0.5' : compact ? 'flex-wrap gap-0.5' : 'flex-wrap gap-1'}`}>
+    <div className={`flex items-center ${nowrap ? 'flex-nowrap gap-0.5' : compact ? 'flex-wrap' : 'flex-wrap gap-1'}`}>
       {/* 今日已签仍可点：重新签到会顺带刷新余额 */}
       {!a.enterprise && a.realm !== 'global' && (a.checkin_done ? btn('checkin', '已签', { className: 'text-muted', ariaLabel: '今日已签到，点击重新签到并刷新余额' }) : btn('checkin', '签到'))}
       {a.enterprise ? btn('balance', '额度', { ariaLabel: '刷新企业版分配额度' }) : btn('balance', '余额')}
       {!a.enterprise && btn('tasks', '任务')}
+      {btn('liveness', '测活', { ariaLabel: '测活：给这个号发一条最短的对话，看它现在能不能用' })}
       {isFrozen(health) ? btn('revive', '解冻', { variant: 'primary' })
         : a.paused ? btn('resume', '恢复选号', { variant: 'primary' })
         : (

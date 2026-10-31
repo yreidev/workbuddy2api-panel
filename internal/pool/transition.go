@@ -54,6 +54,11 @@ func (e *entry) clearCoolingLocked() {
 // 熔断器保留：熔断是「连续 5xx 失败」信号（与授权/会话无关），禁用后再复活时
 // 熔断观测仍有效，不应被禁用覆盖。
 func (p *Pool) disableLocked(e *entry, reason string) {
+	// 人工禁用优先：已经人工禁用的号不被网关的自动禁用改掉原因（测活时人工禁用的号也会回 12153、11140），
+	// 不然之后一次测通就会被当成网关自动加的禁用解除（见 RecoverAfterLiveness）。
+	if e.disabled && e.reason == ManualDisableReason && reason != ManualDisableReason {
+		return
+	}
 	e.clearCoolingLocked()
 	e.disabled = true
 	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）

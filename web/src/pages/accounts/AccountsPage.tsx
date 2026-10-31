@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证）+ 批量任务 + 模型锁池。
+// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证）+ 批量任务（含全部测活）+ 模型锁池。
 // 宽屏默认卡片网格，可切换成表格（记在本浏览器）；窄屏只有卡片。
 import { useMemo, useState } from 'react'
 import {
@@ -24,6 +24,7 @@ import { AccountName, CreditsCell, StatusCell, UsageChips } from './AccountCells
 import { AccountDrawer } from './AccountDrawer'
 import { ExpiryReminder } from './ExpiryReminder'
 import { ExportActions, SelectionCheckbox } from './ExportBar'
+import { LivenessModal } from './LivenessModal'
 import { ModelLocks } from './ModelLocks'
 import { TasksModal } from './TasksModal'
 import { useAccountActions } from './useAccountActions'
@@ -44,6 +45,7 @@ const BATCH: { path: string; label: string; done: string }[] = [
   { path: 'travel_all', label: '旅行巡检', done: '旅行巡检已开始（含领养链路）' },
   { path: 'activity_all', label: '活跃上报', done: '活跃上报已开始' },
   { path: 'keepalive_all', label: '全部保活', done: '全部保活已开始' },
+  { path: 'liveness_all', label: '全部测活', done: '全部测活已开始，结果会显示在各号卡片上' },
 ]
 
 function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
@@ -57,7 +59,8 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const cards = !isDesktop || view === 'cards'
   const [detail, setDetail] = useState<string | null>(null)
   const [tasksOf, setTasksOf] = useState<string | null>(null)
-  const { busy, run, confirmEl } = useAccountActions(setTasksOf)
+  const [livenessOf, setLivenessOf] = useState<string | null>(null)
+  const { busy, run, confirmEl } = useAccountActions(setTasksOf, setLivenessOf)
 
   const accounts = useMemo(() => data.accounts || [], [data])
   const pool = useMemo(() => poolCredits(accounts), [accounts])
@@ -82,6 +85,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const byUid = (uid: string | null) => accounts.find((a) => a.uid === uid) ?? null
   const detailAcct = byUid(detail)
   const tasksAcct = byUid(tasksOf)
+  const livenessAcct = byUid(livenessOf)
 
   // 暂停选号单独一栏（上游 issue #125）：它只关选号、照常签到保活，和禁用是两种状态
   const tiles: { id: StatusFilter; label: string; value: number; color?: string }[] = [
@@ -217,6 +221,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         onClose={() => setDetail(null)}
       />
       <TasksModal uid={tasksOf} name={tasksAcct ? accountName(tasksAcct) : tasksOf?.slice(0, 16) || ''} onClose={() => setTasksOf(null)} />
+      <LivenessModal account={livenessAcct} onClose={() => setLivenessOf(null)} />
       {confirmEl}
     </>
   )

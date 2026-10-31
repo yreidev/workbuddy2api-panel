@@ -238,3 +238,50 @@ func TestGlobalEnterpriseChatHeader(t *testing.T) {
 		}
 	}
 }
+
+// TestCheapestModel 测活挑模型：这个号能接的模型里倍率最低的；企业号先看自己目录的倍率，
+// 个人号不挑企业专属模型；不知道倍率的排在知道的后面，同价按名字；skip 掉的不算。
+func TestCheapestModel(t *testing.T) {
+	none := func(string) bool { return false }
+	if (*Client)(nil).CheapestModel("p1", "cn", false, none) != "" {
+		t.Fatal("nil 客户端应返回空串")
+	}
+	c := &Client{}
+	if got := c.CheapestModel("p1", "cn", false, none); got != "" {
+		t.Fatalf("目录都没拉到应返回空串，got %q", got)
+	}
+	c.realmModels = map[string]map[string]bool{
+		"cn":     {"": true, "glm": true, "deepseek": true, "deepseek-b": true, "no-rate": true, "hidden": true},
+		"global": {"gpt-x": true, "gpt-y": true},
+	}
+	c.modelRates = map[string]map[string]string{
+		"cn":     {"glm": "0.5", "deepseek": "0.2", "deepseek-b": "0.2", "hidden": "0"},
+		"global": {"gpt-x": "1", "gpt-y": "2"},
+	}
+	c.accountCatalogs = map[string]accountCatalog{
+		"e1": {realm: "cn", infos: []ModelInfo{{ID: "claude-x", Credits: "x0.1"}, {ID: "glm"}}, set: map[string]bool{"claude-x": true, "glm": true}},
+		"e2": {realm: "cn", infos: []ModelInfo{{ID: "glm", Credits: "x0.01"}}, set: map[string]bool{"glm": true}},
+	}
+	skip := func(m string) bool { return m == "hidden" }
+	for _, tc := range []struct {
+		name, uid, realm string
+		enterprise       bool
+		want             string
+	}{
+		{"个人号挑最便宜的，同价按名字，不挑企业专属", "p1", "cn", false, "deepseek"},
+		{"企业号只挑自己目录里的，企业专属也算", "e1", "cn", true, "claude-x"},
+		{"企业目录的倍率优先于域倍率", "e2", "cn", true, "glm"},
+		{"国际版按国际版目录", "g1", "global", false, "gpt-x"},
+	} {
+		if got := c.CheapestModel(tc.uid, tc.realm, tc.enterprise, skip); got != tc.want {
+			t.Errorf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := c.CheapestModel("p1", "cn", false, none); got != "hidden" {
+		t.Errorf("不 skip 时应挑倍率 0 的，got %q", got)
+	}
+	c.modelRates["cn"] = nil
+	if got := c.CheapestModel("p1", "cn", false, skip); got != "deepseek" {
+		t.Errorf("倍率都不知道时按名字挑，got %q", got)
+	}
+}

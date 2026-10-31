@@ -126,6 +126,7 @@ func newRunTestConfig(t *testing.T) *Config {
 	cfg.Schedule.BlackcatEnabled = false
 	cfg.Schedule.GrowthEnabled = false
 	cfg.Schedule.BalanceRefreshEnabled = false
+	cfg.Schedule.LivenessEnabled, cfg.LivenessInterval = false, 0
 
 	a := &auth.Auth{
 		UID: "u1", AccessToken: "at-u1", RefreshToken: "rt-u1",

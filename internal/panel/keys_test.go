@@ -184,13 +184,13 @@ func TestKeysNotAvailable(t *testing.T) {
 	}
 }
 
-// TestUsageByKey 用量按密钥：补上显示名（管理员、未区分、已删除的密钥），key 参数按密钥筛。
+// TestUsageByKey 用量按密钥：补上显示名（管理员、测活、未区分、已删除的密钥），key 参数按密钥筛。
 func TestUsageByKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "api_keys.json")
 	store, _ := apikeys.Open(path)
 	k, _ := store.Create(apikeys.Input{Name: "张三"}, time.Now())
 	rec := usage.New("")
-	for _, key := range []string{k.ID, "admin", "", "k_gone"} {
+	for _, key := range []string{k.ID, "admin", "liveness", "", "k_gone"} {
 		rec.Add(time.Now(), "cn", "u1", "glm-5.2", usage.Delta{TotalTokens: 5, HasTotal: true, Key: key}, true)
 	}
 	p := New(Config{Version: "test", APIKey: "sk-admin", Usage: rec, Keys: store, Pool: pool.New("")})
@@ -207,7 +207,7 @@ func TestUsageByKey(t *testing.T) {
 	for _, row := range snap("").ByKey {
 		names[row.Key] = row.Extra
 	}
-	if names[k.ID] != "张三" || names["admin"] != "管理员" || names[""] != "未区分" || names["k_gone"] != "已删除的密钥" {
+	if names[k.ID] != "张三" || names["admin"] != "管理员" || names["liveness"] != "测活" || names[""] != "未区分" || names["k_gone"] != "已删除的密钥" {
 		t.Fatalf("names = %v", names)
 	}
 	if s := snap("?key=" + k.ID); s.Totals.Requests != 1 {
@@ -216,7 +216,7 @@ func TestUsageByKey(t *testing.T) {
 	if s := snap("?key=-"); s.Totals.Requests != 1 || s.ByKey[0].Key != "" {
 		t.Fatalf("只看未区分 = %+v", s.Totals)
 	}
-	if s := snap("?key="); s.Totals.Requests != 4 {
+	if s := snap("?key="); s.Totals.Requests != 5 {
 		t.Fatalf("空 key 不筛 = %+v", s.Totals)
 	}
 

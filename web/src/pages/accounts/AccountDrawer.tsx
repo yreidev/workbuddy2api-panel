@@ -3,12 +3,12 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 账号详情抽屉：展示后端已有、账号表放不下的运维信息——模型级限额台账、成本台账、
-// 最早到期批次、连败 / 熔断计数、最近一次请求。数据取自总览（随 5 秒轮询实时更新）。
+// 最早到期批次、连败 / 熔断计数、最近一次请求、上次测活。数据取自总览（随 5 秒轮询实时更新）。
 // 账号备注也在这里改（存在网关的号池状态里，各页的账号名都优先用它）。
 import { useState, type ReactNode } from 'react'
 import { Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, TextField, toast, useMediaQuery } from '@heroui/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { activeRateLimits, creditsText, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditsText, livenessSummary, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
 import { acct, post } from '../../lib/api'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
@@ -105,6 +105,7 @@ function Body({ a, health, now, busy, run }: {
   const earliest = timeMs(a.credits_earliest_expiry)
   const breaker = timeMs(a.breaker_until)
   const degrade = timeMs(a.degrade_until)
+  const lv = a.last_liveness
 
   return (
     <>
@@ -188,6 +189,21 @@ function Body({ a, health, now, busy, run }: {
           <Row label="累计 token">{formatTokenCount(tu.total_tokens)}（输入 {formatTokenCount(tu.prompt_tokens)} · 输出 {formatTokenCount(tu.completion_tokens)}）</Row>
           <Row label="最近一次">{tu.last_model || '—'} · {formatLatency(tu.last_latency_ms)} · {formatRate(tu.last_tokens_per_second)}</Row>
           <Row label="最近使用">{when(tu.last_used_at)}</Row>
+        </Section>
+
+        <Separator />
+        <Section title="上次测活">
+          {lv ? (
+            <>
+              <Row label="结果"><span className={`break-all ${lv.ok ? 'text-success' : 'text-danger'}`}>{livenessSummary(lv)}</span></Row>
+              <Row label="时间">{when(lv.at)}（{lv.scheduled ? '定时测活' : '手动测活'}）</Row>
+              {lv.model && <Row label="模型"><span className="break-all">{lv.model}</span></Row>}
+              {!!lv.credit && <Row label="扣积分">{lv.credit}</Row>}
+              {lv.recovered && <Row label="恢复">测通后解除了冷却、熔断或网关自动加的禁用</Row>}
+            </>
+          ) : (
+            <p className="text-sm text-muted">还没测过。点下面的「测活」给这个号发一条最短的对话。</p>
+          )}
         </Section>
       </Drawer.Body>
       <Drawer.Footer>

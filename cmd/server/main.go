@@ -290,6 +290,9 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	case cfg.BalanceRefreshInterval > 0:
 		log.Printf("余额后台刷新：每 %s（签到时点照常额外刷新）", cfg.BalanceRefreshInterval)
 	}
+	if !cfg.Schedule.LivenessEnabled {
+		log.Printf("定时测活已禁用（schedule.liveness_enabled=false）")
+	}
 	switch cfg.Pool.CrossRealm {
 	case livecfg.CrossRealmMerge:
 		log.Printf("跨域负载均衡：合池（pool.cross_realm=merge），不带前缀的模型名在国内版 + 国际版合池选号")
@@ -435,6 +438,8 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		GlobalEnabled: cfg.Global.Enabled,
 		Version:       appVersion,
 	})
+	// 测活走 handler 的对话链路（面板单测、全部测活、定时测活都经 scheduler 调它）。
+	sch.SetLiveness(h.TestAccount)
 
 	// 先占端口再起后台任务和停机协程：端口被占时直接返回，不先跑调度、不打停机日志。
 	if ln == nil {
@@ -454,6 +459,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	}
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
+	sch.StartLiveness(ctx, cfg.LivenessInterval)
 	pn.StartUpdateCheck(ctx)
 
 	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
@@ -763,6 +769,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
 		!newCfg.Schedule.GrowthEnabled)
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
+	sch.SetLivenessInterval(newCfg.LivenessInterval)
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 	logs.apply(newCfg)
 

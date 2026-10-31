@@ -156,6 +156,11 @@ type Config struct {
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
 		BalanceRefreshEnabled bool `json:"balance_refresh_enabled"` // 缺省 true；false = 关闭
 		BalanceRefreshMinutes int  `json:"balance_refresh_minutes"` // 缺省 5；<=0 回落 5
+
+		// 定时测活：每隔一段时间给整个号在限流冷却、熔断中的号发一条最短的真实对话，测通就提前恢复
+		// （见 scheduler/liveness.go）。余额不足、风控、禁用、暂停选号的号不测。
+		LivenessEnabled bool `json:"liveness_enabled"` // 缺省 true；false = 关闭
+		LivenessMinutes int  `json:"liveness_minutes"` // 缺省 30；<=0 回落 30
 	} `json:"schedule"`
 
 	Global struct {
@@ -295,6 +300,7 @@ type Config struct {
 	SessionTTL             time.Duration `json:"-"`
 	SessionGCInterval      time.Duration `json:"-"`
 	BalanceRefreshInterval time.Duration `json:"-"` // 0 = 不启动（enabled=false）
+	LivenessInterval       time.Duration `json:"-"` // 定时测活间隔；0 = 关闭（liveness_enabled=false）
 	ExpiringSoonDur        time.Duration `json:"-"`
 	// CostExploreIntervalDur 解析后的 costTier 探索窗口（issue #136）；0 = 关停。
 	CostExploreIntervalDur time.Duration `json:"-"`
@@ -350,6 +356,8 @@ func Default() *Config {
 	c.Schedule.BlackcatEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5
+	c.Schedule.LivenessEnabled = true
+	c.Schedule.LivenessMinutes = 30
 	c.Upstream.TimeoutSeconds = 120
 	// TLSFingerprint 缺省 true（伪装官方客户端的 TLS 指纹）；键缺席保留 true，显式 false 才关。
 	c.Upstream.TLSFingerprint = true
@@ -741,6 +749,13 @@ func (c *Config) normalize() error {
 			c.Schedule.BalanceRefreshMinutes = 5
 		}
 		c.BalanceRefreshInterval = time.Duration(c.Schedule.BalanceRefreshMinutes) * time.Minute
+	}
+	// 定时测活同理：启用时 minutes<=0 回落默认 30；关闭时 interval 保持 0。
+	if c.Schedule.LivenessEnabled {
+		if c.Schedule.LivenessMinutes <= 0 {
+			c.Schedule.LivenessMinutes = 30
+		}
+		c.LivenessInterval = time.Duration(c.Schedule.LivenessMinutes) * time.Minute
 	}
 	if err := c.validateScheduleHours(); err != nil {
 		return err

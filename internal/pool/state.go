@@ -15,6 +15,9 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 )
 
+// ManualDisableReason 面板上点「禁用」写的原因。测活测通后不解除这种禁用（见 RecoverAfterLiveness）。
+const ManualDisableReason = "manual disable (panel)"
+
 func (p *Pool) Disable(uid, reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -582,6 +585,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		TokenUsage:               e.tokenUsage,
 		LastSuccessTime:          e.lastSuccess,
 		LastErrTime:              e.lastErr,
+		LastLiveness:             e.liveness,
 		Until:                    e.until,
 		SoftStreak:               e.softStreak,
 		ModelCosts:               p.modelCostsStatusLocked(e, now),

@@ -3,8 +3,8 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 账号池的状态推导、筛选与排序（纯函数，见 accounts.test.ts）。
-import { dur, fmtLocalDateTime, timeMs } from './format'
-import type { Account, Overview, RateLimitedModel } from './types'
+import { dur, fmtLocalDateTime, formatLatency, timeMs } from './format'
+import type { Account, LivenessResult, Model, Overview, RateLimitedModel } from './types'
 
 /** paused = 暂停选号：不参与选号，但签到 / 活跃上报 / 保活 / 刷新余额照常 */
 export type AccountState = 'ok' | 'cooling' | 'paused' | 'disabled'
@@ -205,4 +205,18 @@ export function sortAccounts(list: Account[], key: AccountSortKey | null, desc: 
     return a < b ? -1 : a > b ? 1 : 0
   })
   return desc ? out.reverse() : out
+}
+
+/** 上次测活的一句话：「通 · 首字 1.2s · 共 2.3s」「不通（429）：原因」 */
+export function livenessSummary(r: LivenessResult): string {
+  if (r.ok) {
+    return ['通', r.ttfb_ms ? '首字 ' + formatLatency(r.ttfb_ms) : '', r.duration_ms ? '共 ' + formatLatency(r.duration_ms) : ''].filter(Boolean).join(' · ')
+  }
+  return '不通' + (r.status ? '（' + r.status + '）' : '') + (r.error ? '：' + r.error : '')
+}
+
+/** 单测弹窗里能换的模型：这个号所在域的目录（企业专属的只给企业号），去掉「cn:」「global:」前缀 */
+export function livenessModels(models: Model[], a: Pick<Account, 'realm' | 'enterprise'>): string[] {
+  const prefix = (a.realm === 'global' ? 'global' : 'cn') + ':'
+  return models.filter((m) => m.id.startsWith(prefix) && (!m.enterprise_only || a.enterprise)).map((m) => m.id.slice(prefix.length))
 }

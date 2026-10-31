@@ -22,6 +22,7 @@ package upstream
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
@@ -163,4 +164,43 @@ func (c *Client) EnterpriseOnlyModels(realm string) []ModelInfo {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// CheapestModel 测活用的模型：这个号能接的模型里积分倍率最低的一个。候选是这个域的目录加上这个号自己的
+// 企业目录，按 ServesModel 过滤；倍率先看企业目录里的，再看域倍率表，不知道的排在知道的后面，同价按名字。
+// skip 返回 true 的不算（models.hidden 里藏起来的）。目录都还没拉到时返回空串。
+func (c *Client) CheapestModel(uid, realm string, enterprise bool, skip func(string) bool) string {
+	if c == nil {
+		return ""
+	}
+	rates := map[string]string{}
+	c.effortsMu.RLock()
+	for m := range c.realmModels[realmKey(realm)] {
+		rates[m] = c.modelRates[realmKey(realm)][m]
+	}
+	c.effortsMu.RUnlock()
+	c.accountMu.RLock()
+	if cat, ok := c.accountCatalogs[uid]; ok {
+		for _, mi := range cat.infos {
+			if r := effectiveModelRate(mi); r != "" || rates[mi.ID] == "" {
+				rates[mi.ID] = r
+			}
+		}
+	}
+	c.accountMu.RUnlock()
+
+	best, bestRate, bestKnown := "", 0.0, false
+	for m, raw := range rates {
+		if m == "" || skip(m) || !c.ServesModel(uid, realm, enterprise, m) {
+			continue
+		}
+		rate, err := strconv.ParseFloat(raw, 64)
+		known := err == nil
+		better := best == "" || (known && !bestKnown) ||
+			(known == bestKnown && (known && rate < bestRate || (!known || rate == bestRate) && m < best))
+		if better {
+			best, bestRate, bestKnown = m, rate, known
+		}
+	}
+	return best
 }

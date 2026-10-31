@@ -4,8 +4,8 @@
 
 // 账号的各个展示单元（名称、状态、积分、用量），账号表、账号卡片、详情抽屉共用。
 import { Chip, ProgressBar } from '@heroui/react'
-import { activeRateLimits, creditPercent, isUnlimited, rateLimitInfo, type Health } from '../../lib/accounts'
-import { dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
+import { activeRateLimits, creditPercent, isUnlimited, livenessSummary, rateLimitInfo, type Health } from '../../lib/accounts'
+import { ago, dateTime, dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import type { Account } from '../../lib/types'
 import { Hint } from '../../components/Hint'
 
@@ -57,7 +57,27 @@ export function StatusCell({ a, health, now }: { a: Account; health: Health; now
       <HealthChip health={health} now={now} />
       {a.reason && <span className="line-clamp-2 max-w-40 text-xs text-muted">{a.reason}</span>}
       <RateLimitList a={a} now={now} />
+      <LivenessLine a={a} now={now} className="max-w-40" />
     </div>
+  )
+}
+
+/** 上次测活：「测活 3 分钟前 · 通 · 首字 1.2s · 共 2.3s」，不通标红；悬停看模型、时间和完整原因。没测过不显示 */
+export function LivenessLine({ a, now, className = '' }: { a: Account; now: number; className?: string }) {
+  const r = a.last_liveness
+  const at = timeMs(r?.at)
+  if (!r || at == null) return null
+  const tip = [
+    (r.scheduled ? '定时测活' : '手动测活') + ' · ' + dateTime(at),
+    r.model && '模型 ' + r.model,
+    !!r.credit && '扣了 ' + r.credit + ' 积分',
+    r.recovered && '测通后解除了冷却、熔断或网关自动加的禁用',
+    !r.ok && r.error,
+  ].filter(Boolean).join('\n')
+  return (
+    <Hint tip={tip} className={`line-clamp-2 wrap-anywhere text-xs ${r.ok ? 'text-muted' : 'text-danger'} ${className}`}>
+      测活 {ago(r.at, now)} · {livenessSummary(r)}
+    </Hint>
   )
 }
 

@@ -360,6 +360,29 @@ func TestApplyErrorPolicyKinds(t *testing.T) {
 		}
 	})
 
+	t.Run("已经禁用的号再回 11140 不记风控波，人工禁用不改原因", func(t *testing.T) {
+		p := testPoolWith(
+			&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999},
+			&auth.Auth{UID: "u2", AccessToken: "at", ExpiresAt: 9999999999},
+			&auth.Auth{UID: "u3", AccessToken: "at", ExpiresAt: 9999999999},
+		)
+		p.Disable("u1", "12153 session dead")
+		p.Disable("u2", pool.ManualDisableReason)
+		h := NewHandler(Config{Pool: p, Upstream: newFakeUpstream(t, func(string) (int, string, bool) { return 200, `{"code":0}`, false })})
+		// 测活复测这两个号都回 11140：不是新的风控
+		h.applyErrorPolicy("u1", upstream.ErrAccountFault, "request illegal", "m", nil)
+		h.applyErrorPolicy("u2", upstream.ErrAccountFault, "request illegal", "m", nil)
+		if st, _ := p.Status("u3"); st.Cooling {
+			t.Fatalf("复测已禁用的号不应触发风控波: %+v", st)
+		}
+		if st, _ := p.Status("u1"); !strings.Contains(st.DisabledReason, "11140") {
+			t.Errorf("自动禁用的号原因应更新成 11140: %q", st.DisabledReason)
+		}
+		if st, _ := p.Status("u2"); st.DisabledReason != pool.ManualDisableReason {
+			t.Errorf("人工禁用的原因不应被改: %q", st.DisabledReason)
+		}
+	})
+
 	t.Run("服务端错误计入熔断", func(t *testing.T) {
 		h, p := policyFixture(t)
 		for i := 0; i < 3; i++ { // 默认熔断阈值 3：第三次触发熔断期

@@ -18,6 +18,8 @@ func TestClassifyLine(t *testing.T) {
 		"checkin 5c162cc9: 已签到":               ChTask,
 		"panel: 任务动作 uid=x code=chat_5":       ChTask,
 		"panel: 队列启动：6 项（并发 2）":               ChTask,
+		"liveness 定时测活开始：2 个号":                ChTask,
+		"panel: 手动全部测活已触发（3 个号）":              ChTask,
 		"panel: revive uid=x":                 ChSys,
 		"workbuddy2api listening on :7863":    ChSys,
 		"scheduler: 余额后台刷新每 5m0s":             ChSys,

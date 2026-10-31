@@ -4,10 +4,10 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  accountHealth, accountName, activeRateLimits, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, notesOf, parseCardSort, poolCredits,
-  rateLimitInfo, relabel, sortAccounts,
+  accountHealth, accountName, activeRateLimits, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, livenessModels, livenessSummary, notesOf,
+  parseCardSort, poolCredits, rateLimitInfo, relabel, sortAccounts,
 } from './accounts'
-import type { Account } from './types'
+import type { Account, Model } from './types'
 
 const base: Account = {
   uid: 'u1', credits: 50, cooling: false, disabled: false, consecutive_fails: 0, in_flight: 0, breaker_fails: 0,
@@ -156,5 +156,31 @@ describe('rateLimitInfo', () => {
   it('只有网关重试时间；Go 零值时间当作没有', () => {
     const r = rateLimitInfo({ model: 'glm-5.3', until: new Date(t(15)).toISOString(), reset_at: '0001-01-01T00:00:00Z' }, at)
     expect(r.detail).toBe('预计 2026-09-28 15:00 恢复（剩余 1时00分）')
+  })
+})
+
+describe('livenessSummary', () => {
+  it('通：带上首字和总耗时，没有的省掉', () => {
+    expect(livenessSummary({ at: '', ok: true, ttfb_ms: 1200, duration_ms: 2300 })).toBe('通 · 首字 1.2s · 共 2.3s')
+    expect(livenessSummary({ at: '', ok: true, duration_ms: 800 })).toBe('通 · 共 800ms')
+    expect(livenessSummary({ at: '', ok: true })).toBe('通')
+  })
+  it('不通：带上状态码和原因', () => {
+    expect(livenessSummary({ at: '', ok: false, status: 429, error: 'rate limited' })).toBe('不通（429）：rate limited')
+    expect(livenessSummary({ at: '', ok: false })).toBe('不通')
+  })
+})
+
+describe('livenessModels', () => {
+  const models: Model[] = [
+    { id: 'cn:glm-5.2' }, { id: 'cn:claude-x', enterprise_only: true }, { id: 'global:gpt-x' }, { id: 'cn:deepseek-v4' },
+  ]
+  it('按号的域挑目录、去掉域前缀，保持目录顺序', () => {
+    expect(livenessModels(models, {})).toEqual(['glm-5.2', 'deepseek-v4'])
+    expect(livenessModels(models, { realm: 'cn' })).toEqual(['glm-5.2', 'deepseek-v4'])
+    expect(livenessModels(models, { realm: 'global' })).toEqual(['gpt-x'])
+  })
+  it('企业专属模型只给企业号', () => {
+    expect(livenessModels(models, { realm: 'cn', enterprise: true })).toEqual(['glm-5.2', 'claude-x', 'deepseek-v4'])
   })
 })

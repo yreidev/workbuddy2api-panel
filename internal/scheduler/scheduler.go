@@ -85,6 +85,14 @@ type Scheduler struct {
 	// balanceInterval 余额刷新间隔（纳秒，0=暂停）。atomic 读写：执行循环每轮读当前值，
 	// SetBalanceInterval 可任意时刻热改（面板保存配置）。
 	balanceInterval atomic.Int64
+
+	// 测活（liveness.go）：livenessFn 由 main 在 server 建好后接上；livenessInterval 定时测活间隔
+	// （纳秒，0=暂停），rearmLiveness 是它的重算通知；livenessRunning 保证全部测活和定时测活同时只跑一批。
+	livenessMu       sync.Mutex
+	livenessFn       LivenessFunc
+	livenessInterval atomic.Int64
+	rearmLiveness    chan struct{}
+	livenessRunning  atomic.Bool
 }
 
 // New 构建。
@@ -109,6 +117,7 @@ func New(cfg Config) *Scheduler {
 		adoptTried:    make(map[string]string),
 		rearmSchedule: make(chan struct{}, 1),
 		rearmBalance:  make(chan struct{}, 1),
+		rearmLiveness: make(chan struct{}, 1),
 	}
 }
 

@@ -17,8 +17,11 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/apikeys"
 )
 
-// adminUsageKey 用量统计里管理员密钥的密钥维度，和 server 包一致。
-const adminUsageKey = "admin"
+// adminUsageKey / livenessUsageKey 用量统计里管理员密钥、测活的密钥维度，和 server 包一致。
+const (
+	adminUsageKey    = "admin"
+	livenessUsageKey = "liveness"
+)
 
 // keyView 列表里的一个密钥，另带算好的过期状态（按网关的时钟算，不看浏览器）。
 type keyView struct {
@@ -119,13 +122,15 @@ func (p *Panel) writeKeyResult(w http.ResponseWriter, k apikeys.Key, err error) 
 	}
 }
 
-// keyLabel 用量统计里密钥维度的显示名：管理员、已删除的密钥，空串是没开鉴权或加密钥维度之前的数据。
+// keyLabel 用量统计里密钥维度的显示名：管理员、测活、已删除的密钥，空串是没开鉴权或加密钥维度之前的数据。
 func keyLabel(id string, names map[string]string) string {
 	switch id {
 	case "":
 		return "未区分"
 	case adminUsageKey:
 		return "管理员"
+	case livenessUsageKey:
+		return "测活"
 	}
 	if n, ok := names[id]; ok {
 		return n

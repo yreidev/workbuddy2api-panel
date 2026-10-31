@@ -76,6 +76,33 @@ export interface Account {
   in_flight: number
   breaker_fails: number
   breaker_until?: string
+  /** 上次测活（internal/pool/liveness.go 的 LivenessResult）；从没测过时没有 */
+  last_liveness?: LivenessResult
+}
+
+/** 一次测活的结果：给这个号发一条最短的真实对话，看它现在能不能用 */
+export interface LivenessResult {
+  at: string
+  ok: boolean
+  /** 测的模型（不带域前缀） */
+  model?: string
+  /** 测活请求最后回的 HTTP 状态码 */
+  status?: number
+  /** 失败原因（同请求记录，最多 200 字） */
+  error?: string
+  ttfb_ms?: number
+  duration_ms?: number
+  credit?: number
+  /** 定时测活发起的；面板上点的没有这个字段 */
+  scheduled?: boolean
+  /** 测通后解除了冷却、熔断或网关自动加的禁用 */
+  recovered?: boolean
+}
+
+/** 单号测活接口的返回：结果和上游回复的文字 */
+export interface LivenessResp {
+  result: LivenessResult
+  reply: string
 }
 
 export interface Overview {

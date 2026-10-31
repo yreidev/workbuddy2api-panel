@@ -9,7 +9,7 @@ import { accountName, activeRateLimits, type Health } from '../../lib/accounts'
 import { ago } from '../../lib/format'
 import type { Account } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
-import { AccountName, CreditsCell, HealthChip, RateLimitList, UsageChips } from './AccountCells'
+import { AccountName, CreditsCell, HealthChip, LivenessLine, RateLimitList, UsageChips } from './AccountCells'
 import { SelectionCheckbox } from './ExportBar'
 import type { AccountAction } from './useAccountActions'
 
@@ -70,6 +70,7 @@ export function AccountCard({ a, health, now, poolMax, selected, onSelect, onOpe
       </div>
 
       <UsageChips a={a} />
+      <LivenessLine a={a} now={now} />
 
       <div className="mt-auto flex flex-col gap-2">
         <Separator />

@@ -102,7 +102,9 @@ type Status struct {
 	SuccessCount    int64     `json:"success_count,omitempty"`
 	ErrTotal        int64     `json:"err_total,omitempty"`
 	LastSuccessTime time.Time `json:"last_success,omitempty"`
-	LastErrTime     time.Time `json:"last_err,omitempty"`
+	// LastLiveness 最近一次测活的结果；没测过为 nil。
+	LastLiveness *LivenessResult `json:"last_liveness,omitempty"`
+	LastErrTime  time.Time       `json:"last_err,omitempty"`
 	// CheckinDone 本地今日已签到（签到成功或上游"今天已签到"幂等拒绝均算）。
 	// global 域账号无签到体系，恒为 false。面板签到按钮据此显示 签到/已签。
 	CheckinDone bool       `json:"checkin_done,omitempty"`
@@ -208,9 +210,11 @@ type entry struct {
 	// paused 暂停选号：与 disabled 正交。置位后退出选号候选（healthy 判否），
 	// 但保号任务遍历只按 Disabled 过滤，故 paused 号天然继续参与签到 / 活跃上报 /
 	// 保活 / 余额刷新。持久化（state.json），跨重启不丢。
-	paused   bool
-	note     string // 面板备注（Status.Note），持久化
-	reason   string
+	paused bool
+	note   string // 面板备注（Status.Note），持久化
+	reason string
+	// liveness 最近一次测活的结果（Status.LastLiveness），持久化；nil = 没测过。
+	liveness *LivenessResult
 	lastUsed time.Time // 最近被选中时刻（防并发撞号）
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
 	// Windows 等平台 time.Now() 精度有限（~0.5ms），高并发/快速连续选号时多个
@@ -430,8 +434,10 @@ type stateAccount struct {
 	Note         string    `json:"note,omitempty"`
 	Reason       string    `json:"reason,omitempty"`
 	Until        time.Time `json:"until,omitempty"`
-	CoolKind     CoolKind  `json:"cool_kind"`
-	SuccessCount int64     `json:"success_count,omitempty"`
+	// Liveness 最近一次测活的结果（entry.liveness 同源）。
+	Liveness     *LivenessResult `json:"liveness,omitempty"`
+	CoolKind     CoolKind        `json:"cool_kind"`
+	SuccessCount int64           `json:"success_count,omitempty"`
 	// err_total 累计错误计数。旧版 err_count（连续错误）仍可读：加载时映射到 err_total，
 	// 仅作一次性迁移，不再回写 err_count。
 	ErrTotal    int64     `json:"err_total,omitempty"`
