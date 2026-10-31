@@ -5,6 +5,7 @@
 package scheduler
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,14 +74,20 @@ func (r *recorderUpstream) server() *httptest.Server {
 // enterpriseId（企业版），否则是个人号（对照组）。
 func enterpriseTestScheduler(t *testing.T, enterprise bool) (*Scheduler, *recorderUpstream) {
 	t.Helper()
-	r := &recorderUpstream{}
-	srv := r.server()
-	t.Cleanup(srv.Close)
-
 	a := &auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999}
 	if enterprise {
 		a.EnterpriseID = "ent-1"
 	}
+	return gateTestScheduler(t, a)
+}
+
+// gateTestScheduler 构造只含账号 a 的调度器，上游是记路径的假服务器。
+func gateTestScheduler(t *testing.T, a *auth.Auth) (*Scheduler, *recorderUpstream) {
+	t.Helper()
+	r := &recorderUpstream{}
+	srv := r.server()
+	t.Cleanup(srv.Close)
+
 	p := pool.New("")
 	p.Add(a)
 
@@ -172,4 +179,42 @@ func TestEnterpriseGateKeepsKeepaliveAndBalance(t *testing.T) {
 	if s.cfg.Pool == nil {
 		t.Fatal("pool missing")
 	}
+}
+
+// TestEnterpriseSwitchSessionGate 企业切换会话（个人号，访问令牌带 token_source=enterprise_switch）：
+// 活跃上报、猫猫旅行、夜猫子、连登管家都跳过；签到照发，额度照个人口径查。
+func TestEnterpriseSwitchSessionGate(t *testing.T) {
+	restoreClock := nowForNightWindow
+	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 7, 23, 30, 0, 0, time.Local) }
+	t.Cleanup(func() { nowForNightWindow = restoreClock })
+
+	switchAuth := func() *auth.Auth {
+		payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"u1","token_source":"enterprise_switch"}`))
+		return &auth.Auth{UID: "u1", AccessToken: "h." + payload + ".s", RefreshToken: "rt", ExpiresAt: 9999999999}
+	}
+	for _, c := range []struct {
+		name     string
+		run      func(*Scheduler)
+		endpoint string
+	}{
+		{"活跃上报", func(s *Scheduler) { s.RunActivityNow() }, "/v2/report"},
+		{"猫猫旅行", func(s *Scheduler) { s.RunTravelNow() }, "/activity/growth/buddy/info"},
+		{"夜猫子", func(s *Scheduler) { s.RunBlackcatNow() }, "/v2/activity/growth/tasks"},
+		{"连登管家", func(s *Scheduler) { s.RunStreakBonusNow() }, "/activity/growth/streak"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, r := gateTestScheduler(t, switchAuth())
+			c.run(s)
+			if r.has(c.endpoint) {
+				t.Errorf("企业切换会话不应发起 %s，实际请求=%v", c.endpoint, r.snapshot())
+			}
+		})
+	}
+	t.Run("签到照发", func(t *testing.T) {
+		s, r := gateTestScheduler(t, switchAuth())
+		s.RunCheckinNow()
+		if !r.has("/daily-checkin") || !r.has("/billing/meter/get-user-resource") {
+			t.Errorf("企业切换会话应照常签到并按个人口径查额度，实际请求=%v", r.snapshot())
+		}
+	})
 }

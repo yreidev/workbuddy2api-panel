@@ -57,6 +57,8 @@ export interface Account {
   realm?: string
   /** 企业版（auth 带 enterpriseId）：没有签到 / 成长任务；credits_total 是分配额度，-1 = 不限量 */
   enterprise?: boolean
+  /** 个人号的凭证签发自企业切换会话（令牌带 token_source=enterprise_switch）：成长任务、连登、旅行、夜猫子不计分，网关都跳过，要重新登录 */
+  enterprise_switch?: boolean
   /** 本地今日已签到（签到成功或上游「今天已签到」都算；国际版没有签到，恒为 false） */
   checkin_done?: boolean
   disabled: boolean

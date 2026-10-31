@@ -520,6 +520,34 @@ func TestAccountTaskAutoValidation(t *testing.T) {
 	})
 }
 
+// 企业版、企业切换会话做不了成长任务：单任务和一键完成都回 422 并说明原因，不发上游请求。
+func TestAccountTaskAutoEnterpriseSession(t *testing.T) {
+	autoFastWaits(t)
+	for _, c := range []struct {
+		name  string
+		setup func(a *auth.Auth)
+		want  string
+	}{
+		{"企业切换会话", func(a *auth.Auth) { a.AccessToken = enterpriseSwitchToken("u1") }, "切回个人身份"},
+		{"企业版", func(a *auth.Auth) { a.EnterpriseID = "ent-1" }, "企业版账号没有个人成长体系"},
+	} {
+		for _, path := range []string{"/panel/api/accounts/u1/tasks/auto", "/panel/api/accounts/u1/tasks/auto_all"} {
+			t.Run(c.name+" "+path, func(t *testing.T) {
+				p, up := newAutoPanel(t)
+				c.setup(autoAuth(t, p))
+				rec := postJSON(t, p, path, `{"task_code":"chat_5"}`)
+				autoWantCode(t, rec, http.StatusUnprocessableEntity)
+				if txt := autoErrText(t, rec); !strings.Contains(txt, c.want) {
+					t.Fatalf("错误信息应含「%s」，got %q", c.want, txt)
+				}
+				if n := len(up.requests()); n != 0 {
+					t.Fatalf("422 不应发出上游请求，实际 %d 个", n)
+				}
+			})
+		}
+	}
+}
+
 // 前置读取的三种结果：列表失败 502、账号没有该任务 404、已领取直接跳过。
 func TestAccountTaskAutoListFailures(t *testing.T) {
 	autoFastWaits(t)

@@ -4,7 +4,7 @@
 
 // 账号的各个展示单元（名称、状态、积分、用量），账号表、账号卡片、详情抽屉共用。
 import { Chip, ProgressBar } from '@heroui/react'
-import { activeRateLimits, creditPercent, isUnlimited, rateLimitInfo, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditPercent, ENTERPRISE_SWITCH_TIP, isUnlimited, rateLimitInfo, type Health } from '../../lib/accounts'
 import { dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import type { Account } from '../../lib/types'
 import { Hint } from '../../components/Hint'
@@ -21,12 +21,17 @@ export function AccountName({ a }: { a: Account }) {
   )
 }
 
-/** 国际版 / 企业版标签（账号名旁边、详情抽屉标题） */
+/** 国际版 / 企业版 / 企业切换会话标签（账号名旁边、详情抽屉标题） */
 export function RealmChips({ a }: { a: Account }) {
   return (
     <>
       {a.realm === 'global' && <Chip size="sm" variant="soft" color="accent">国际版</Chip>}
       {a.enterprise && <Chip size="sm" variant="soft" color="default">企业版</Chip>}
+      {a.enterprise_switch && (
+        <Hint tip={ENTERPRISE_SWITCH_TIP} className="inline-flex">
+          <Chip size="sm" variant="soft" color="warning">企业切换会话</Chip>
+        </Hint>
+      )}
     </>
   )
 }

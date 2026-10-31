@@ -236,6 +236,11 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 			if a.IsEnterprise() {
 				return
 			}
+			// 企业切换会话：列表读得到，但做了不计分，每项都白跑（含真实对话）。
+			if a.IsEnterpriseSession() {
+				log.Printf("panel: WARN 队列跳过 uid=%s：%s", a.UID, enterpriseSwitchHint)
+				return
+			}
 			if growth {
 				if tasks, err := p.cfg.Upstream.ListTasks(a); err == nil {
 					listed := map[string]bool{} // 默认列表里有的任务码

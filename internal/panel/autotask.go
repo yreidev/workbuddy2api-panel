@@ -666,11 +666,30 @@ func runMiniExpert(p *Panel, a *auth.Auth) (string, error) {
 	return fmt.Sprintf("任务点亮并领取奖励（+%dc +%de）", credit, energy), nil
 }
 
+// enterpriseSwitchHint 企业切换会话做不了成长任务时给的说明（见 auth.IsEnterpriseSession）。
+const enterpriseSwitchHint = "这个号的凭证是企业切换会话（token_source=enterprise_switch），成长任务的行为事件会被上游忽略、不计分；" +
+	"请在浏览器里切回个人身份，移除这个号后重新登录"
+
+// growthBlocked 企业上下文做不了成长任务时的说明，个人号返回空串。
+func growthBlocked(a *auth.Auth) string {
+	switch {
+	case a.IsEnterprise():
+		return "企业版账号没有个人成长体系，成长任务做不了"
+	case a.IsEnterpriseSession():
+		return enterpriseSwitchHint
+	}
+	return ""
+}
+
 // accountTaskAuto 一键完成单个任务：执行对应动作 → 回读进度 → 汇报结果。
 func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.accountByUID(w, uid)
 	if a == nil {
+		return
+	}
+	if msg := growthBlocked(a); msg != "" {
+		writeErr(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 	var body struct {
@@ -1444,6 +1463,10 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.accountByUID(w, uid)
 	if a == nil {
+		return
+	}
+	if msg := growthBlocked(a); msg != "" {
+		writeErr(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 	// per-account 互斥（与单任务动作共用一把锁）：重复点击 409。

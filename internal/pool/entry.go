@@ -89,9 +89,12 @@ type Status struct {
 	// Enterprise 企业版账号（auth.EnterpriseID 非空，计算值不落盘）。
 	// 企业版无个人成长体系（签到/成长任务/连登/旅行/夜猫子 上游均拒），
 	// 面板据此隐藏对应按钮；选号、保活、额度展示不受影响。
-	Enterprise     bool   `json:"enterprise,omitempty"`
-	Disabled       bool   `json:"disabled"`
-	DisabledReason string `json:"disabled_reason,omitempty"` // 仅 disabled 账号：禁用原因（运维可见）
+	Enterprise bool `json:"enterprise,omitempty"`
+	// EnterpriseSwitch 个人号的凭证签发自企业切换会话（计算值，见 auth.IsEnterpriseSession）：
+	// 成长任务、连登、旅行、夜猫子都被跳过，面板提示重新登录。企业版不置位。
+	EnterpriseSwitch bool   `json:"enterprise_switch,omitempty"`
+	Disabled         bool   `json:"disabled"`
+	DisabledReason   string `json:"disabled_reason,omitempty"` // 仅 disabled 账号：禁用原因（运维可见）
 	// Paused 暂停选号：退出选号候选（与 disabled 一样不参与选号），但**照常参与**
 	// 签到 / 活跃上报 / 保活 / 余额刷新四类保号任务。与 disabled 正交——disabled 是
 	// 「授权/session 终态，需人工 revive」，paused 是「运维临时让位」（多号轮换场景），
