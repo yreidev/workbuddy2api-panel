@@ -25,10 +25,11 @@
 | **用量** | 请求数、token 构成、失败率、平均延迟与吐字速率；按小时的 token 时序图；按账号 / 模型 / 域 / 密钥的用量明细；积分扣除历史（每百万 token 积分、前缀缓存命中率）。建过客户端密钥后可以按密钥筛，整页只算这个密钥的请求 |
 | **请求记录** | 每次调用 API 的记录：成功率、平均耗时、进行中；每条请求的结果与失败原因、模型 / 账号 / 密钥 / 来源 IP / User-Agent / token 与缓存命中 / 积分 / 请求 ID，可按条件和时间范围从归档里查。失败原因是回给客户端的错误消息，最多 200 字，悬停看全文 |
 | **积分构成** | 积分到期分布（按剩余天数、按账号着色）、账号对比、单账号逐包明细（按周期刷新的包，到期列标「刷新」） |
+| **积分获取** | 签到、成长任务领奖、积分补偿、猫猫旅行、新手礼包、连登兑换领到的积分逐笔记录：合计、按来源、按账号，以及流水（时间、账号、来源、任务名或连登档位、积分）。按时间范围、账号、来源筛，合计算区间内符合条件的全部笔数，流水只列最新的 100 / 500 / 2000 笔。只记领到的，不记扣除（扣除看「用量」里的积分扣除历史）；升级到有这一页的版本之前领的没有记录。任务名要本次打开面板后在任务中心扫描过才认得，否则显示任务码 |
 | **任务中心** | 扫描全部账号的成长任务待办，排队一键执行，实时显示进度；积分补偿查询与领取；券码查询 |
 | **模型与档位** | 上方是[模型路由](api.md#模型路由)规则表：每条「匹配 → 目标模型」，可排序、一键把 Claude Code 三档加到最前面；被前面更宽的规则挡住、永远轮不到的规则会标红，「试一下」输入一个模型名看会被怎么处理（按编辑中的规则算，不用先保存）；保存即生效。<br>接着是[对外隐藏的模型](api.md#隐藏模型)：从目录选（带域前缀）或手填不带前缀的名字，加一项、删一项都立即生效；表格里被隐藏的模型标「对外隐藏」。<br>下方列每个模型的状态、积分倍率（含限时优惠）、默认思考档、支持的档位、上下文长度与最大输出。状态两个域都判，只用网关手上的证据、不另发请求：有[模型锁](gateway.md#错误分类与账号处置)时按锁标「限流中」「部分可用」「无权限」「上游无此模型」「暂无可用号」；没有锁就看网关内存里最近 100 条请求中最新一条用过这个模型、真发到上游的（密钥白名单、隐藏名单拦下的不算），标「可用」「限流」「上游错误」「最近失败」；都没有标「待验证」，目录里列着不代表号能用。悬停看依据和时间；只有企业号能用的模型标「企业专属」；可叠加[实测输出上限](deployment.md#探测模型真实输出上限)。支持关键词、域、能力、档位、价格筛选和多种排序，数据一次拉全后在浏览器里筛 |
 | **密钥** | 新建、编辑、停用、重新生成、删除[客户端密钥](api.md#客户端密钥)：到期时间、每天和总量的请求次数 / token / 积分上限、模型白名单；列出每个密钥今天和累计的用量、最近使用时间；「接入方法」给出密钥原文和各客户端的填法。管理员密钥（`api_key`）没设时页面顶部会提醒 |
-| **配置** | 在线编辑配置，分服务 / 定时任务 / 账号池与流量治理 / 上游与高级 / 日志留存五组；底部保存条显示改了几项，需要重启的字段有标记，时长与时点当场校验。「日志留存」里请求记录、任务日志、系统日志、用量统计各一张卡片，设开关、保留天数和容量上限，卡片下面显示现有的文件数、大小和最早日期，可以一键清空，见[日志留存](configuration.md#日志留存) |
+| **配置** | 在线编辑配置，分服务 / 定时任务 / 账号池与流量治理 / 上游与高级 / 日志留存五组；底部保存条显示改了几项，需要重启的字段有标记，时长与时点当场校验。「日志留存」里请求记录、任务日志、系统日志、用量统计、积分获取各一张卡片，设开关、保留天数和容量上限，卡片下面显示现有的文件数、大小和最早日期，可以一键清空，见[日志留存](configuration.md#日志留存) |
 | **运行日志** | 网关的系统与任务日志，按任务 / 系统频道、级别和关键字筛选。「实时」看最近 500 行，停在底部时每 5 秒跟随；「历史」按时间范围从磁盘上的留存里查，一次最多 5000 行，更早的日子也查得到。每次调用的流水行只打在终端，不进这里，面板里看「请求记录」 |
 
 | 用量 | 模型与档位 |
@@ -99,13 +100,13 @@ IP 属于个人信息，所以由 `logging.request_client_info` 控制，默认�
 
 | 分组 | 端点 |
 |---|---|
-| 只读 | `GET overview` · `version`（`since` = 上次看过的版本，返回之后到当前版本的更新日志，`none` 表示没看过、只返回当前这一版；更新检查开着时另有远端最新版本和比本机新的各版本条目；`self_update` 是一键更新的状态与进度）· `usage`（`hours` 或 `from`/`to`；`key` = 只看一个密钥：客户端密钥的 id、`admin` 是管理员密钥、`-` 是没开鉴权或 1.3.0 之前的数据）· `packages` · `models` · `model_probes` · `logs` · `logs/archive`（按时间范围查运行日志的留存：`from` / `to` / `ch`（`task` / `sys`）/ `level`（`warn` = 警告及错误，`error` = 仅错误）/ `q` / `limit`（默认 500，最多 5000）；返回区间内最新的 `limit` 行，按时间先后排，`more` = 更早的还有没返回的）· `log_storage`（请求记录、任务日志、系统日志的文件数、大小、最早日期和保留天数，用量统计的明细条数与 `usage.json` 大小）· `request_metrics` · `request_logs`（`limit` / `outcome` / `account` / `model` / `client_ip` / `user_agent` / `api_key`（密钥名）/ `from` / `to`）· `config` · `tasks/queue` · `school/vouchers` |
+| 只读 | `GET overview` · `version`（`since` = 上次看过的版本，返回之后到当前版本的更新日志，`none` 表示没看过、只返回当前这一版；更新检查开着时另有远端最新版本和比本机新的各版本条目；`self_update` 是一键更新的状态与进度）· `usage`（`hours` 或 `from`/`to`；`key` = 只看一个密钥：客户端密钥的 id、`admin` 是管理员密钥、`-` 是没开鉴权或 1.3.0 之前的数据）· `packages` · `models` · `model_probes` · `logs` · `logs/archive`（按时间范围查运行日志的留存：`from` / `to` / `ch`（`task` / `sys`）/ `level`（`warn` = 警告及错误，`error` = 仅错误）/ `q` / `limit`（默认 500，最多 5000）；返回区间内最新的 `limit` 行，按时间先后排，`more` = 更早的还有没返回的）· `log_storage`（请求记录、任务日志、系统日志、积分获取的文件数、大小、最早日期和保留天数，用量统计的明细条数与 `usage.json` 大小）· `credit_log`（积分获取流水：`from` / `to` / `uid` / `source`（`checkin` / `task` / `compensation` / `travel` / `gift` / `redeem`）/ `limit`（默认 500，最多 5000）；返回区间内最新的 `limit` 笔，新的在前，`more` = 更早的还有没返回的；`total`、`count`、`by_source`、`by_account` 算的是区间内符合条件的全部）· `request_metrics` · `request_logs`（`limit` / `outcome` / `account` / `model` / `client_ip` / `user_agent` / `api_key`（密钥名）/ `from` / `to`）· `config` · `tasks/queue` · `school/vouchers` |
 | 账号运维 | `POST accounts/{uid}/checkin` · `balance` · `revive` · `pause` · `resume` · `disable` · `remove`<br>`POST accounts/{uid}/note`（`{"note":"…"}`，去掉首尾空白后最多 40 个字、不能有换行，空串清除；总览的账号带 `note`）<br>`POST checkin_all` · `travel_all` · `activity_all` · `keepalive_all` · `balance_all`<br>`POST accounts/export`（`{"uids":[…]}`，返回 `{"accounts":[…]}`，每项与 `auths/workbuddy-<uid>.json` 同形；有 uid 不在池里时整单 404） |
 | 任务 | `GET accounts/{uid}/tasks`<br>`POST accounts/{uid}/tasks/accept` · `accept_all` · `claim` · `auto` · `auto_all`<br>`POST tasks/scan_all` · `tasks/run_queue` |
 | 积分补偿 | `GET compensation`（逐账号查询官方状态，含已禁用账号，带 `disabled` 标记）<br>`POST accounts/{uid}/compensation/claim` · `POST compensation/claim_all`（先查状态再领取，已禁用账号只查不领；批量结果逐账号返回） |
 | 添加账号 | `POST login/start` · `GET login/poll` · `GET login/regions` · `POST import`（multipart 字段 `file`；网关凭证与 cockpit tools 格式逐项自动识别，单个对象或数组都行；旧路径 `import/cockpit` 仍可用） |
 | 客户端密钥 | `GET keys`（`keys` 带原文和今天、累计用量；`admin_key_set`：设没设 `api_key`；`required`：`/v1/*` 是否必须带密钥）<br>`POST keys`（新建，字段 `name` / `note` / `enabled` / `expires_at`（RFC 3339 或 `null`）/ `daily_limit` / `total_limit`（`requests` / `tokens` / `credits`，不填 = 不限）/ `models`）· `POST keys/{id}`（修改，整份提交）· `POST keys/{id}/regenerate` · `POST keys/{id}/delete` |
-| 写入 | `POST config`（校验 → 落盘 → 热应用，返回需重启的字段）· `POST usage/save`（立即把内存里的用量落盘）· `POST log_storage/{kind}/clear`（清空一类日志留存，`kind` = `requests` / `task` / `system` / `usage`；文件全删，含今天正在写的） |
+| 写入 | `POST config`（校验 → 落盘 → 热应用，返回需重启的字段）· `POST usage/save`（立即把内存里的用量落盘）· `POST log_storage/{kind}/clear`（清空一类日志留存，`kind` = `requests` / `task` / `system` / `usage` / `credit`；文件全删，含今天正在写的） |
 | 更新 | `POST version/check`（立即检查更新，返回同 `version`；30 秒内重复调用直接返回上次结果）<br>`POST update`（`{"version":"x.y.z"}`，必须是检查到的、比本机新的版本；在后台下载校验后重启，进度看 `version` 返回的 `self_update`）<br>`POST update/rollback`（删掉面板安装的版本；正在运行它时重启回程序自带的版本） |
 
 ## 安全

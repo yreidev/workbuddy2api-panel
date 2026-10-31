@@ -707,6 +707,10 @@ type Client struct {
 	// 面板保存配置热改，与 SanitizeFingerprints 同样用 atomic.Bool。
 	ModelOptimization atomic.Bool
 
+	// OnEarning 领到积分时调用（签到、领奖、补偿、旅行、新手礼包、连登兑换，见 earning.go）；nil = 不记。
+	// 在发出第一个请求之前设好，之后不再改。
+	OnEarning func(Earning)
+
 	// UserAgent 出站 User-Agent 显式覆盖（非空时除任务中心桌面端上报外都用它）。
 	// 空 = 按账号域取官方桌面端的 UA：对话 / 刷新令牌 / 模型目录用 userAgent（内置 CLI），
 	// 积分 / 签到 / 成长任务 / 上报用 daemonUserAgent（后台服务），见 headers.go。
@@ -2748,10 +2752,25 @@ func (c *Client) DailyCheckin(a *auth.Auth) error {
 			return &Error{Kind: ErrClient, Status: http.StatusOK, Msg: "今天已签到（签到状态）"}
 		}
 	}
-	return c.retryBillingTransient(func() error {
-		_, err := c.billingJSON(a, http.MethodPost, dailyCheckinPath, map[string]any{}, c.withDeviceToken(a))
-		return err
+	err = c.retryBillingTransient(func() error {
+		var e error
+		data, e = c.billingJSON(a, http.MethodPost, dailyCheckinPath, map[string]any{}, c.withDeviceToken(a))
+		return e
 	})
+	if err != nil {
+		return err
+	}
+	// 这次签到得的积分：官方 checkin() 取 data.credit，没有按 0。签到本身已经成功，读不出来只记一行。
+	var res struct {
+		Credit int64 `json:"credit"`
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &res); err != nil {
+			log.Printf("WARN: [upstream] checkin acct=%s: 签到成功，读不出得了多少积分：%v", logfmt.Label(a.UID, a.Nickname), err)
+		}
+	}
+	c.noteEarning(a, EarnCheckin, "", res.Credit)
+	return nil
 }
 
 // IsAlreadyCheckin 报告 err 是否表示"今天已签到"（上游幂等拒绝重复签到）。

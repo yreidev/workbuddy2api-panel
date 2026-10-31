@@ -53,7 +53,7 @@ type Config struct {
 	} `json:"panel"`
 
 	Logging struct {
-		// 日志留存：请求记录、任务日志、系统日志各自一个开关、保留天数、容量上限，用量统计只设
+		// 日志留存：请求记录、任务日志、系统日志、积分获取各自一个开关、保留天数、容量上限，用量统计只设
 		// 保留天数。保留天数 0 = 永久保留（容量上限照样生效），负值回落默认；容量 <=0 回落默认。
 		// 全部热生效（面板保存配置即生效）。
 
@@ -86,6 +86,12 @@ type Config struct {
 		SystemLogMaxMB int `json:"system_log_max_mb"`
 		// UsageRetentionDays 用量统计保留天数，缺省 0 = 永久保留。
 		UsageRetentionDays int `json:"usage_retention_days"`
+		// CreditLogEnabled 积分获取流水（签到、领奖、补偿、旅行、新手礼包、连登兑换领到的积分）落盘留存，缺省 true。
+		CreditLogEnabled bool `json:"credit_log_enabled"`
+		// CreditLogRetentionDays 积分获取流水保留天数，缺省 0 = 永久保留（一天也就几十条）。
+		CreditLogRetentionDays int `json:"credit_log_retention_days"`
+		// CreditLogMaxMB 积分获取流水总上限（MiB），缺省 20。
+		CreditLogMaxMB int `json:"credit_log_max_mb"`
 	} `json:"logging"`
 
 	Server struct {
@@ -323,6 +329,8 @@ func Default() *Config {
 	c.Logging.SystemLogEnabled = true
 	c.Logging.SystemLogRetentionDays = 30
 	c.Logging.SystemLogMaxMB = 50
+	c.Logging.CreditLogEnabled = true
+	c.Logging.CreditLogMaxMB = 20
 	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，
 	// 只有显式 false 才关闭来源记录。
 	c.Logging.RequestClientInfo = true
@@ -570,6 +578,7 @@ func (c *Config) normalize() error {
 		{&c.Logging.TaskLogRetentionDays, 30},
 		{&c.Logging.SystemLogRetentionDays, 30},
 		{&c.Logging.UsageRetentionDays, 0},
+		{&c.Logging.CreditLogRetentionDays, 0},
 	} {
 		if *d.days < 0 {
 			*d.days = d.def
@@ -582,6 +591,7 @@ func (c *Config) normalize() error {
 		{&c.Logging.RequestArchiveMaxMB, 100},
 		{&c.Logging.TaskLogMaxMB, 20},
 		{&c.Logging.SystemLogMaxMB, 50},
+		{&c.Logging.CreditLogMaxMB, 20},
 	} {
 		if *m.mb <= 0 {
 			*m.mb = m.def

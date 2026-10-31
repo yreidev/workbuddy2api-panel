@@ -16,6 +16,7 @@ import (
 
 	"github.com/yreidev/workbuddy2api-panel/internal/logarchive"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
+	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 	"github.com/yreidev/workbuddy2api-panel/internal/usage"
 )
 
@@ -189,7 +190,7 @@ func TestPanelLogsArchive(t *testing.T) {
 	autoWantCode(t, get(badPanel, http.MethodGet, "/panel/api/logs/archive"), http.StatusInternalServerError)
 }
 
-// 日志留存的占用：四类各自的状态，没接上的为 null。清空：按 kind 清对应的那类并在系统日志记一行；
+// 日志留存的占用：五类各自的状态，没接上的为 null。清空：按 kind 清对应的那类并在系统日志记一行；
 // kind 不认识 400，没接上 501，清不掉 500。
 func TestPanelLogStorage(t *testing.T) {
 	task, system, dir := runtimeStores(t)
@@ -199,11 +200,14 @@ func TestPanelLogStorage(t *testing.T) {
 	rec := usage.New(filepath.Join(t.TempDir(), "usage.json"))
 	rec.Add(time.Now(), "cn", "u1", "glm-5.2", usage.Delta{TotalTokens: 10, HasTotal: true}, true)
 	rec.SetRetentionDays(14)
-	p, _ := newPanelFor(t, Config{TaskLog: task, SystemLog: system, RequestLog: requests, Usage: rec})
+	credit := logarchive.New(logarchive.Config{Dir: t.TempDir(), Prefix: "credit", Enabled: true})
+	t.Cleanup(credit.Close)
+	p, _ := newPanelFor(t, Config{TaskLog: task, SystemLog: system, RequestLog: requests, Usage: rec, CreditLog: credit})
 
 	now := time.Now()
 	task.Append(now, LogEntry{TS: now, Ch: ChTask, Text: "checkin 一号 签到成功"})
 	requests.Record(reqlog.Event{Time: now, RequestID: "r1", Status: 200, OK: true})
+	credit.Append(now, upstream.Earning{Time: now, UID: "u1", Source: upstream.EarnCheckin, Credit: 20})
 	eventually := func(what string, cond func() bool) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
@@ -215,7 +219,9 @@ func TestPanelLogStorage(t *testing.T) {
 		}
 	}
 	// 落盘之前文件已经建出来了（打开即建），等 Stats 看得到文件。
-	eventually("任务日志、请求记录落盘", func() bool { return task.Stats().Files == 1 && requests.ArchiveStats().Files == 1 })
+	eventually("任务日志、请求记录、积分获取落盘", func() bool {
+		return task.Stats().Files == 1 && requests.ArchiveStats().Files == 1 && credit.Stats().Files == 1
+	})
 
 	st := autoDecode(t, get(p, http.MethodGet, "/panel/api/log_storage"))
 	taskSt, _ := st["task"].(map[string]any)
@@ -233,12 +239,18 @@ func TestPanelLogStorage(t *testing.T) {
 	if _, ok := st["system"].(map[string]any); !ok {
 		t.Fatalf("系统日志应有状态: %v", st)
 	}
+	if creditSt, _ := st["credit"].(map[string]any); creditSt["files"] != float64(1) || creditSt["enabled"] != true {
+		t.Fatalf("积分获取的状态: %v", st["credit"])
+	}
 
 	oldLog := log.Writer()
 	log.SetOutput(p.Logs()) // 和 main 一样把标准 log 接进面板的日志环
 	t.Cleanup(func() { log.SetOutput(oldLog) })
-	for _, kind := range []string{"task", "requests", "usage"} {
+	for _, kind := range []string{"task", "requests", "usage", "credit"} {
 		autoWantCode(t, get(p, http.MethodPost, "/panel/api/log_storage/"+kind+"/clear"), http.StatusOK)
+	}
+	if n := credit.Stats().Files; n != 0 {
+		t.Fatalf("积分获取应清空，还剩 %d 个文件", n)
 	}
 	if n := task.Stats().Files; n != 0 {
 		t.Fatalf("任务日志应清空，还剩 %d 个文件", n)
@@ -264,7 +276,7 @@ func TestPanelLogStorage(t *testing.T) {
 
 	empty, _ := newPanelFor(t, Config{})
 	st = autoDecode(t, get(empty, http.MethodGet, "/panel/api/log_storage"))
-	for _, kind := range []string{"requests", "task", "system", "usage"} {
+	for _, kind := range []string{"requests", "task", "system", "usage", "credit"} {
 		if v, ok := st[kind]; !ok || v != nil {
 			t.Fatalf("没接上的 %s 应为 null: %v", kind, st)
 		}

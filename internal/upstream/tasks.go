@@ -175,20 +175,25 @@ func (c *Client) ClaimRewardMP(a *auth.Auth, taskCode string) (credit, energy in
 	if err != nil {
 		return 0, 0, err
 	}
-	return parseClaimReward(data)
+	credit, energy, already, err := parseClaimReward(data)
+	if err == nil && !already {
+		c.noteEarning(a, EarnTask, taskCode, credit)
+	}
+	return credit, energy, err
 }
 
-// parseClaimReward 解析领奖响应 data：{"already_claimed":bool,"credit":n,"energy":n}。
-func parseClaimReward(data json.RawMessage) (credit, energy int64, err error) {
+// parseClaimReward 解析领奖响应 data：{"already_claimed":bool,"credit":n,"energy":n}。already 为真时积分不是这次
+// 到账的，积分获取流水不记（返回给调用方的数照旧）。
+func parseClaimReward(data json.RawMessage) (credit, energy int64, already bool, err error) {
 	var resp struct {
 		AlreadyClaimed bool  `json:"already_claimed"`
 		Credit         int64 `json:"credit"`
 		Energy         int64 `json:"energy"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
-	return resp.Credit, resp.Energy, nil
+	return resp.Credit, resp.Energy, resp.AlreadyClaimed, nil
 }
 
 // parseGrowthTasks 解析 growth 任务列表 data.tasks[]（默认与 mp 口径共用）。
@@ -292,5 +297,6 @@ func (c *Client) ClaimReward(a *auth.Auth, taskCode string) (credit, energy int6
 	if resp.AlreadyClaimed {
 		return 0, 0, nil // 幂等：重复领取不算错误，但无新增奖励
 	}
+	c.noteEarning(a, EarnTask, taskCode, resp.Credit)
 	return resp.Credit, resp.Energy, nil
 }

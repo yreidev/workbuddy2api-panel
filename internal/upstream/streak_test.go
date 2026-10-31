@@ -163,7 +163,7 @@ func TestGrowthRedeemTier(t *testing.T) {
 	f := newUpFake(t)
 	f.on(http.MethodPost, streakRedeemPath, 200, `{"code":0,"msg":"OK"}`)
 	c := upClient(f)
-	if err := c.GrowthRedeemTier(upAuth(), "14d"); err != nil {
+	if err := c.GrowthRedeemTier(upAuth(), "14d", 0); err != nil {
 		t.Fatalf("GrowthRedeemTier: %v", err)
 	}
 	r := f.bizSeen()[0]
@@ -184,7 +184,7 @@ func TestGrowthRedeemTier(t *testing.T) {
 
 	f2 := newUpFake(t)
 	f2.on(http.MethodPost, streakRedeemPath, 403, `{"code":403,"msg":"连续登录天数不足"}`)
-	err := upClient(f2).GrowthRedeemTier(upAuth(), "28d")
+	err := upClient(f2).GrowthRedeemTier(upAuth(), "28d", 0)
 	if err == nil || !strings.Contains(err.Error(), "连续登录天数不足") {
 		t.Fatalf("应返回未解锁错误，got %v", err)
 	}
@@ -299,7 +299,7 @@ func TestStreakBusinessErrors(t *testing.T) {
 	t.Run("兑换业务码非 0", func(t *testing.T) {
 		f := newUpFake(t)
 		f.on(http.MethodPost, streakRedeemPath, 200, `{"code":9,"msg":"redeem boom"}`)
-		err := upClient(f).GrowthRedeemTier(upAuth(), "7d")
+		err := upClient(f).GrowthRedeemTier(upAuth(), "7d", 0)
 		if err == nil || !strings.Contains(err.Error(), "redeem boom") {
 			t.Fatalf("err = %v", err)
 		}
@@ -307,7 +307,7 @@ func TestStreakBusinessErrors(t *testing.T) {
 	t.Run("兑换非 JSON", func(t *testing.T) {
 		f := newUpFake(t)
 		f.on(http.MethodPost, streakRedeemPath, 200, `oops`)
-		if err := upClient(f).GrowthRedeemTier(upAuth(), "7d"); err == nil {
+		if err := upClient(f).GrowthRedeemTier(upAuth(), "7d", 0); err == nil {
 			t.Fatal("非 JSON 应返回错误")
 		}
 	})

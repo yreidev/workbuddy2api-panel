@@ -113,6 +113,7 @@ func (c *Client) ClaimGift(a *auth.Auth) (int64, error) {
 		Credit int64 `json:"credit"`
 	}
 	_ = json.Unmarshal(data, &resp)
+	c.noteEarning(a, EarnGift, "", resp.Credit)
 	return resp.Credit, nil
 }
 

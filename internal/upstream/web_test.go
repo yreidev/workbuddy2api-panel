@@ -135,7 +135,7 @@ func TestWebCallsShape(t *testing.T) {
 			name:   "GrowthRedeemTier 带前缀令牌",
 			routes: []webRoute{{http.MethodPost, streakRedeemPath, `{}`}},
 			run: func(c *Client, a *auth.Auth) error {
-				return c.GrowthRedeemTier(a, "7d")
+				return c.GrowthRedeemTier(a, "7d", 0)
 			},
 			want: []webCall{{http.MethodPost, streakRedeemPath, `{"client_token":"redeem-7d-`}},
 		},

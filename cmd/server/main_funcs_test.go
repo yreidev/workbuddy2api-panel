@@ -275,14 +275,17 @@ func TestSaveConfig(t *testing.T) {
 			requests: reqlog.New(reqlog.Config{Dir: filepath.Join(dir, "request-logs"), Enabled: true, RetentionDays: 7}),
 			task:     logarchive.New(logarchive.Config{Dir: filepath.Join(dir, "runtime-logs"), Prefix: "task", Enabled: true, RetentionDays: 30}),
 			system:   logarchive.New(logarchive.Config{Dir: filepath.Join(dir, "runtime-logs"), Prefix: "system", Enabled: true, RetentionDays: 30}),
+			credit:   logarchive.New(logarchive.Config{Dir: filepath.Join(dir, "credit-logs"), Prefix: "credit", Enabled: true}),
 			usage:    usage.New(""),
 		}
 		defer logs.requests.Close()
 		defer logs.task.Close()
 		defer logs.system.Close()
+		defer logs.credit.Close()
 		restart, err := saveConfig([]byte(`{"logging":{"request_archive_enabled":false,"request_retention_days":0,"request_archive_max_mb":10,
 			"task_log_enabled":false,"task_log_retention_days":3,"task_log_max_mb":2,
-			"system_log_retention_days":0,"system_log_max_mb":4,"usage_retention_days":14}}`), path, live, p, up, sch, logs)
+			"system_log_retention_days":0,"system_log_max_mb":4,"usage_retention_days":14,
+			"credit_log_enabled":false,"credit_log_retention_days":90,"credit_log_max_mb":1}}`), path, live, p, up, sch, logs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -302,6 +305,9 @@ func TestSaveConfig(t *testing.T) {
 		}
 		if u := logs.usage.StoreStats(); u.RetentionDays != 14 {
 			t.Fatalf("用量统计: %+v", u)
+		}
+		if a := logs.credit.Stats(); a.Enabled || a.RetentionDays != 90 || a.MaxBytes != 1<<20 {
+			t.Fatalf("积分获取: %+v", a)
 		}
 	})
 

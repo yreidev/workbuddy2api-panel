@@ -152,6 +152,17 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 
 签到照官方（`DesktopAccountRepo`）先查状态再签：`POST /v2/billing/meter/checkin-activity-status`，活动没开（`active` 为假）就不签，今天已签（`today_checked_in`）也不签；状态查不到时照常签。两条都带 `X-Device-Token`。
 
+### 积分获取的积分数
+
+面板「积分获取」逐笔记的积分数都取官方回应里的值，读法如下：
+
+- 签到：`daily-checkin` 回应 `data.credit`。官方桌面端 5.9.3（`app/main/account.js` 的 `checkin()`）同样读 `credit`、`streak_days`、`is_streak_day`，缺了当 0；没给积分数的一次不记。
+- 成长任务领奖（网页、小程序两种）：`data.credit`，`already_claimed` 为真的不记；只给成长值（`energy`）的不记。
+- 积分补偿：领取回应的 `credit`，没带就用补偿状态里的 `credit_num`。
+- 猫猫旅行：`data.reward_credit`；新手礼包：`data.credit`。
+- 连登兑换：桌面端安装包和成长中心网页里都没找到兑换回应的读法，网关记的是连登状态里这一档列出的积分，兑换回应里有没有、是不是同一个数未确认。
+- 抽奖不记：奖品形状没读到过（实测的号都没有次数）。
+
 ## 登录
 
 官方的登录由后台服务发：国内版是 `AccountScopedExternalLinkAuthenticationProvider`，国际版是 `ExternalLinkAuthenticationProvider`。两个域的路径前缀都是 `/plugin`，`platform` 国内版是 `workbuddy`，国际版是 `workbuddy-ai`。

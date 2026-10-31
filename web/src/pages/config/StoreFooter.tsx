@@ -19,6 +19,7 @@ const AFFECTED: Record<StoreKind, readonly (readonly string[])[]> = {
   task: [['logs_archive']],
   system: [['logs_archive']],
   usage: [['usage'], qk.keys],
+  credit: [['credit_log']],
 }
 
 export function StoreFooter({ kind, storage, loading }: { kind: StoreKind; storage?: LogStorage; loading: boolean }) {

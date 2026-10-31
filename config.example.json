@@ -22,7 +22,10 @@
     "system_log_enabled": true,
     "system_log_retention_days": 30,
     "system_log_max_mb": 50,
-    "usage_retention_days": 0
+    "usage_retention_days": 0,
+    "credit_log_enabled": true,
+    "credit_log_retention_days": 0,
+    "credit_log_max_mb": 20
   },
   "cooldown": {
     "soft_rate": "600s",

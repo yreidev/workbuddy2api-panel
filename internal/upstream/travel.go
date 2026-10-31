@@ -76,6 +76,7 @@ func (c *Client) TravelClaim(a *auth.Auth) (int64, error) {
 		// 奖励字段缺失不视为失败：调用方按 0 记日志即可。
 		_ = json.Unmarshal(data, &resp)
 	}
+	c.noteEarning(a, EarnTravel, "", resp.RewardCredit)
 	return resp.RewardCredit, nil
 }
 

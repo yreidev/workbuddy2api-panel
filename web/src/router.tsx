@@ -11,6 +11,7 @@ import { Shell } from './components/Shell'
 import { isLegacyChatLink, isLogChannel, type LogChannel } from './lib/logs'
 import { AccountsPage } from './pages/accounts/AccountsPage'
 import { ConfigPage } from './pages/config/ConfigPage'
+import { CreditLogPage } from './pages/credits/CreditLogPage'
 import { KeysPage } from './pages/keys/KeysPage'
 import { LogsPage } from './pages/logs/LogsPage'
 import { ModelsPage } from './pages/models/ModelsPage'
@@ -33,6 +34,7 @@ const packagesRoute = createRoute({
   getParentRoute: () => rootRoute, path: '/packages', staticData: { title: '积分构成' },
   component: lazyRouteComponent(() => import('./pages/packages/PackagesPage'), 'PackagesPage'),
 })
+const creditsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/credits', component: CreditLogPage, staticData: { title: '积分获取' } })
 const taskCenterRoute = createRoute({ getParentRoute: () => rootRoute, path: '/taskscenter', component: TaskCenterPage, staticData: { title: '任务中心' } })
 const modelsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/models', component: ModelsPage, staticData: { title: '模型与档位' } })
 const keysRoute = createRoute({ getParentRoute: () => rootRoute, path: '/keys', component: KeysPage, staticData: { title: '密钥' } })
@@ -51,7 +53,7 @@ const logsRoute = createRoute({
 const requestsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/requests', component: RequestMetrics, staticData: { title: '请求记录' } })
 
 const routeTree = rootRoute.addChildren([
-  indexRoute, accountsRoute, usageRoute, requestsRoute, packagesRoute, taskCenterRoute, modelsRoute, keysRoute, configRoute, logsRoute,
+  indexRoute, accountsRoute, usageRoute, requestsRoute, packagesRoute, creditsRoute, taskCenterRoute, modelsRoute, keysRoute, configRoute, logsRoute,
 ])
 
 // 旧版面板的地址是 #accounts、#usage…（没有斜杠），书签打开时换成新格式

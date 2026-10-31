@@ -85,13 +85,14 @@ describe('配置表单', () => {
     expect(validateField(field('system_log_max_mb'), '0')).not.toBeNull()
   })
 
-  it('日志留存：四类各一张卡片，保存即生效，不标需重启', () => {
+  it('日志留存：五类各一张卡片，保存即生效，不标需重启', () => {
     const tab = CONFIG_TABS.find((t) => t.id === 'logs')!
-    expect(tab.sections.map((s) => s.store)).toEqual(['requests', 'task', 'system', 'usage'])
+    expect(tab.sections.map((s) => s.store)).toEqual(['requests', 'task', 'system', 'usage', 'credit'])
     expect(tab.sections.flatMap((s) => s.fields).filter((f) => f.restart)).toEqual([])
     expect(field('task_log_enabled').path).toEqual(['logging', 'task_log_enabled'])
     expect(field('system_log_max_mb').path).toEqual(['logging', 'system_log_max_mb'])
     expect(field('usage_retention_days').path).toEqual(['logging', 'usage_retention_days'])
+    expect(field('credit_log_retention_days').path).toEqual(['logging', 'credit_log_retention_days'])
     expect(tabOfField('request_client_info')).toBe('logs')
     const body = fromForm({ ...toForm({}), usage_retention_days: '0', task_log_retention_days: '14' }) as { logging: Record<string, unknown> }
     expect(body.logging).toMatchObject({ usage_retention_days: 0, task_log_retention_days: 14, task_log_enabled: false })

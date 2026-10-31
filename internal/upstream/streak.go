@@ -83,11 +83,15 @@ func (c *Client) GrowthStreakFull(a *auth.Auth) (*StreakFull, error) {
 	return out, nil
 }
 
-// GrowthRedeemTier 兑换连登档位（tier: "7d"|"14d"|"28d"）。
-// 未解锁返回 *Error（HTTP 403「连续登录天数不足」），调用方按 locked 状态跳过即可。
-func (c *Client) GrowthRedeemTier(a *auth.Auth, tier string) error {
+// GrowthRedeemTier 兑换连登档位（tier: "7d"|"14d"|"28d"）。credit 是连登状态里这一档列出的积分，兑换成功后
+// 按它记进积分获取流水（兑换的回应形状没核对过）。未解锁返回 *Error（HTTP 403「连续登录天数不足」），
+// 调用方按 locked 状态跳过即可。
+func (c *Client) GrowthRedeemTier(a *auth.Auth, tier string, credit int64) error {
 	_, err := c.webJSON(a, http.MethodPost, streakRedeemPath, webPageGrowthCenter,
 		map[string]any{"tier": tier, "client_token": clientToken("redeem-" + tier)})
+	if err == nil {
+		c.noteEarning(a, EarnRedeem, tier, credit)
+	}
 	return err
 }
 

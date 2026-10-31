@@ -103,18 +103,20 @@ func TestLoggingDefaults(t *testing.T) {
 	// 保留天数 0 = 永久保留（不再回落 7 天），负值回落默认；容量 <=0 回落默认。
 	fallback, err := ParseConfig([]byte(`{"logging":{"request_retention_days":0,"request_archive_max_mb":0,
 		"task_log_retention_days":-1,"task_log_max_mb":0,"system_log_retention_days":-5,"system_log_max_mb":-1,
-		"usage_retention_days":-3}}`))
+		"usage_retention_days":-3,"credit_log_retention_days":-2,"credit_log_max_mb":0}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	l := fallback.Logging
 	if l.RequestRetentionDays != 0 || l.RequestArchiveMaxMB != 100 || l.TaskLogRetentionDays != 30 || l.TaskLogMaxMB != 20 ||
-		l.SystemLogRetentionDays != 30 || l.SystemLogMaxMB != 50 || l.UsageRetentionDays != 0 {
+		l.SystemLogRetentionDays != 30 || l.SystemLogMaxMB != 50 || l.UsageRetentionDays != 0 ||
+		l.CreditLogRetentionDays != 0 || l.CreditLogMaxMB != 20 {
 		t.Fatalf("logging fallback = %+v", l)
 	}
 }
 
-// 任务日志、系统日志、用量统计的留存：缺省开、30 / 30 天、20 / 50 MiB、用量永久；显式值照用。
+// 任务日志、系统日志、用量统计、积分获取的留存：缺省开、30 / 30 天、20 / 50 MiB、用量和积分获取永久、
+// 积分获取 20 MiB；显式值照用。
 func TestLoggingRetentionDefaults(t *testing.T) {
 	c := Default()
 	if err := c.normalize(); err != nil {
@@ -122,17 +124,20 @@ func TestLoggingRetentionDefaults(t *testing.T) {
 	}
 	l := c.Logging
 	if !l.TaskLogEnabled || l.TaskLogRetentionDays != 30 || l.TaskLogMaxMB != 20 ||
-		!l.SystemLogEnabled || l.SystemLogRetentionDays != 30 || l.SystemLogMaxMB != 50 || l.UsageRetentionDays != 0 {
+		!l.SystemLogEnabled || l.SystemLogRetentionDays != 30 || l.SystemLogMaxMB != 50 || l.UsageRetentionDays != 0 ||
+		!l.CreditLogEnabled || l.CreditLogRetentionDays != 0 || l.CreditLogMaxMB != 20 {
 		t.Fatalf("留存缺省值不对: %+v", l)
 	}
 	set, err := ParseConfig([]byte(`{"logging":{"task_log_enabled":false,"task_log_retention_days":0,"task_log_max_mb":5,
-		"system_log_enabled":false,"system_log_retention_days":3,"system_log_max_mb":8,"usage_retention_days":90}}`))
+		"system_log_enabled":false,"system_log_retention_days":3,"system_log_max_mb":8,"usage_retention_days":90,
+		"credit_log_enabled":false,"credit_log_retention_days":365,"credit_log_max_mb":2}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	l = set.Logging
 	if l.TaskLogEnabled || l.TaskLogRetentionDays != 0 || l.TaskLogMaxMB != 5 ||
-		l.SystemLogEnabled || l.SystemLogRetentionDays != 3 || l.SystemLogMaxMB != 8 || l.UsageRetentionDays != 90 {
+		l.SystemLogEnabled || l.SystemLogRetentionDays != 3 || l.SystemLogMaxMB != 8 || l.UsageRetentionDays != 90 ||
+		l.CreditLogEnabled || l.CreditLogRetentionDays != 365 || l.CreditLogMaxMB != 2 {
 		t.Fatalf("显式值应照用: %+v", l)
 	}
 }

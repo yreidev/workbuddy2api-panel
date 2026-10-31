@@ -411,13 +411,13 @@ func TestClaimRewardMP(t *testing.T) {
 
 // TestParseClaimReward 领奖响应解析：正常、空对象、非法 JSON。
 func TestParseClaimReward(t *testing.T) {
-	if credit, energy, err := parseClaimReward(json.RawMessage(`{"already_claimed":true,"credit":100,"energy":5}`)); err != nil || credit != 100 || energy != 5 {
-		t.Errorf("正常解析 = %d/%d/%v", credit, energy, err)
+	if credit, energy, already, err := parseClaimReward(json.RawMessage(`{"already_claimed":true,"credit":100,"energy":5}`)); err != nil || credit != 100 || energy != 5 || !already {
+		t.Errorf("正常解析 = %d/%d/%v/%v", credit, energy, already, err)
 	}
-	if credit, energy, err := parseClaimReward(json.RawMessage(`{}`)); err != nil || credit != 0 || energy != 0 {
-		t.Errorf("空对象 = %d/%d/%v", credit, energy, err)
+	if credit, energy, already, err := parseClaimReward(json.RawMessage(`{}`)); err != nil || credit != 0 || energy != 0 || already {
+		t.Errorf("空对象 = %d/%d/%v/%v", credit, energy, already, err)
 	}
-	if _, _, err := parseClaimReward(json.RawMessage(`"nope"`)); err == nil {
+	if _, _, _, err := parseClaimReward(json.RawMessage(`"nope"`)); err == nil {
 		t.Error("非法形态应返回错误")
 	}
 }

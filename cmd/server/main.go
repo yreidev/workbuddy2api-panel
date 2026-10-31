@@ -366,7 +366,17 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	log.Printf("[logs] 运行日志留存 %s：任务日志%s，系统日志%s", runtimeLogDir,
 		runtimeLogText(cfg.Logging.TaskLogEnabled, cfg.Logging.TaskLogRetentionDays, cfg.Logging.TaskLogMaxMB),
 		runtimeLogText(cfg.Logging.SystemLogEnabled, cfg.Logging.SystemLogRetentionDays, cfg.Logging.SystemLogMaxMB))
-	logs := logStores{requests: requestLog, task: taskLog, system: systemLog, usage: rec}
+	// 积分获取流水（data/credit-logs/credit-<日期>.jsonl）：上游客户端每领到一笔积分记一行，面板「积分获取」
+	// 按时间范围查。挂在 up 上，要在调度器和面板发出第一个请求之前设好。
+	creditLog := logarchive.New(logarchive.Config{
+		Dir: stateSibling(cfg.StateFile, "credit-logs"), Prefix: "credit", Enabled: cfg.Logging.CreditLogEnabled,
+		RetentionDays: cfg.Logging.CreditLogRetentionDays, MaxBytes: int64(cfg.Logging.CreditLogMaxMB) << 20,
+	})
+	defer creditLog.Close()
+	up.OnEarning = func(e upstream.Earning) { creditLog.Append(e.Time, e) }
+	log.Printf("[logs] 积分获取流水 %s：%s", stateSibling(cfg.StateFile, "credit-logs"),
+		runtimeLogText(cfg.Logging.CreditLogEnabled, cfg.Logging.CreditLogRetentionDays, cfg.Logging.CreditLogMaxMB))
+	logs := logStores{requests: requestLog, task: taskLog, system: systemLog, credit: creditLog, usage: rec}
 
 	pn := panel.New(panel.Config{
 		Pool:        p,
@@ -375,6 +385,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		RequestLog:  requestLog,
 		TaskLog:     taskLog,
 		SystemLog:   systemLog,
+		CreditLog:   creditLog,
 		Upstream:    up,
 		Scheduler:   sch,
 		AuthDir:     cfg.AuthDir,
@@ -748,11 +759,12 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	return restartRequiredFields(newCfg), nil
 }
 
-// logStores 日志留存要热改的几样：请求记录归档、任务日志、系统日志、用量统计。零值什么都不改。
+// logStores 日志留存要热改的几样：请求记录归档、任务日志、系统日志、积分获取流水、用量统计。零值什么都不改。
 type logStores struct {
 	requests *reqlog.Recorder
 	task     *logarchive.Store
 	system   *logarchive.Store
+	credit   *logarchive.Store
 	usage    *usage.Recorder
 }
 
@@ -761,6 +773,7 @@ func (l logStores) apply(c *Config) {
 	l.requests.SetArchive(c.Logging.RequestArchiveEnabled, c.Logging.RequestRetentionDays, int64(c.Logging.RequestArchiveMaxMB)<<20)
 	l.task.Reconfigure(c.Logging.TaskLogEnabled, c.Logging.TaskLogRetentionDays, int64(c.Logging.TaskLogMaxMB)<<20)
 	l.system.Reconfigure(c.Logging.SystemLogEnabled, c.Logging.SystemLogRetentionDays, int64(c.Logging.SystemLogMaxMB)<<20)
+	l.credit.Reconfigure(c.Logging.CreditLogEnabled, c.Logging.CreditLogRetentionDays, int64(c.Logging.CreditLogMaxMB)<<20)
 	l.usage.SetRetentionDays(c.Logging.UsageRetentionDays)
 }
 

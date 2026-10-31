@@ -63,6 +63,10 @@ func (f *runRT) RoundTrip(r *http.Request) (*http.Response, error) {
 			<-f.chatRelease
 		}
 		return runResp(200, "text/event-stream", runChatSSE), nil
+	case "/v2/billing/meter/checkin-activity-status":
+		return runResp(200, "application/json", `{"code":0,"data":{"active":true,"today_checked_in":false}}`), nil
+	case "/v2/billing/meter/daily-checkin":
+		return runResp(200, "application/json", `{"code":0,"data":{"credit":20}}`), nil
 	default:
 		// 后台任务（预热/企业目录/调度器）的其它路径：静默 400，不算失败。
 		return runResp(400, "application/json", `{"code":400}`), nil
@@ -301,6 +305,19 @@ func TestRunStartupAndShutdown(t *testing.T) {
 	// 一次对话让号池记账 dirty，停机 Flush 时才会写 state.json。
 	doChat(t, addr)
 
+	// 面板上签到一次：领到的积分记进积分获取流水，停机时刷盘。
+	creq, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/panel/api/accounts/u1/checkin", nil)
+	creq.Header.Set("Authorization", "Bearer "+runKey)
+	cresp, err := (&http.Client{Timeout: 10 * time.Second}).Do(creq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, cresp.Body)
+	_ = cresp.Body.Close()
+	if cresp.StatusCode != http.StatusOK {
+		t.Fatalf("签到 = %d", cresp.StatusCode)
+	}
+
 	cancel()
 	res := awaitRun(t, out)
 	if res.restart || res.err != nil {
@@ -311,6 +328,13 @@ func TestRunStartupAndShutdown(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(usagePathFor(cfg.StateFile))); err != nil {
 		t.Fatalf("用量文件所在目录应存在: %v", err)
+	}
+	earned, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.StateFile), "credit-logs", "credit-*.jsonl"))
+	if len(earned) != 1 {
+		t.Fatalf("积分获取流水应有一个文件: %v", earned)
+	}
+	if b, _ := os.ReadFile(earned[0]); !strings.Contains(string(b), `"source":"checkin"`) || !strings.Contains(string(b), `"credit":20`) {
+		t.Fatalf("积分获取流水应记下这次签到: %s", b)
 	}
 	// 停机后 /readyz 要么连接已关，要么 503。
 	if r, err := (&http.Client{Timeout: time.Second}).Get("http://" + addr + "/readyz"); err == nil {

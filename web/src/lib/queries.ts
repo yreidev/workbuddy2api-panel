@@ -8,11 +8,12 @@ import { useMemo } from 'react'
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
 import { accountName, notesOf, relabel } from './accounts'
 import { ApiError, acct, api, errorMessage } from './api'
+import { creditLogQuery } from './credits'
 import { logArchiveQuery, type LevelFilter, type LogChannel } from './logs'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
 import { SEEN_VERSION_KEY, readStored, updateBusy } from './update'
 import type {
-  CompensationResp, ConfigResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent,
+  CompensationResp, ConfigResp, CreditLogResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent,
   RequestMetrics, Task, UsageResp, VersionResp, VoucherAccount,
 } from './types'
 
@@ -32,6 +33,8 @@ export const qk = {
   /** 按时间范围查的历史运行日志；清空留存后按前缀 ['logs_archive'] 一起作废 */
   logArchive: (range: TimeRange, ch: string, level: string, q: string, limit: number) => ['logs_archive', rangeKey(range), ch, level, q, limit] as const,
   logStorage: ['log_storage'] as const,
+  /** 积分获取流水；清空留存后按前缀 ['credit_log'] 一起作废 */
+  creditLog: (range: TimeRange, uid: string, source: string, limit: number) => ['credit_log', rangeKey(range), uid, source, limit] as const,
   requests: (range: TimeRange, limit: number) => ['request_metrics', rangeKey(range), limit] as const,
   recentRequests: ['request_metrics', 'recent'] as const,
   models: ['models'] as const,
@@ -88,6 +91,15 @@ export function useLogArchive(range: TimeRange, ch: LogChannel, level: LevelFilt
   return useQuery({
     queryKey: qk.logArchive(range, ch, level, q, limit),
     queryFn: () => api<LogArchiveResp>('logs/archive?' + logArchiveQuery(range, ch, level, q, limit).toString()),
+    placeholderData: keepPreviousData,
+  })
+}
+
+/** 积分获取流水：留存是磁盘上的文件，不轮询，换条件或点「重新读取」才查；换条件时先留着上一次的结果 */
+export function useCreditLog(range: TimeRange, uid: string, source: string, limit: number) {
+  return useQuery({
+    queryKey: qk.creditLog(range, uid, source, limit),
+    queryFn: () => api<CreditLogResp>('credit_log?' + creditLogQuery(range, uid, source, limit).toString()),
     placeholderData: keepPreviousData,
   })
 }

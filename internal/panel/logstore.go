@@ -3,7 +3,7 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // logstore.go 日志留存：运行日志按频道落盘、按时间范围查历史，以及各类留存的占用与清空。
-// 请求记录、任务日志、系统日志的归档见 logarchive，用量统计见 usage；保留天数和开关在配置里设
+// 请求记录、任务日志、系统日志、积分获取的归档见 logarchive，用量统计见 usage；保留天数和开关在配置里设
 // （logging.*），保存即生效，由 main 转给各自的归档。
 package panel
 
@@ -31,6 +31,7 @@ var logStorageLabel = map[string]string{
 	"task":     "任务日志",
 	"system":   "系统日志",
 	"usage":    "用量统计",
+	"credit":   "积分获取",
 }
 
 // archiveLogLine 运行日志每行入环后按频道落盘：任务频道进任务日志，其余进系统日志。
@@ -118,10 +119,10 @@ func (p *Panel) logsArchive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"entries": rows, "limit": limit, "more": more})
 }
 
-// logStorage 日志留存各类的存储状态：请求记录、任务日志、系统日志的文件数、大小、最早日期，
+// logStorage 日志留存各类的存储状态：请求记录、任务日志、系统日志、积分获取的文件数、大小、最早日期，
 // 用量统计的桶数和 usage.json 大小。没接上的那类为 null。
 func (p *Panel) logStorage(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"requests": nil, "task": nil, "system": nil, "usage": nil}
+	out := map[string]any{"requests": nil, "task": nil, "system": nil, "usage": nil, "credit": nil}
 	if p.cfg.RequestLog != nil {
 		out["requests"] = p.cfg.RequestLog.ArchiveStats()
 	}
@@ -134,10 +135,13 @@ func (p *Panel) logStorage(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Usage != nil {
 		out["usage"] = p.cfg.Usage.StoreStats()
 	}
+	if p.cfg.CreditLog != nil {
+		out["credit"] = p.cfg.CreditLog.Stats()
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// logStorageClear 清空一类日志留存：requests / task / system 删掉全部归档文件（含今天正在写的），
+// logStorageClear 清空一类日志留存：requests / task / system / credit 删掉全部归档文件（含今天正在写的），
 // usage 清空全部用量明细。清完在系统日志里记一行，什么时候清的有据可查。
 func (p *Panel) logStorageClear(w http.ResponseWriter, r *http.Request) {
 	kind := r.PathValue("kind")
@@ -156,6 +160,8 @@ func (p *Panel) logStorageClear(w http.ResponseWriter, r *http.Request) {
 		clear = p.cfg.SystemLog.Clear
 	case kind == "usage" && p.cfg.Usage != nil:
 		clear = p.cfg.Usage.Clear
+	case kind == "credit" && p.cfg.CreditLog != nil:
+		clear = p.cfg.CreditLog.Clear
 	}
 	if clear == nil {
 		writeErr(w, http.StatusNotImplemented, kind+" storage not available")

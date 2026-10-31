@@ -99,5 +99,6 @@ func (c *Client) ClaimAvailableCompensation(a *auth.Auth) (*CompensationClaim, e
 		// 官网只依据 code=0 判断成功，部分响应不含 credit；沿用刚查询的官方额度。
 		result.Credit = status.CreditNum
 	}
+	c.noteEarning(a, EarnCompensation, "", result.Credit)
 	return result, nil
 }

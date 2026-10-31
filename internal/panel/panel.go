@@ -85,6 +85,9 @@ type Config struct {
 	// 按时间范围查历史、日志留存的占用与清空都读这里（nil = 这个频道不落盘）。
 	TaskLog   *logarchive.Store
 	SystemLog *logarchive.Store
+	// CreditLog 积分获取流水的留存（签到、领奖等领到的积分逐笔落盘，见 upstream.Earning）：
+	// 积分获取页、日志留存的占用与清空读这里（nil = 积分获取接口返回 501）。
+	CreditLog *logarchive.Store
 
 	// ProbeFile 模型输出上限探测结果文件（scripts/probe_max_tokens.py --panel-out
 	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
@@ -203,6 +206,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/log_storage/{kind}/clear", p.withAuth(p.logStorageClear))
 	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuth(p.requestMetrics))
 	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuth(p.requestLogs))
+	p.mux.HandleFunc("GET /panel/api/credit_log", p.withAuth(p.creditLog))
 	p.mux.HandleFunc("GET /panel/api/models", p.withAuth(p.models))
 	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))
 	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuth(p.loginPoll))

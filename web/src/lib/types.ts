@@ -439,7 +439,7 @@ export interface RequestMetrics {
   archive?: ArchiveStats
 }
 
-/** 一类日志归档的存储状态（请求记录、任务日志、系统日志） */
+/** 一类日志归档的存储状态（请求记录、任务日志、系统日志、积分获取） */
 export interface ArchiveStats {
   enabled: boolean
   dir?: string
@@ -470,6 +470,7 @@ export interface LogStorage {
   task: ArchiveStats | null
   system: ArchiveStats | null
   usage: UsageStoreStats | null
+  credit: ArchiveStats | null
 }
 
 /** /panel/api/logs/archive：按时间范围查到的运行日志，按时间先后排；more = 更早的还有没返回的 */
@@ -477,6 +478,46 @@ export interface LogArchiveResp {
   entries: LogEntry[] | null
   limit: number
   more: boolean
+}
+
+/** 积分从哪来：签到、成长任务领奖、积分补偿、猫猫旅行、新手礼包、连登兑换 */
+export type EarnSource = 'checkin' | 'task' | 'compensation' | 'travel' | 'gift' | 'redeem'
+
+/** 领到的一笔积分 */
+export interface CreditEarning {
+  /** RFC3339 */
+  t: string
+  uid: string
+  nickname?: string
+  realm?: string
+  /** EarnSource 之一；更新的网关可能多出新的来源 */
+  source: string
+  /** 领奖是任务码，连登兑换是档位（7d / 14d / 28d） */
+  detail?: string
+  credit: number
+}
+
+/** 一个来源或一个账号的合计；按账号的带这个号最新一笔记下的昵称和域 */
+export interface CreditSum {
+  key: string
+  nickname?: string
+  realm?: string
+  credit: number
+  count: number
+}
+
+/**
+ * /panel/api/credit_log：区间内符合条件的最新 limit 笔（新的在前），more = 更早的还有没返回的；
+ * total、count 和两种合计算的是区间内符合条件的全部，不受 limit 限制
+ */
+export interface CreditLogResp {
+  entries: CreditEarning[]
+  limit: number
+  more: boolean
+  total: number
+  count: number
+  by_source: CreditSum[]
+  by_account: CreditSum[]
 }
 
 export interface CompensationStatus {

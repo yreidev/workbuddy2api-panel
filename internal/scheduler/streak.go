@@ -78,7 +78,7 @@ func (s *Scheduler) streakBonusAccount(a *auth.Auth) {
 		if status == "locked" || status == "claimed" {
 			continue
 		}
-		if err := s.cfg.Upstream.GrowthRedeemTier(a, tier.Tier); err != nil {
+		if err := s.cfg.Upstream.GrowthRedeemTier(a, tier.Tier, int64(tier.Credit)); err != nil {
 			// 未解锁（403）属预期，静默；其余记日志。
 			log.Printf("streak-bonus %s: redeem %s: %v", logfmt.Label(a.UID, a.Nickname), tier.Tier, err)
 			continue
