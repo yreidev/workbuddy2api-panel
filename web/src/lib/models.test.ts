@@ -6,9 +6,10 @@
 // 上游能力是单选，这里是多选，单个能力的结果一致）。
 import { describe, expect, it } from 'vitest'
 import {
-  addHiddenModel, EMPTY_MODEL_FILTER, filterModels, hiddenFromConfig, hiddenModelSet, probeFor, rateValue, type ModelFilter, type ModelSort,
+  addHiddenModel, EMPTY_MODEL_FILTER, filterModels, hiddenFromConfig, hiddenModelSet, modelAvailability, probeFor, rateValue, type ModelFilter,
+  type ModelSort,
 } from './models'
-import type { Model } from './types'
+import type { Model, ModelLockRow, RequestEvent } from './types'
 
 const list: Model[] = [
   { id: 'cn:glm-5.2', name: 'GLM 5.2', vendor: 'zhipu', supports_tool_call: true, supported_efforts: ['low', 'high'] },
@@ -89,5 +90,46 @@ describe('models.hidden', () => {
     expect(addHiddenModel(['a'], ' b ')).toEqual(['a', 'b'])
     expect(addHiddenModel(['a'], 'a')).toEqual(['a'])
     expect(addHiddenModel(['a'], '  ')).toEqual(['a'])
+  })
+})
+
+describe('modelAvailability', () => {
+  const lock = (o: Partial<ModelLockRow>): ModelLockRow => ({
+    model: 'm', realm: 'global', total: 2, servable: 0, locked: 2, state: 'locked', unlock_at: '', fully_unlock_at: '', ...o,
+  })
+  const ev = (o: Partial<RequestEvent>): RequestEvent => ({
+    time: '2026-10-31T09:00:00Z', request_id: 'r', path: '/v1/chat/completions', model: 'global:m', status: 200, ok: true,
+    outcome: 'success', duration_ms: 1, credit_known: false, attempts: 1, ...o,
+  })
+  const at = (iso: string) => 'T' + iso.slice(11, 16)
+  const label = (id: string, locks: ModelLockRow[], recent: RequestEvent[]) => modelAvailability(id, locks, recent, at)?.label
+
+  it('不带域前缀的不判', () => {
+    expect(modelAvailability('m', [], [], at)).toBeNull()
+  })
+  it('模型锁优先，按状态和原因分', () => {
+    const ok = [ev({})]
+    expect(label('global:m', [lock({ state: 'partial', servable: 1, locked: 1 })], ok)).toBe('部分可用')
+    expect(label('global:m', [lock({ state: 'starved' })], ok)).toBe('暂无可用号')
+    expect(label('global:m', [lock({ reason: '11158 model not allowed for account type' })], ok)).toBe('无权限')
+    expect(label('global:m', [lock({ reason: '11102 model not available' })], ok)).toBe('上游无此模型')
+    expect(label('global:m', [lock({ reason: '6004 model rate limit' })], ok)).toBe('限流中')
+    expect(label('cn:m', [lock({ realm: 'cn', reason: '11158 x' })], [])).toBe('无权限')
+  })
+  it('锁只认同一个域', () => {
+    expect(label('cn:m', [lock({ reason: '11158 x' })], [])).toBe('待验证')
+  })
+  it('没有锁看最近一次到过上游的请求', () => {
+    const av = modelAvailability('global:m', [], [ev({})], at)
+    expect(av).toEqual({ label: '可用', color: 'success', tip: '最近一次真实请求成功 · T09:00' })
+    expect(label('global:m', [], [ev({ status: 429, ok: false, outcome: 'http_error' })])).toBe('限流')
+    expect(label('global:m', [], [ev({ status: 502, ok: false, outcome: 'http_error' })])).toBe('上游错误')
+    expect(modelAvailability('global:m', [], [ev({ status: 400, ok: false, outcome: 'http_error', error: 'bad' })], at)?.tip)
+      .toBe('最近一次请求失败 HTTP 400 · T09:00：bad')
+  })
+  it('只看最新的一条，没发到上游的不算', () => {
+    expect(label('global:m', [], [ev({ status: 502, ok: false, outcome: 'http_error' }), ev({})])).toBe('上游错误')
+    expect(label('global:m', [], [ev({ status: 403, ok: false, outcome: 'http_error', attempts: undefined }), ev({})])).toBe('可用')
+    expect(label('global:m', [], [ev({ model: 'cn:m' })])).toBe('待验证')
   })
 })

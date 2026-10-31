@@ -31,6 +31,7 @@ export const qk = {
   logArchive: (range: TimeRange, ch: string, level: string, q: string, limit: number) => ['logs_archive', rangeKey(range), ch, level, q, limit] as const,
   logStorage: ['log_storage'] as const,
   requests: (range: TimeRange, limit: number) => ['request_metrics', rangeKey(range), limit] as const,
+  recentRequests: ['request_metrics', 'recent'] as const,
   models: ['models'] as const,
   probes: ['model_probes'] as const,
   usage: (range: TimeRange, key: string) => ['usage', rangeKey(range), key] as const,
@@ -109,6 +110,15 @@ export function useRequestMetrics(live: boolean, range: TimeRange, limit: number
     },
     refetchInterval: live ? 5000 : false,
     placeholderData: keepPreviousData,
+  })
+}
+
+/** 网关内存里的最近请求（最近 100 条，不查归档）：模型页「状态」列用，30 秒一刷 */
+export function useRecentRequests() {
+  return useQuery({
+    queryKey: qk.recentRequests,
+    queryFn: () => api<RequestMetrics>('request_metrics').then((m) => m.recent || []),
+    refetchInterval: 30_000,
   })
 }
 

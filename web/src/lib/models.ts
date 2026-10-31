@@ -4,7 +4,7 @@
 
 // 模型列表的筛选、排序与实测上限关联（纯函数，见 models.test.ts）。
 // 模型目录一次拉全（几十条），筛选排序都在前端做：改条件零延迟，也不会每调一次筛选就打一次上游。
-import type { Model, Probe } from './types'
+import type { Model, ModelLockRow, Probe, RequestEvent } from './types'
 
 export type RealmFilter = 'all' | 'cn' | 'global'
 export type Capability = 'tools' | 'vision' | 'reasoning' | 'default'
@@ -116,4 +116,53 @@ export function addHiddenModel(list: string[], raw: string): string[] {
   const m = raw.trim()
   if (!m || list.includes(m)) return list
   return [...list, m]
+}
+
+/** 模型当前可用性（模型页的「状态」列） */
+export interface ModelAvailability {
+  label: string
+  color: 'success' | 'warning' | 'danger' | 'default'
+  /** 悬停说明：依据和时间 */
+  tip: string
+}
+
+/** 按模型锁和最近一次到过上游的真实请求判模型能不能用，两个域都判；不另发推理请求（照上游 74f8583）。
+ *  模型锁优先；没有锁就看最近的请求（recent 最新的在前；没发到上游的，比如密钥白名单、隐藏名单拦下的，
+ *  不算数）；都没有是「待验证」：目录里有不代表号能用。id 不带域前缀时返回 null。 */
+export function modelAvailability(
+  id: string, locks: ModelLockRow[], recent: RequestEvent[], fmtTime: (iso: string) => string,
+): ModelAvailability | null {
+  const i = id.indexOf(':')
+  const realm = i < 0 ? '' : id.slice(0, i)
+  if (realm !== 'cn' && realm !== 'global') return null
+  const bare = id.slice(i + 1)
+  const lock = locks.find((r) => r.realm === realm && r.model === bare)
+  if (lock) {
+    const reason = (lock.reason || '').trim()
+    const why = reason ? '；上游：' + reason : ''
+    if (lock.state === 'partial') {
+      return { label: '部分可用', color: 'warning', tip: `还有 ${lock.servable} 个号能用，${lock.locked} 个号被这个模型的限流挡住${why}` }
+    }
+    if (lock.state === 'starved') {
+      return { label: '暂无可用号', color: 'default', tip: '没有号能用这个模型，但不是这个模型被限流：看看账号冷却和在途占用' }
+    }
+    const lower = reason.toLowerCase()
+    if (lower.startsWith('11158') || lower.includes('not allowed for user type')) {
+      return { label: '无权限', color: 'danger', tip: '这一类账号不能用这个模型' + why }
+    }
+    if (lower.startsWith('11102') || lower.includes('service info not found')) {
+      return { label: '上游无此模型', color: 'danger', tip: '目录里还列着，实际请求回模型不存在' + why }
+    }
+    return { label: '限流中', color: 'warning', tip: '所有号都被这个模型的限流挡住' + why }
+  }
+  const ev = recent.find((e) => e.model === id && (e.attempts ?? 0) > 0)
+  if (!ev) return { label: '待验证', color: 'default', tip: '没有模型锁，最近的请求里也没用过它；目录里有不代表号能用' }
+  const when = ev.time ? ' · ' + fmtTime(ev.time) : ''
+  const err = ev.error ? '：' + ev.error : ''
+  if (ev.outcome === 'success' || (ev.status >= 200 && ev.status < 300)) {
+    return { label: '可用', color: 'success', tip: '最近一次真实请求成功' + when }
+  }
+  if (ev.status === 429) return { label: '限流', color: 'warning', tip: '最近一次请求被限流' + when + err }
+  if (ev.status >= 500) return { label: '上游错误', color: 'danger', tip: `最近一次请求上游出错 HTTP ${ev.status}${when}${err}` }
+  return { label: '最近失败', color: 'danger', tip: `最近一次请求失败 HTTP ${ev.status || '—'}${when}${err}` }
 }

@@ -9,14 +9,15 @@ import {
   Button, Card, Chip, Label, ListBox, SearchField, Select, Table, ToggleButton, ToggleButtonGroup, useMediaQuery,
 } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
-import { fmtK } from '../../lib/format'
+import { dateTime, fmtK, timeMs } from '../../lib/format'
 import {
-  EMPTY_MODEL_FILTER, filterModels, hiddenFromConfig, hiddenModelSet, probeFor, type Capability, type EffortFilter, type ModelFilter,
-  type ModelSort, type PromoFilter, type RealmFilter,
+  EMPTY_MODEL_FILTER, filterModels, hiddenFromConfig, hiddenModelSet, modelAvailability, probeFor, type Capability, type EffortFilter,
+  type ModelAvailability, type ModelFilter, type ModelSort, type PromoFilter, type RealmFilter,
 } from '../../lib/models'
-import { qk, useConfig, useModels, useProbes } from '../../lib/queries'
+import { qk, useConfig, useModels, useOverview, useProbes, useRecentRequests } from '../../lib/queries'
 import type { Model, Probe } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
+import { Hint } from '../../components/Hint'
 import { InfoTip, Panel } from '../../components/Panel'
 import { HiddenModels } from './HiddenModels'
 import { ModelRoutes } from './ModelRoutes'
@@ -79,6 +80,18 @@ function RateCell({ m }: { m: Model }) {
   }
   return <span>{m.credits || '—'}</span>
 }
+
+/** 状态：模型锁和最近一次真实请求合成，悬停看依据和时间 */
+function AvailabilityCell({ av }: { av: ModelAvailability | null }) {
+  if (!av) return <span className="text-muted">—</span>
+  return (
+    <Hint tip={av.tip} className="inline-flex">
+      <Chip size="sm" variant="soft" color={av.color}>{av.label}</Chip>
+    </Hint>
+  )
+}
+
+const fmtEventTime = (iso: string) => dateTime(timeMs(iso))
 
 function Efforts({ m }: { m: Model }) {
   const eff = [...(m.supported_efforts || [])]
@@ -160,6 +173,9 @@ export function ModelsPage() {
   const probes = useProbes()
   const config = useConfig()
   const hidden = useMemo(() => hiddenModelSet(config.data ? hiddenFromConfig(config.data.config) : []), [config.data])
+  const overview = useOverview()
+  const recent = useRecentRequests()
+  const avail = (m: Model) => modelAvailability(m.id, overview.data?.model_locks || [], recent.data || [], fmtEventTime)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
   const [filter, setFilter] = useState<ModelFilter>(EMPTY_MODEL_FILTER)
   const [sort, setSort] = useState<ModelSort>('default')
@@ -230,9 +246,10 @@ export function ModelsPage() {
           ) : isDesktop ? (
             <Table variant="secondary">
               <Table.ScrollContainer>
-                <Table.Content aria-label="模型能力" className="min-w-[860px]">
+                <Table.Content aria-label="模型能力" className="min-w-[960px]">
                   <Table.Header>
                     <Table.Column isRowHeader>模型</Table.Column>
+                    <Table.Column>状态</Table.Column>
                     <Table.Column>积分倍率</Table.Column>
                     <Table.Column>默认档</Table.Column>
                     <Table.Column>支持的思考档位</Table.Column>
@@ -243,6 +260,7 @@ export function ModelsPage() {
                     {shown.map((m) => (
                       <Table.Row key={m.id} id={m.id}>
                         <Table.Cell><div className="max-w-72"><ModelName m={m} hidden={hidden.has(m.id)} /></div></Table.Cell>
+                        <Table.Cell><AvailabilityCell av={avail(m)} /></Table.Cell>
                         <Table.Cell><RateCell m={m} /></Table.Cell>
                         <Table.Cell>{m.default_effort ? <Chip size="sm" variant="soft" color="success">{m.default_effort}</Chip> : <span className="text-muted">—</span>}</Table.Cell>
                         <Table.Cell><div className="max-w-56"><Efforts m={m} /></div></Table.Cell>
@@ -260,6 +278,7 @@ export function ModelsPage() {
                 <Card key={m.id} variant="secondary" className="gap-3 p-4">
                   <ModelName m={m} hidden={hidden.has(m.id)} />
                   <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                    <dt className="text-muted">状态</dt><dd><AvailabilityCell av={avail(m)} /></dd>
                     <dt className="text-muted">积分倍率</dt><dd><RateCell m={m} /></dd>
                     <dt className="text-muted">默认档</dt><dd>{m.default_effort || '—'}</dd>
                     <dt className="text-muted">思考档位</dt><dd><Efforts m={m} /></dd>
