@@ -83,7 +83,8 @@ func TestRunProxiesLoaded(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out, addr := startRun(t, ctx, cfg, newRunUpstream(&runRT{}), ln)
-	waitHealthy(t, addr)
+	// 不等 /healthz 转 200：唯一的号绑的代理连不上，代理池第一轮健康检查后号就停了，/healthz 一直 503。
+	waitServing(t, addr)
 
 	code, body := panelRequest(t, http.MethodGet, "http://"+addr+"/panel/api/proxies", "")
 	var list struct {

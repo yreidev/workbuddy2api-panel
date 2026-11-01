@@ -161,6 +161,26 @@ func waitHealthy(t *testing.T, addr string) {
 	}
 }
 
+// waitServing 带截止时间轮询 /healthz，有应答就算服务起来了，不管状态码：号都用不了时 /healthz 是 503，
+// 只要接口能用的测试等它就行。
+func waitServing(t *testing.T, addr string) {
+	t.Helper()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := client.Get("http://" + addr + "/healthz")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("等待服务起来超时: addr=%s err=%v", addr, err)
+		}
+		<-time.After(10 * time.Millisecond)
+	}
+}
+
 type runOutcome struct {
 	restart bool
 	err     error
