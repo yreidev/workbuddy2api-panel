@@ -145,11 +145,11 @@ export const CONFIG_TABS: ConfigTab[] = [
         fields: [
           {
             name: 'cross_realm', path: ['pool', 'cross_realm'], label: '跨域负载均衡', kind: 'select',
-            hint: '只管不带 cn: / global: 前缀的模型名，只进模型目录里有它的域；带前缀的照旧钉死一域。需启用国际版',
+            hint: '打开后 /v1/models 会多列出不带 cn: / global: 前缀的模型名，用这种名字请求时，网关自动在国内版、国际版账号里选号。带前缀的名字照旧只走那一域。需启用国际版',
             options: [
-              { id: 'off', label: 'off — 关闭：不带前缀的模型名只走国内版' },
-              { id: 'merge', label: 'merge — 合池：两个域的号合成一个池选号' },
-              { id: 'cn_first', label: 'cn_first — 国内版优先：国内版此刻没有能接的号才用国际版' },
+              { id: 'off', label: 'off — 关闭：不带前缀的模型名只用国内版账号' },
+              { id: 'merge', label: 'merge — 合池：国内版、国际版账号一起选' },
+              { id: 'cn_first', label: 'cn_first — 国内版优先：国内版没号可用时才用国际版账号' },
             ],
           },
           num('idle_weight_per_hour', ['pool', 'idle_weight_per_hour'], '闲置补偿 / 小时', '0.5', { step: 0.1 }),
