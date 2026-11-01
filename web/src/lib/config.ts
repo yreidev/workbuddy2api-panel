@@ -117,7 +117,10 @@ export const CONFIG_TABS: ConfigTab[] = [
         fields: [
           num('max_in_flight', ['pool', 'max_in_flight'], '单账号最大在途', '3', { min: 0, hint: '0 = 不限制' }),
           num('max_in_flight_global', ['pool', 'max_in_flight_global'], '国际版在途上限', '2', { min: 1, hint: 'global 域风控更紧，默认 2' }),
-          duration('in_flight_wait', ['pool', 'in_flight_wait'], '号都满时排队上限', '30s', '能接的号在途都满时，请求最多等多久空位；0 = 不等，直接 503'),
+          num('max_rpm', ['pool', 'max_rpm'], '国内版每号每分钟请求数', '0',
+            { min: 0, hint: '最近 60 秒内一个号最多接几个请求，到了就换别的号或排队，同在途满；0 = 不限制' }),
+          num('max_rpm_global', ['pool', 'max_rpm_global'], '国际版每号每分钟请求数', '0', { min: 0, hint: '同上，只管国际版的号；0 = 不限制' }),
+          duration('in_flight_wait', ['pool', 'in_flight_wait'], '号都满时排队上限', '30s', '能接的号在途都满或每分钟请求数到上限时，请求最多等多久空位；0 = 不等，直接 503'),
           num('breaker_threshold', ['pool', 'breaker_threshold'], '连续失败熔断阈值', '3', { min: 1 }),
           duration('breaker_cooldown', ['pool', 'breaker_cooldown'], '熔断基础时长', '30m'),
           duration('breaker_cooldown_max', ['pool', 'breaker_cooldown_max'], '熔断退避上限', '6h'),

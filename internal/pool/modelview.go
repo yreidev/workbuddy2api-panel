@@ -120,7 +120,7 @@ func (p *Pool) ModelLockView() []ModelLockRow {
 			if e.a.Realm() != realm {
 				continue
 			}
-			if p.servableFor(e, now, model) && !p.inFlightFull(e) {
+			if p.servableFor(e, now, model) && !p.busy(e, now) {
 				row.Servable++
 			}
 		}

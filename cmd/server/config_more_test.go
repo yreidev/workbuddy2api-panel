@@ -120,6 +120,7 @@ func TestNormalizeDefaultsAndClamps(t *testing.T) {
 	c.Pool.InFlightWait = ""
 	c.Pool.ExpiringSoon = "-5m"
 	c.Pool.CreditFloor = -3
+	c.Pool.MaxRPM, c.Pool.MaxRPMGlobal = -1, -2
 	c.Pool.RestrictionWaveThreshold = -1
 	c.Pool.RestrictionWaveWindow = ""
 	c.Pool.RestrictionWavePause = "-5m"
@@ -141,6 +142,9 @@ func TestNormalizeDefaultsAndClamps(t *testing.T) {
 	}
 	if c.Pool.MaxInFlightGlobal != 2 || c.Pool.IdleWeightPerHour != 0.5 || c.Pool.IdleWeightMax != 5 {
 		t.Fatalf("在途/闲置权重应回落默认: %+v", c.Pool)
+	}
+	if c.Pool.MaxRPM != 0 || c.Pool.MaxRPMGlobal != 0 {
+		t.Fatalf("每分钟请求数上限负值应钳 0（不限）: %+v", c.Pool)
 	}
 	if c.Upstream.TimeoutSeconds != 120 || c.Upstream.HeaderTimeoutSeconds != 120 || c.Upstream.IdleTimeoutSeconds != 300 {
 		t.Fatalf("上游超时应回落默认: %+v", c.Upstream)

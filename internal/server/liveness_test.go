@@ -275,7 +275,7 @@ func TestTestAccountBusy(t *testing.T) {
 	)
 	h := NewHandler(Config{Pool: p, Upstream: fake.client()})
 	res, _, err := h.TestAccount(context.Background(), "u1", "m-cheap", false)
-	if err != nil || res.OK || res.Status != http.StatusServiceUnavailable || !strings.Contains(res.Error, "in-flight limit") {
+	if err != nil || res.OK || res.Status != http.StatusServiceUnavailable || !strings.Contains(res.Error, "in-flight or requests-per-minute limit") {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
 	if tokens, _, _ := fake.calls(); len(tokens) != 0 {

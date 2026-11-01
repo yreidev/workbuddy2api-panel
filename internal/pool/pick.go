@@ -73,7 +73,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		if floorBlocked(e) {
 			continue // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
 		}
-		if p.inFlightFull(e) {
+		if p.busy(e, now) {
 			continue // 在途占满：跳过（max=0 不限时不触发）
 		}
 		cands = append(cands, e)
@@ -331,7 +331,7 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 		if p.floorBlockedForRealmModel(e, model, realm, now) {
 			continue // 积分保底：触底号不接收费模型（兜底路径同判据）
 		}
-		if p.inFlightFull(e) {
+		if p.busy(e, now) {
 			continue
 		}
 		exp := e.expiry(now)

@@ -105,6 +105,47 @@ func TestChatSlotWaitTimesOut(t *testing.T) {
 	}
 }
 
+// TestChatRPMFullTimesOut 号的每分钟请求数到上限（在途是空的）：同在途满一样排队，等满回 503，
+// 文案和 gateway_hint 说明是 RPM 满了。
+func TestChatRPMFullTimesOut(t *testing.T) {
+	shortSlotPoll(t, 20*time.Millisecond)
+	h, p, waiting := newSlotWaitHandler(t, 150*time.Millisecond)
+	p.Release("u1")
+	p.SetMaxRPM(1)
+	if !p.Acquire("u1") {
+		t.Fatal("Acquire 应成功")
+	}
+	p.Release("u1")
+	rec := waitFor(t, serveChatAsync(h, context.Background()), "返回")
+	waitFor(t, waiting, "开始等空位")
+	body := rec.Body.String()
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(body, "requests-per-minute") || !strings.Contains(body, "rpm_full") {
+		t.Fatalf("应排队后回 503 并说明 RPM 满了: code=%d body=%s", rec.Code, body)
+	}
+}
+
+// TestWaitSlotAlreadyExpired 醒来再选号仍没选到、而合计已经等满：不再等，记下等满了和是不是 RPM 的原因。
+func TestWaitSlotAlreadyExpired(t *testing.T) {
+	h, p, waiting := newSlotWaitHandler(t, 50*time.Millisecond)
+	p.Release("u1")
+	p.SetMaxRPM(1)
+	if !p.Acquire("u1") {
+		t.Fatal("Acquire 应成功")
+	}
+	sw := slotWait{since: time.Now().Add(-time.Second)}
+	if h.waitSlot(context.Background(), p.SlotFreed(), &sw, map[string]bool{}, "glm-5.2", "") {
+		t.Fatal("合计已经等满，不应再等")
+	}
+	if !sw.timedOut || !sw.rpm {
+		t.Fatalf("应记下等满了、u1 的 RPM 也到上限了: %+v", sw)
+	}
+	select {
+	case <-waiting:
+		t.Fatal("不应开始等")
+	default:
+	}
+}
+
 // TestChatNoSlotWait 设成不等，或者号用不了不是因为在途满（这里是暂停选号）：不排队，直接回 503。
 func TestChatNoSlotWait(t *testing.T) {
 	cases := []struct {

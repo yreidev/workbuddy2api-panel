@@ -62,7 +62,7 @@ func (p *Pool) ServableForModel(tried map[string]bool, model, realm string) bool
 	return p.servableExcept(tried, model, realm, true)
 }
 
-// servableExcept 上面两个的共用遍历；inFlight 为 true 时在途满的号不算。
+// servableExcept 上面两个的共用遍历；inFlight 为 true 时忙的号（在途满或每分钟请求数到上限）不算。
 func (p *Pool) servableExcept(tried map[string]bool, model, realm string, inFlight bool) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -71,13 +71,19 @@ func (p *Pool) servableExcept(tried map[string]bool, model, realm string, inFlig
 		if tried[uid] || (realm != "" && e.a.Realm() != realm) {
 			continue
 		}
-		ok := e.healthy(now)
-		if model != "" {
-			ok = p.servableFor(e, now, model)
-		}
-		if ok && !p.floorBlockedForRealmModel(e, model, realm, now) && (!inFlight || !p.inFlightFull(e)) {
+		if p.servableIgnoringBusyLocked(e, now, model, realm) && (!inFlight || !p.busy(e, now)) {
 			return true
 		}
 	}
 	return false
+}
+
+// servableIgnoringBusyLocked 号除了忙不忙以外能不能接这个请求（禁用暂停、冷却熔断、模型级冷却、
+// 模型目录、积分保底）。调用方持 p.mu。
+func (p *Pool) servableIgnoringBusyLocked(e *entry, now time.Time, model, realm string) bool {
+	ok := e.healthy(now)
+	if model != "" {
+		ok = p.servableFor(e, now, model)
+	}
+	return ok && !p.floorBlockedForRealmModel(e, model, realm, now)
 }

@@ -239,6 +239,8 @@ type Config struct {
 		MaxInFlight        int    `json:"max_in_flight"`        // 单账号最大在途请求数，0 = 不限
 		MaxInFlightGlobal  int    `json:"max_in_flight_global"` // global 域单账号在途上限（WAF 风控紧域压低并发），0 = 回落默认 2
 		InFlightWait       string `json:"in_flight_wait"`       // 能接的号在途都满时请求最多等多久空位，默认 "30s"，"0" = 不等直接 503
+		MaxRPM             int    `json:"max_rpm"`              // 国内版单号每分钟请求数上限（最近 60 秒），0 = 不限
+		MaxRPMGlobal       int    `json:"max_rpm_global"`       // 国际版单号每分钟请求数上限，0 = 不限；两档各管各的域
 		BreakerThreshold   int    `json:"breaker_threshold"`    // 连续失败次数触发熔断，默认 3
 		BreakerCooldown    string `json:"breaker_cooldown"`     // 基础熔断时长，默认 "30m"
 		BreakerCooldownMax string `json:"breaker_cooldown_max"` // 指数退避封顶，默认 "6h"
@@ -686,6 +688,8 @@ func (c *Config) normalize() error {
 	if c.RestrictionWavePauseDur, err = parseDurationOr(c.Pool.RestrictionWavePause, "30m"); err != nil {
 		return fmt.Errorf("pool.restriction_wave_pause: %w", err)
 	}
+	// 每号每分钟请求数上限：0 是合法默认（不限），负值钳 0。
+	c.Pool.MaxRPM, c.Pool.MaxRPMGlobal = max(c.Pool.MaxRPM, 0), max(c.Pool.MaxRPMGlobal, 0)
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0

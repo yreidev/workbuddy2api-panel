@@ -73,6 +73,9 @@ type Pool struct {
 	// maxInFlightGlobal global 域单账号在途上限分档（WAF 403 修复 P1-1：global 域
 	// WAF 风控更紧，压低并发）；0 = 未设置，回落 maxInFlight（不分档，零回归）。
 	maxInFlightGlobal int
+	// maxRPM / maxRPMGlobal 国内版、国际版单号每分钟请求数上限；0 = 不限（见 rpm.go）。
+	maxRPM       int
+	maxRPMGlobal int
 	// inFlightWait 能接请求的号在途都满时，请求最多等多久空位（SetInFlightWait 注入；默认
 	// defaultInFlightWait 30s，0 = 不等）。见 slotwait.go。
 	inFlightWait time.Duration
@@ -333,6 +336,7 @@ func (p *Pool) SetStore(s StoreSnapshotter) {
 // Acquire 为 uid 占一个在途名额（会话粘性命中后调用）；池上限内返回 true。
 // 名额用 entry.inFlight 原子自增，满额返回 false。上限按账号 realm 分档
 // （global 档 maxInFlightGlobal，P1-1；未设置回落 maxInFlight）。
+// 同时记一次每分钟请求数（见 rpm.go），最近 60 秒已到上限也返回 false。
 func (p *Pool) Acquire(uid string) bool {
 	p.mu.RLock()
 	e, ok := p.byUID[uid]
@@ -340,10 +344,22 @@ func (p *Pool) Acquire(uid string) bool {
 		p.mu.RUnlock()
 		return false
 	}
-	limit := p.inFlightLimit(e)
+	limit, rpm := p.inFlightLimit(e), p.rpmLimit(e)
 	p.mu.RUnlock()
+	if !acquireSlot(e, limit) {
+		return false
+	}
+	// 每分钟请求数到上限：退回刚占的在途名额。没真正放出名额，不叫醒排队的请求。
+	if !e.rpm.take(rpm, time.Now()) {
+		e.inFlight.Add(-1)
+		return false
+	}
+	return true
+}
+
+// acquireSlot 在途名额 CAS 自增；limit <= 0 不限时计数仍累加（供状态观测），但永不拒绝。
+func acquireSlot(e *entry, limit int) bool {
 	if limit <= 0 {
-		// 不限：计数仍累加（供状态观测），但永不拒绝。
 		e.inFlight.Add(1)
 		return true
 	}

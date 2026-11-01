@@ -82,6 +82,8 @@
     "max_in_flight": 3,
     "max_in_flight_global": 2,
     "in_flight_wait": "30s",
+    "max_rpm": 0,
+    "max_rpm_global": 0,
     "breaker_threshold": 3,
     "breaker_cooldown": "30m",
     "breaker_cooldown_max": "6h",

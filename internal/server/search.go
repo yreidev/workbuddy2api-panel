@@ -250,8 +250,7 @@ func (h *Handler) searchGaveUp(lastErr error, slot *slotWait) *searchFailure {
 	var ue *upstream.Error
 	switch {
 	case lastErr == nil && slot.timedOut:
-		f.msg = fmt.Sprintf("all accounts are busy: every account that can serve this request is at its in-flight limit, no free slot after waiting %s, please retry later", h.cfg.Pool.InFlightWait())
-		f.hint = "in_flight_full: raise pool.max_in_flight / pool.max_in_flight_global, add accounts, or retry later"
+		f.msg, f.hint = h.busyError(slot)
 	case errors.Is(lastErr, errUpstreamTimeout):
 		f.code, f.msg = "upstream_timeout", "web search timed out upstream, please retry later"
 	case upstream.IsRouteError(lastErr):

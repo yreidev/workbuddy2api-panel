@@ -138,7 +138,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
 
       <Panel
         title="账号池"
-        desc={data.in_flight_full ? data.in_flight_full + ' 个账号在途占满' : undefined}
+        desc={data.in_flight_full ? data.in_flight_full + ' 个账号满载（在途或每分钟请求数到上限）' : undefined}
         actions={<BatchButtons />}
         contentClassName="flex flex-col gap-3"
       >

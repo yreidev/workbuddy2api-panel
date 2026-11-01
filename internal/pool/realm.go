@@ -62,7 +62,7 @@ func (p *Pool) AvailableUIDsForRealm(realm string) []string {
 		if !e.healthy(now) {
 			continue
 		}
-		if p.inFlightFull(e) {
+		if p.busy(e, now) {
 			continue
 		}
 		uids = append(uids, uid)
@@ -124,7 +124,7 @@ func (p *Pool) servableEntriesLocked(model, realm string, now time.Time) []*entr
 		if !p.servableFor(e, now, model) {
 			continue
 		}
-		if p.inFlightFull(e) {
+		if p.busy(e, now) {
 			continue
 		}
 		out = append(out, e)
@@ -163,7 +163,7 @@ func (p *Pool) AvailableUIDsForModelRealm(model, realm string) []string {
 		if !p.servableFor(e, now, model) {
 			continue
 		}
-		if p.inFlightFull(e) {
+		if p.busy(e, now) {
 			continue
 		}
 		uids = append(uids, uid)

@@ -1011,8 +1011,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if acct == nil {
 			st.status = http.StatusServiceUnavailable
 			if slot.timedOut {
-				log.Printf("WARN: [server] in-flight full: model=%s 能接的号在途都满，等了 %.1fs 仍没有空位，回 503",
-					st.model, time.Since(slot.since).Seconds())
+				why := "在途都满"
+				if slot.rpm {
+					why = "在途满或每分钟请求数到上限"
+				}
+				log.Printf("WARN: [server] in-flight full: model=%s 能接的号%s，等了 %.1fs 仍没有空位，回 503",
+					st.model, why, time.Since(slot.since).Seconds())
 			}
 			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
 			//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
@@ -1037,9 +1041,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
 		if !acquireInFlight(h.cfg.Pool, acct.UID) {
 			if pinned != "" {
-				// 测活不等名额：这个号在途已满，说明正在接请求，回 503 让人稍后再测。
+				// 测活不等名额：这个号在途已满或每分钟请求数到上限，说明正在接请求，回 503 让人稍后再测。
 				st.status, st.outcome = http.StatusServiceUnavailable, reqlog.OutcomeHTTPError
-				writeOpenAIError(w, http.StatusServiceUnavailable, "account_busy", "account is at its in-flight limit, test again later")
+				writeOpenAIError(w, http.StatusServiceUnavailable, "account_busy", "account is at its in-flight or requests-per-minute limit, test again later")
 				return
 			}
 			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
@@ -1489,9 +1493,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 错误（无上游原文）固定 no_healthy_account hint。
 	hint := upstream.NoHealthyAccountHint()
 	if slot.timedOut && lastErr == nil {
-		// 号都在、只是在途都满了：说清楚是忙，不是号坏了（见 waitSlot）。
-		msg = fmt.Sprintf("all accounts are busy: every account that can serve this request is at its in-flight limit, no free slot after waiting %s, please retry later", h.cfg.Pool.InFlightWait())
-		hint = "in_flight_full: raise pool.max_in_flight / pool.max_in_flight_global, add accounts, or retry later"
+		// 号都在、只是都忙（在途满或每分钟请求数到上限）：说清楚是忙，不是号坏了（见 waitSlot）。
+		msg, hint = h.busyError(&slot)
 	}
 	// upstreamMsgPassed 记录 error.message 是否已被上游原文占据：模型级阻塞分支
 	// 据此决定要不要覆盖 msg（上游原文优先，含 requestId）。
@@ -1586,6 +1589,7 @@ type slotWait struct {
 	since    time.Time // 第一次开始等的时刻，一个请求合计最多等 pool.in_flight_wait；零值 = 没等过
 	woke     bool      // 这次选号是刚等完醒来的
 	timedOut bool      // 等到上限仍没有空位，末端错误据此说明是号都在忙
+	rpm      bool      // 等满时有号是因为每分钟请求数到上限才忙（pool.max_rpm），末端错误据此说明
 	logged   bool      // 「等到空位」的日志已经记过
 }
 
@@ -1603,9 +1607,10 @@ func (h *Handler) waitSlot(ctx context.Context, freed <-chan struct{}, sw *slotW
 	}
 	left := wait - time.Since(sw.since)
 	if left <= 0 {
-		sw.timedOut = true
+		sw.giveUp(h.cfg.Pool, tried, model, realm)
 		return false
 	}
+	// 每分钟请求数到上限的号不会 Release 叫醒人，靠 slotPoll 定时重看。
 	t := time.NewTimer(min(left, slotPoll))
 	defer t.Stop()
 	slotWaitStarted()
@@ -1613,7 +1618,7 @@ func (h *Handler) waitSlot(ctx context.Context, freed <-chan struct{}, sw *slotW
 	case <-freed:
 	case <-t.C:
 		if time.Since(sw.since) >= wait {
-			sw.timedOut = true
+			sw.giveUp(h.cfg.Pool, tried, model, realm)
 			return false
 		}
 	case <-ctx.Done():
@@ -1621,6 +1626,23 @@ func (h *Handler) waitSlot(ctx context.Context, freed <-chan struct{}, sw *slotW
 	}
 	sw.woke = true
 	return true
+}
+
+// giveUp 等满上限：记下等满了，以及是不是有号因为每分钟请求数到上限而忙。
+func (sw *slotWait) giveUp(p *pool.Pool, tried map[string]bool, model, realm string) {
+	sw.timedOut = true
+	sw.rpm = p.RPMBusy(tried, model, realm)
+}
+
+// busyError 号都在忙、等满仍没空位时回给客户端的说明与 gateway_hint（对话与搜索共用）。
+func (h *Handler) busyError(sw *slotWait) (msg, hint string) {
+	wait := h.cfg.Pool.InFlightWait()
+	if sw.rpm {
+		return fmt.Sprintf("all accounts are busy: every account that can serve this request is at its requests-per-minute or in-flight limit, no free slot after waiting %s, please retry later", wait),
+			"rpm_full: raise pool.max_rpm / pool.max_rpm_global, add accounts, or retry later"
+	}
+	return fmt.Sprintf("all accounts are busy: every account that can serve this request is at its in-flight limit, no free slot after waiting %s, please retry later", wait),
+		"in_flight_full: raise pool.max_in_flight / pool.max_in_flight_global, add accounts, or retry later"
 }
 
 // pickWarm 换号时先回到这段对话最近成功用过、这次还没试过的号（见 session.Router.WarmUIDs），

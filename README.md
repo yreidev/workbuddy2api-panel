@@ -68,6 +68,7 @@ GitHub 上叫 workbuddy2api-panel 的仓库有好几个。本仓库是在原版 
   - 限流、余额不足、登录失效分别处置，出错自动换号重试。
   - 每个号都能一键测活；限流冷却、熔断中的号每 30 分钟自动测一次，测通就提前恢复。
   - 同一会话尽量不跳号。
+  - 可限每个号同时几个请求、每分钟几个请求，满了换号或排队。
 - 🌐 **按号代理，分散出口 IP**
   - 号绑在代理池上，按绑号最少分到一个代理并固定下来；代理批量粘贴导入，先预览再导。
   - 自动测连通、查出口 IP，标出出口重复、和服务器同 IP、动态 IP；代理可设到期时间，提前提醒。
@@ -265,7 +266,7 @@ flowchart LR
 - **其他 API 网关**：
   - [QuantumNous/new-api](https://github.com/QuantumNous/new-api)：调用日志单独成页、失败请求直接显示原因的做法，以及渠道测试（单测、测试全部、定时只测被自动禁用的渠道、测通自动启用）的做法，网关的账号测活照此实现。
   - [router-for-me/Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center)：账号卡片网格的排法，以及日志页把服务日志和出错请求分开的做法。
-  - [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)：号都在途占满时请求排队等空位、最多等 30 秒的做法（`fallback_wait_timeout`），以及各类日志各设保留天数、改了立即生效的做法（`ops.cleanup` 的 `*_retention_days`），账号「测试连接」弹窗和定时测试测通后自动恢复账号（`auto_recover`）的做法，以及代理管理的做法（代理表、账号绑定代理、代理到期、经代理查出口 IP、错误按代理归因），代理池照此实现。
+  - [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)：号都在途占满时请求排队等空位、最多等 30 秒的做法（`fallback_wait_timeout`），每号每分钟请求数上限（账号的 `base_rpm`），以及各类日志各设保留天数、改了立即生效的做法（`ops.cleanup` 的 `*_retention_days`），账号「测试连接」弹窗和定时测试测通后自动恢复账号（`auto_recover`）的做法，以及代理管理的做法（代理表、账号绑定代理、代理到期、经代理查出口 IP、错误按代理归因），代理池照此实现。
 - **上游的每一位贡献者**：
 
   <a href="https://github.com/linguo2625469/workbuddy2api-panel/graphs/contributors"><img src="https://contrib.rocks/image?repo=linguo2625469/workbuddy2api-panel" alt="linguo2625469/workbuddy2api-panel 的贡献者"></a>

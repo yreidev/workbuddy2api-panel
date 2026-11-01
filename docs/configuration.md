@@ -132,7 +132,9 @@
 |---|---|---|
 | `pool.max_in_flight` | `3` | 国内版单账号最大在途请求数；`0` = 不限 |
 | `pool.max_in_flight_global` | `2` | 国际版单账号在途上限（国际版风控更紧） |
-| `pool.in_flight_wait` | `30s` | 能接请求的号在途都满时，请求最多排队等多久空位，等满才回 503，见[网关与选号](gateway.md#选号策略)；`0` = 不等 |
+| `pool.max_rpm` | `0` | 国内版单账号每分钟最多接几个请求（按最近 60 秒算），到了就当这个号忙，换号或排队；`0` = 不限，见[网关与选号](gateway.md#选号策略) |
+| `pool.max_rpm_global` | `0` | 国际版单账号每分钟请求数上限，只管国际版的号，不回落到 `pool.max_rpm`；`0` = 不限 |
+| `pool.in_flight_wait` | `30s` | 能接请求的号在途都满或每分钟请求数到上限时，请求最多排队等多久空位，等满才回 503，见[网关与选号](gateway.md#选号策略)；`0` = 不等 |
 | `pool.cross_realm` | `off` | 跨域负载均衡：`off` 关闭、`merge` 合池、`cn_first` 国内版优先；老配置的 `true` 读成 `merge`、`false` 读成 `off`，见[网关与选号](gateway.md#跨域负载均衡) |
 | `pool.credit_floor` | `0` | 积分保底：余额低于该值的账号不再接实测收费的模型；`0` = 关闭 |
 | `pool.prefer_expiring` | `true` | 有积分快过期的账号选号权重 ×3，优先把快过期的积分用掉 |
