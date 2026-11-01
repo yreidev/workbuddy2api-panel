@@ -297,7 +297,8 @@ func TestMainStartupAndShutdown(t *testing.T) {
 	}
 }
 
-// ChatHTTP 是 *http.Transport 时设置首字节超时；sticky 关闭时 StickyCount 返回 0。
+// 首字节超时接到上游客户端（各条线路的 Transport 由 SetHeaderTimeout 设，见 upstream 的测试）；sticky
+// 关闭时 StickyCount 返回 0。
 func TestMainTransportTimeoutAndStickyOff(t *testing.T) {
 	stubMainEnv(t)
 	cfg := newRunTestConfig(t)
@@ -305,10 +306,8 @@ func TestMainTransportTimeoutAndStickyOff(t *testing.T) {
 	cfg.SessionSticky.Enabled = false
 	path := writeMainConfig(t, cfg)
 
-	up := &upstream.Client{
-		HTTP:     &http.Client{Transport: &runRT{}},
-		ChatHTTP: &http.Client{Transport: &http.Transport{}},
-	}
+	up := upstream.New()
+	up.HTTP = &http.Client{Transport: &runRT{}}
 	launchUpdater = func(string, string) *selfupdate.Updater { return &selfupdate.Updater{} }
 	cancels := stubMainUpstream(up)
 	os.Args = []string{"wb2api", "-config", path}
@@ -322,12 +321,8 @@ func TestMainTransportTimeoutAndStickyOff(t *testing.T) {
 		!strings.Contains(body, `"sticky_sessions":0`) {
 		t.Fatalf("overview = %d %s", code, body)
 	}
-	tr, ok := up.ChatHTTP.Transport.(*http.Transport)
-	if !ok {
-		t.Fatal("ChatHTTP.Transport 应是 *http.Transport")
-	}
-	if up.HeaderTimeout == 0 || tr.ResponseHeaderTimeout != up.HeaderTimeout {
-		t.Fatalf("header timeout 未接线: up=%v tr=%v", up.HeaderTimeout, tr.ResponseHeaderTimeout)
+	if want := time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second; want == 0 || up.HeaderTimeout != want {
+		t.Fatalf("header timeout 未接线: up=%v want=%v", up.HeaderTimeout, want)
 	}
 
 	cancel()

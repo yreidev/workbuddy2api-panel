@@ -23,6 +23,7 @@
 package upstream
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,7 +169,7 @@ func (c *Client) acquireWebSessionLocked(a *auth.Auth, ws *webSession, referer s
 // 刷新令牌，不带 X-Request-ID / X-Product / X-Requested-With 等请求框架的头。
 // 默认头取安装包里 undici 6.25.0 的源码（未抓包）。
 func (c *Client) fetchDeviceAuthCode(a *auth.Auth) (string, error) {
-	req, err := http.NewRequest(http.MethodPost, c.webBase(a)+webDeviceAuthCodePath, nil)
+	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.webBase(a)+webDeviceAuthCodePath, nil)
 	if err != nil {
 		return "", err
 	}
@@ -248,7 +249,7 @@ func (c *Client) loginWebSession(a *auth.Auth, ws *webSession, deviceCode, refer
 	q.Set("target", webLoginTarget(referer))
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	req, err := newAccountRequest(context.Background(), a, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -295,7 +296,7 @@ func (c *Client) followNavigation(hc *http.Client, a *auth.Auth, from *url.URL, 
 			return
 		}
 		loc.Fragment = ""
-		req, err := http.NewRequest(http.MethodGet, loc.String(), nil)
+		req, err := newAccountRequest(context.Background(), a, http.MethodGet, loc.String(), nil)
 		if err != nil {
 			return
 		}

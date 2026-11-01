@@ -20,6 +20,10 @@
 //
 // state 落盘带 realm，poll 读回校验与命令行 --realm 一致（防混域）。
 // 无 PKCE（workbuddy 设备流由服务端签发 state）。
+//
+// 代理池（网关的 data/proxies.json，只读，--proxies 改路径）：url 先在 --pool 选的池（不写 = 这个域的
+// 默认池，"-" = 不绑）里按绑号最少分一个代理（凭证目录 --auths 里的号算进绑号数、守池的上限），登录请求
+// 都走它，记进 state 文件；poll 也走它，输出里带上 proxy 绑定，login.sh 写进凭证文件。
 package main
 
 import (
@@ -28,7 +32,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
@@ -36,6 +39,7 @@ import (
 	"time"
 
 	auth2 "github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -57,6 +61,8 @@ type loginState struct {
 	State string              `json:"state"`
 	Realm string              `json:"realm,omitempty"` // url 落盘时写回的 realm，poll 读回校验防混域
 	Trace upstream.LoginTrace `json:"trace"`           // 这次登录的链路；旧文件没有时 poll 现生成
+	// Pool 登录走的代理（Trace.Proxy）所在的池，poll 输出的绑定里带上；没走代理池为空。
+	Pool string `json:"pool,omitempty"`
 }
 
 // realm 取值枚举（与 internal/auth 的 Realm() 归一化输出一致）。
@@ -93,6 +99,84 @@ func parseRealmArgs(args []string) (realm string, rest []string, err error) {
 		}
 	}
 	return realm, rest, nil
+}
+
+// loginOpts 代理池相关的参数（见文件头）。
+type loginOpts struct {
+	pool, proxies, auths string
+}
+
+// parseProxyArgs 从 args 里取出 --pool、--proxies、--auths（--name=v 或 --name v），其余按原顺序返回。
+func parseProxyArgs(args []string) (o loginOpts, rest []string, err error) {
+	o = loginOpts{proxies: filepath.Join("data", "proxies.json"), auths: "auths"}
+	for i := 0; i < len(args); i++ {
+		name, val, hasVal := strings.Cut(args[i], "=")
+		p := map[string]*string{"--pool": &o.pool, "--proxies": &o.proxies, "--auths": &o.auths}[name]
+		if p == nil {
+			rest = append(rest, args[i])
+			continue
+		}
+		if !hasVal {
+			if i+1 >= len(args) {
+				return loginOpts{}, nil, fmt.Errorf("%s requires a value", name)
+			}
+			i++
+			val = args[i]
+		}
+		*p = strings.TrimSpace(val)
+	}
+	return o, rest, nil
+}
+
+// openProxies 只读打开代理池文件并装到 up 上（文件不存在 = 没有代理池，登录走默认线路）。
+func openProxies(o loginOpts, up *upstream.Client, errOut io.Writer) *proxies.Registry {
+	reg, err := proxies.OpenReadOnly(o.proxies)
+	if err != nil {
+		fatal(errOut, "%v", err)
+	}
+	up.SetRouter(reg)
+	return reg
+}
+
+// trackAuths 让代理池知道凭证目录里的号各绑在哪个代理（只读，不改文件）：按绑号最少分代理、守池的上限
+// 都要用。读不了的文件提示一声、不算进去。
+func trackAuths(reg *proxies.Registry, dir string, errOut io.Writer) {
+	files, err := filepath.Glob(filepath.Join(dir, "workbuddy-*.json"))
+	if err != nil {
+		fatal(errOut, "list auths %s: %v", dir, err)
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err == nil {
+			var a *auth2.Auth
+			if a, err = auth2.Parse(raw); err == nil {
+				reg.Track(a, false)
+				continue
+			}
+		}
+		fmt.Fprintf(errOut, "login: 跳过 %s（不算进代理的绑号数）：%v\n", f, err)
+	}
+}
+
+// holdProxy 在代理池里给这次登录分一个代理，返回代理 ID 和它所在的池（不走代理池时都为空）。
+func holdProxy(reg *proxies.Registry, o loginOpts, realm string, errOut io.Writer) (proxy, pool string) {
+	sel := o.pool
+	if sel != "" && sel != proxies.NoPool {
+		if sel = reg.PoolByName(o.pool); sel == "" {
+			fatal(errOut, "代理池 %q 不存在", o.pool)
+		}
+	}
+	_, proxy, err := reg.HoldForLogin(sel, realm)
+	if err != nil {
+		fatal(errOut, "%v", err)
+	}
+	for _, px := range reg.View().Proxies {
+		if px.ID == proxy {
+			pool = px.Pool
+			fmt.Fprintf(errOut, "login: 登录走代理「%s」，新号绑在它上面\n", px.Name)
+		}
+	}
+	return proxy, pool
 }
 
 // resolveRealmInput 把交互式选域的一行输入归一化为 realm（纯函数，login.sh 交互分支
@@ -136,11 +220,14 @@ func validateRealmMatch(stateRealm, cliRealm string) error {
 	return nil
 }
 
-// runURL 执行 url 子命令：调 upstream.LoginAuthState 取授权 URL，state 落盘（带 realm），
-// stdout 打印 authURL。out 接 stdout；statePath 为落盘路径（可注入临时文件便于测试）。
+// runURL 执行 url 子命令：在代理池里分一个代理，调 upstream.LoginAuthState 取授权 URL，state 落盘
+// （带 realm 和代理），stdout 打印 authURL。out 接 stdout；statePath 为落盘路径（可注入临时文件便于测试）。
 // 空 realm 视为缺省（调用方已归一）。
-func runURL(realm, statePath string, client *http.Client, out, errOut io.Writer) {
-	st, err := upstreamClient(client).LoginAuthState(realm)
+func runURL(realm, statePath string, up *upstream.Client, o loginOpts, out, errOut io.Writer) {
+	reg := openProxies(o, up, errOut)
+	trackAuths(reg, o.auths, errOut)
+	proxy, pool := holdProxy(reg, o, realm, errOut)
+	st, err := up.LoginAuthState(realm, proxy)
 	if err != nil {
 		// 缺 state/authUrl 与上游失败沿用旧的两条文案。
 		if errors.Is(err, upstream.ErrLoginAuthStateIncomplete) {
@@ -148,22 +235,17 @@ func runURL(realm, statePath string, client *http.Client, out, errOut io.Writer)
 		}
 		fatal(errOut, "auth state failed: %v", err)
 	}
-	raw, _ := json.Marshal(loginState{State: st.State, Realm: realm, Trace: st.Trace})
+	raw, _ := json.Marshal(loginState{State: st.State, Realm: realm, Trace: st.Trace, Pool: pool})
 	if err := os.WriteFile(statePath, raw, 0o600); err != nil {
 		fatal(errOut, "write state: %v", err)
 	}
 	fmt.Fprintln(out, st.AuthURL)
 }
 
-// upstreamClient 用调用方注入的 HTTP client 构造登录用的 upstream.Client（每个流程独立，
-// 共享命令行传入的 cookie jar）。
-func upstreamClient(client *http.Client) *upstream.Client {
-	return &upstream.Client{HTTP: client}
-}
-
 // runPoll 执行 poll 子命令：读 state 文件（realm 校验），调 upstream.LoginPollToken 一次，
-// 成功再取账号，stdout 打印完整 token+account JSON。statePath 可注入临时文件便于测试。
-func runPoll(realm, statePath string, client *http.Client, out, errOut io.Writer) {
+// 成功再取账号，stdout 打印完整 token+account JSON（走了代理池的带上 proxy 绑定）。轮询、取账号走
+// 发起授权时分到的代理。statePath 可注入临时文件便于测试。
+func runPoll(realm, statePath string, up *upstream.Client, o loginOpts, out, errOut io.Writer) {
 	raw, err := os.ReadFile(statePath)
 	if err != nil {
 		fatal(errOut, "read state: %v (先跑 login url)", err)
@@ -176,8 +258,10 @@ func runPoll(realm, statePath string, client *http.Client, out, errOut io.Writer
 	if err := validateRealmMatch(ls.Realm, realm); err != nil {
 		fatal(errOut, "%v", err)
 	}
-	uc := upstreamClient(client)
-	tok, pending, err := uc.LoginPollToken(realm, ls.State, ls.Trace)
+	if ls.Trace.Proxy != "" {
+		openProxies(o, up, errOut)
+	}
+	tok, pending, err := up.LoginPollToken(realm, ls.State, ls.Trace)
 	if err != nil {
 		// 4xx / 业务码 / 空令牌是「还没登录完」；网络错误与 5xx 才是端点故障（与旧口径一致）。
 		var le *upstream.LoginError
@@ -189,8 +273,12 @@ func runPoll(realm, statePath string, client *http.Client, out, errOut io.Writer
 	if pending {
 		fatal(errOut, "登录未完成（waiting for login）。请确认已在浏览器完成登录再按 y")
 	}
-	acct, _ := uc.LoginFetchAccount(realm, ls.State, tok, ls.Trace)
-	oraw, _ := json.Marshal(buildLoginOutput(tok, realm, acct))
+	acct, _ := up.LoginFetchAccount(realm, ls.State, tok, ls.Trace)
+	res := buildLoginOutput(tok, realm, acct)
+	if ls.Trace.Proxy != "" {
+		res["proxy"] = auth2.ProxyBinding{Pool: ls.Pool, ID: ls.Trace.Proxy}
+	}
+	oraw, _ := json.Marshal(res)
 	fmt.Fprintln(out, string(oraw))
 	os.Remove(statePath)
 }
@@ -223,27 +311,36 @@ func buildLoginOutput(tok upstream.LoginToken, realm string, acct upstream.Login
 func main() {
 	// 每个流程独立 cookie jar（oauth.go:22-29：多账号登录互不串会话）
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Timeout: 30 * time.Second, Jar: jar}
-	run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, client)
+	up := upstream.New() // 带线路表：登录请求能走代理池里的代理
+	up.HTTP.Timeout, up.HTTP.Jar = 30*time.Second, jar
+	run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, up)
 }
 
-func run(args []string, stdin io.Reader, stdout, stderr io.Writer, client *http.Client) {
+// loginUsage 用法（出错时附在后面）。
+const loginUsage = "usage: login [--realm=cn|global] [--pool=池名] [--proxies=data/proxies.json] [--auths=auths] <url|poll|realm>"
+
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, up *upstream.Client) {
 	realm, rest, err := parseRealmArgs(args)
 	if err != nil {
-		fatal(stderr, "%v (usage: login [--realm=cn|global] <url|poll|realm>)", err)
+		fatal(stderr, "%v (%s)", err, loginUsage)
+		return
+	}
+	o, rest, err := parseProxyArgs(rest)
+	if err != nil {
+		fatal(stderr, "%v (%s)", err, loginUsage)
 		return
 	}
 	if len(rest) < 1 {
-		fatal(stderr, "usage: login [--realm=cn|global] <url|poll>")
+		fatal(stderr, "%s", loginUsage)
 		return
 	}
 
 	switch rest[0] {
 	case "url":
-		runURL(realm, stateFile, client, stdout, stderr)
+		runURL(realm, stateFile, up, o, stdout, stderr)
 
 	case "poll":
-		runPoll(realm, stateFile, client, stdout, stderr)
+		runPoll(realm, stateFile, up, o, stdout, stderr)
 
 	case "realm":
 		// 交互式选域（login.sh 无 --realm 传参且 stdin 为 tty 时调用）。

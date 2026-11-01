@@ -379,10 +379,10 @@ func (p *Pool) ModelBlockedForRealm(model, realm string) ModelBlockStatus {
 		if realm != "" && e.a.Realm() != realm {
 			continue
 		}
-		// 暂停选号（paused）号与禁用号同口径跳过：它此刻不可选，「能服务」的
+		// 暂停选号（paused）、被代理池拦着的号与禁用号同口径跳过：它此刻不可选，「能服务」的
 		// 证明不成立——否则一个暂停的健康号会掩盖「其余号全被模型级冷却挡住」。
-		if e.disabled || e.paused {
-			continue // 禁用/暂停号不参与：它们的不可用与模型无关
+		if e.excluded() {
+			continue // 禁用/暂停/被拦的号不参与：它们的不可用与模型无关
 		}
 		if !p.servesModel(e, model) {
 			continue // 按目录本就接不了这个模型（如企业专属模型之于个人号）：不算「能服务」

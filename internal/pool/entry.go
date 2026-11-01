@@ -98,7 +98,10 @@ type Status struct {
 	// 签到 / 活跃上报 / 保活 / 余额刷新四类保号任务。与 disabled 正交——disabled 是
 	// 「授权/session 终态，需人工 revive」，paused 是「运维临时让位」（多号轮换场景），
 	// 账号本身健康，只是暂不接流量。
-	Paused          bool      `json:"paused,omitempty"`
+	Paused bool `json:"paused,omitempty"`
+	// ProxyBlocked 代理池拦着这个号的原因（见 entry.proxyBlocked）；空为没拦。拦着的号不参与选号，
+	// 定时任务也跳过。
+	ProxyBlocked    string    `json:"proxy_blocked,omitempty"`
 	SuccessCount    int64     `json:"success_count,omitempty"`
 	ErrTotal        int64     `json:"err_total,omitempty"`
 	LastSuccessTime time.Time `json:"last_success,omitempty"`
@@ -211,8 +214,12 @@ type entry struct {
 	// 但保号任务遍历只按 Disabled 过滤，故 paused 号天然继续参与签到 / 活跃上报 /
 	// 保活 / 余额刷新。持久化（state.json），跨重启不丢。
 	paused bool
-	note   string // 面板备注（Status.Note），持久化
-	reason string
+	// proxyBlocked 代理池拦住这个号的原因（号的代理不通或到期、在等代理、开着「只许走号的代理」却没绑，
+	// 见 internal/proxies）：非空时不参与选号、不测活，定时任务也跳过（看 Status.ProxyBlocked），不罚号。
+	// 运行态，由代理池推送（SetProxyBlocked），不持久化：重启后代理池登记号时重新推一遍。
+	proxyBlocked string
+	note         string // 面板备注（Status.Note），持久化
+	reason       string
 	// liveness 最近一次测活的结果（Status.LastLiveness），持久化；nil = 没测过。
 	liveness *LivenessResult
 	lastUsed time.Time // 最近被选中时刻（防并发撞号）
@@ -281,11 +288,16 @@ func (e *entry) modelCostOf(model string, now time.Time) (modelCostEntry, bool) 
 	return mc, true
 }
 
+// excluded 报告账号是不是根本不参与选号：禁用、暂停选号、被代理池拦着（与冷却熔断无关）。
+func (e *entry) excluded() bool {
+	return e.disabled || e.paused || e.proxyBlocked != ""
+}
+
 // healthy 报告账号当前是否可选（未禁用、未处于任一冷却/熔断/连败降权期）。
 // 连败降权与冷却/熔断同入本判定（取更长者不叠加：三个截止是并列的或门，
 // 只要任一未到期即不可选，天然「并存取更远者」——不需要显式比较长短）。
 func (e *entry) healthy(now time.Time) bool {
-	if e.disabled || e.paused {
+	if e.excluded() {
 		return false
 	}
 	if !e.until.IsZero() && now.Before(e.until) {
@@ -306,7 +318,7 @@ func (e *entry) healthy(now time.Time) bool {
 // healthyForModel 与 ServableNow 共用本谓词，保证 chat 选号与探活口径一致。
 // 调用方负责 now 与冷却有效性的判断（本方法只看形态，不看冷却是否已过期）。
 func (e *entry) modelExempt() bool {
-	if e.disabled || e.paused || !e.until.IsZero() || !e.degradeUntil.IsZero() || !e.breakerUntil.IsZero() {
+	if e.excluded() || !e.until.IsZero() || !e.degradeUntil.IsZero() || !e.breakerUntil.IsZero() {
 		return false
 	}
 	for _, mc := range e.modelCooldowns {
@@ -340,7 +352,7 @@ func (e *entry) modelCooled(now time.Time, reqModel string) bool {
 // 任意多个模型同时限流：被 B 限流的账号对 A 请求仍可选（A 不在 modelCooldowns 拦截
 // 且账号级 healthy 成立）。空 reqModel / 未记录模型 → 等价 healthy。
 func (e *entry) healthyForModel(now time.Time, reqModel string) bool {
-	if e.disabled || e.paused {
+	if e.excluded() {
 		return false
 	}
 	if e.modelCooled(now, reqModel) {

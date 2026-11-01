@@ -183,20 +183,6 @@ func TestPinTransportNilBase(t *testing.T) {
 	}
 }
 
-// TestPinTransportFactoryCache 每个 IP 一个克隆的 Transport，重复取同一个。
-func TestPinTransportFactoryCache(t *testing.T) {
-	factory := newPinTransportFactory(&http.Transport{})
-	a1 := factory(dnsIPv4(1))
-	a2 := factory(dnsIPv4(1))
-	b := factory(dnsIPv4(2))
-	if a1 != a2 {
-		t.Error("同一个 IP 应复用缓存的 Transport")
-	}
-	if a1 == b {
-		t.Error("不同 IP 应是不同的 Transport")
-	}
-}
-
 // TestAddressPinMemoMax 钉 IP 备忘最多 256 条，满了删最早放进去的。
 func TestAddressPinMemoMax(t *testing.T) {
 	var c Client

@@ -194,7 +194,7 @@ func TestLoginRequestsPerRealm(t *testing.T) {
 			f.on(http.MethodGet, "/v2/plugin/accounts", 200, `{"code":0,"data":{"accounts":[{"uid":"u-1"}]}}`)
 			c := loginTestClient(f)
 
-			st, err := c.LoginAuthState(tc.realm)
+			st, err := c.LoginAuthState(tc.realm, "")
 			if err != nil || st.State != "st-1" || !strings.HasPrefix(st.AuthURL, "https://auth.example/x?version=") {
 				t.Fatalf("发授权 = %+v, %v", st, err)
 			}
@@ -347,7 +347,7 @@ func TestLoginDeviceTokenOnlyOnState(t *testing.T) {
 	c := loginTestClient(f)
 	c.DeviceToken = "dev-123"
 
-	if _, err := c.LoginAuthState("cn"); err != nil {
+	if _, err := c.LoginAuthState("cn", ""); err != nil {
 		t.Fatal(err)
 	}
 	_, pending, err := c.LoginPollToken("cn", "st-1", LoginTrace{})
@@ -457,7 +457,7 @@ func TestLoginAuthStateErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newUpFake(t)
 			f.on(http.MethodPost, loginTestStatePathCN, tc.status, tc.body)
-			_, err := loginTestClient(f).LoginAuthState("cn")
+			_, err := loginTestClient(f).LoginAuthState("cn", "")
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err=%v，want %q", err, tc.wantErr)
 			}
@@ -466,7 +466,7 @@ func TestLoginAuthStateErrors(t *testing.T) {
 	t.Run("缺字段用哨兵错误", func(t *testing.T) {
 		f := newUpFake(t)
 		f.on(http.MethodPost, loginTestStatePathCN, 200, `{"code":0,"data":{}}`)
-		if _, err := loginTestClient(f).LoginAuthState("cn"); !errors.Is(err, ErrLoginAuthStateIncomplete) {
+		if _, err := loginTestClient(f).LoginAuthState("cn", ""); !errors.Is(err, ErrLoginAuthStateIncomplete) {
 			t.Fatalf("err=%v", err)
 		}
 	})
@@ -493,7 +493,7 @@ func TestLoginAuthStateLicenseError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newUpFake(t)
 			f.on(http.MethodPost, loginTestStatePathCN, tc.status, tc.body)
-			_, err := loginTestClient(f).LoginAuthState("cn")
+			_, err := loginTestClient(f).LoginAuthState("cn", "")
 			var le *LoginError
 			if !errors.As(err, &le) || le.Status != tc.status || le.Code != tc.wantCode || le.LicenseReason() != tc.wantReason {
 				t.Fatalf("err=%v le=%+v", err, le)
@@ -605,7 +605,7 @@ func TestLoginTransportAndHelpers(t *testing.T) {
 		c := &Client{HTTP: &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("dial boom")
 		})}}
-		if _, err := c.LoginAuthState("cn"); err == nil || !strings.Contains(err.Error(), "dial boom") {
+		if _, err := c.LoginAuthState("cn", ""); err == nil || !strings.Contains(err.Error(), "dial boom") {
 			t.Fatalf("err=%v", err)
 		}
 	})
@@ -614,7 +614,7 @@ func TestLoginTransportAndHelpers(t *testing.T) {
 		c := &Client{HTTP: &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: loginErrReader{}}, nil
 		})}}
-		if _, err := c.LoginAuthState("cn"); err == nil || !strings.Contains(err.Error(), "read boom") {
+		if _, err := c.LoginAuthState("cn", ""); err == nil || !strings.Contains(err.Error(), "read boom") {
 			t.Fatalf("err=%v", err)
 		}
 	})

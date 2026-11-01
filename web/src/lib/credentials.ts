@@ -15,7 +15,7 @@ export interface CredentialFile {
 const pad = (n: number) => String(n).padStart(2, '0')
 
 /** 本地时间 20261019-1530，批量文件名用 */
-const stamp = (d: Date) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
+export const stamp = (d: Date) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
 
 export function credentialFile(docs: unknown[], now: Date): CredentialFile {
   if (docs.length === 1) {
@@ -25,8 +25,9 @@ export function credentialFile(docs: unknown[], now: Date): CredentialFile {
   return { name: `workbuddy-accounts-${stamp(now)}-${docs.length}.json`, text: JSON.stringify(docs, null, 2) + '\n' }
 }
 
-function download({ name, text }: CredentialFile) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+/** 把一段文本存成文件下载（凭证、代理导出共用） */
+export function download({ name, text }: CredentialFile, type = 'application/json') {
+  const url = URL.createObjectURL(new Blob([text], { type }))
   const a = document.createElement('a')
   a.href = url
   a.download = name

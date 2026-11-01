@@ -39,7 +39,7 @@ func TestCountsPausedSeparate(t *testing.T) {
 	}
 
 	// --- 分开口径（面板概况）：禁用与暂停各自计数 ---
-	t2, h2, _, dis, pz, _ := p.CountsDetailedWithPaused()
+	t2, h2, _, dis, pz, _, _ := p.CountsDetailedWithPaused()
 	if t2 != total || h2 != healthy {
 		t.Errorf("两种口径的 total/healthy 必须一致：WithPaused=(%d,%d) Counts=(%d,%d)",
 			t2, h2, total, healthy)

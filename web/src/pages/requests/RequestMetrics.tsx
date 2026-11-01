@@ -92,10 +92,10 @@ export function RequestMetrics() {
       contentClassName="flex flex-col gap-3"
     >
       <div className="flex flex-wrap items-center gap-3">
-        <SearchField aria-label="搜索请求记录" value={q} onChange={setQ} className="w-full sm:w-72">
+        <SearchField aria-label="搜索请求记录" value={q} onChange={setQ} className="w-full sm:w-md">
           <SearchField.Group>
             <SearchField.SearchIcon />
-            <SearchField.Input placeholder="搜索模型、账号、密钥、原因、IP、UA、请求 ID" />
+            <SearchField.Input placeholder="搜索模型、账号、代理、密钥、原因、IP、UA、请求 ID" />
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
@@ -154,7 +154,10 @@ export function RequestMetrics() {
                         {e.error ? <Hint tip={e.error} className="block max-w-64 truncate text-xs text-danger">{e.error}</Hint> : dash}
                       </Table.Cell>
                       <Table.Cell className="whitespace-nowrap font-mono">{e.model || '—'}</Table.Cell>
-                      <Table.Cell className="whitespace-nowrap">{e.account ? names.label(e.account) : '—'}</Table.Cell>
+                      <Table.Cell className="whitespace-nowrap">
+                        {e.account ? names.label(e.account) : '—'}
+                        {e.proxy && <div className="text-xs text-muted">代理 {e.proxy}</div>}
+                      </Table.Cell>
                       <Table.Cell className="whitespace-nowrap">{e.api_key || dash}</Table.Cell>
                       <Table.Cell className="whitespace-nowrap font-mono text-xs">{e.client_ip || dash}</Table.Cell>
                       <Table.Cell>
@@ -182,6 +185,7 @@ export function RequestMetrics() {
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5">
                   <span className="font-mono">{e.model || '—'}</span>
                   <span className="text-muted">{e.account ? names.label(e.account) : '—'}</span>
+                  {e.proxy && <span className="text-muted">代理 {e.proxy}</span>}
                   {e.api_key && <span className="text-muted">密钥 {e.api_key}</span>}
                 </div>
                 <div className="flex flex-wrap gap-x-3 text-xs text-muted tabular-nums">

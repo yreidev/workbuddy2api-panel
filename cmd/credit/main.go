@@ -6,7 +6,10 @@
 //
 // 用法:
 //
-//	go run ./cmd/credit        # 或编译后 ./credit
+//	go run ./cmd/credit [-pretty] [-proxies data/proxies.json]   # 或编译后 ./credit
+//
+// 号按网关代理池里的绑定走代理（-proxies 指网关的 proxies.json，只读）；被代理池拦着的号不查，
+// error 写原因。
 //
 // 输出结构:
 //
@@ -21,9 +24,9 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,6 +34,7 @@ import (
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -53,6 +57,9 @@ type authFile struct {
 		EnterpriseID string `json:"enterpriseId"`
 		Nickname     string `json:"nickname"`
 	} `json:"account"`
+	// Proxy、ProxyURL 号绑的代理（网关写的）和别的工具导出的凭证里带的代理地址，见 auth.Auth.proxy。
+	Proxy    auth.ProxyBinding `json:"proxy"`
+	ProxyURL string            `json:"proxy_url"`
 }
 
 type accountResult struct {
@@ -85,6 +92,8 @@ func credentialAuth(af *authFile) *auth.Auth {
 	}
 	// BackfillRealmFor 只接受 cn/global；文件里写了别的值时保持缺省，让 Realm() 按 domain 回落。
 	_, _ = auth.BackfillRealmFor(a, auth.ResolveRealm(strings.ToLower(strings.TrimSpace(af.Auth.Realm)), af.Auth.Domain))
+	a.SetProxyBinding(af.Proxy)
+	a.SetProxyURL(af.ProxyURL)
 	return a
 }
 
@@ -112,27 +121,35 @@ func queryCredits(up *upstream.Client, a *auth.Auth) (remain, used, size int64, 
 var exitFunc = os.Exit
 
 func main() {
-	exitFunc(run(os.Args[1:], os.Stdout, &http.Client{Timeout: 20 * time.Second}))
+	up := upstream.New() // 带线路表：号按代理池的绑定走代理
+	up.HTTP.Timeout = 20 * time.Second
+	exitFunc(run(os.Args[1:], os.Stdout, os.Stderr, up))
 }
 
 // accountGap 账号之间的请求间隔（避免瞬时打满计量接口），测试可调 0。
 var accountGap = 200 * time.Millisecond
 
-func run(args []string, stdout io.Writer, client *http.Client) int {
-	pretty := len(args) > 0 && args[0] == "-pretty"
+func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
+	fs := flag.NewFlagSet("credit", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	pretty := fs.Bool("pretty", false, "人类可读的日报（四行汇总）")
+	proxiesPath := fs.String("proxies", filepath.Join("data", "proxies.json"), "网关的代理池文件（只读），号按绑定走代理；文件不存在就都走默认线路")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	authDir := "./auths"
 	if v := os.Getenv("WB2A_AUTH_DIR"); v != "" {
 		authDir = v
 	}
 	files, _ := filepath.Glob(filepath.Join(authDir, "workbuddy-*.json"))
 	sort.Strings(files)
-
-	up := &upstream.Client{
-		HTTP:              client,
-		BillingBaseCN:     billingBaseCN,
-		BillingBaseGlobal: billingBaseGlobal,
-		GlobalEnabled:     true,
+	reg, err := proxies.OpenReadOnly(*proxiesPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
+	up.SetRouter(reg)
+	up.BillingBaseCN, up.BillingBaseGlobal, up.GlobalEnabled = billingBaseCN, billingBaseGlobal, true
 
 	accounts := make([]accountResult, 0, len(files))
 	for _, f := range files {
@@ -147,7 +164,14 @@ func run(args []string, stdout io.Writer, client *http.Client) int {
 			accounts = append(accounts, res)
 			continue
 		}
-		remain, used, size, packs, unlimited, err := queryCredits(up, credentialAuth(&af))
+		a := credentialAuth(&af)
+		reg.Track(a, false)
+		if reason := reg.Blocked(a.UID); reason != "" {
+			res.Error = "代理：" + reason
+			accounts = append(accounts, res)
+			continue
+		}
+		remain, used, size, packs, unlimited, err := queryCredits(up, a)
 		switch {
 		case err != nil:
 			res.Error = err.Error()
@@ -194,7 +218,7 @@ func run(args []string, stdout io.Writer, client *http.Client) int {
 		},
 		"accounts": accounts,
 	}
-	if pretty {
+	if *pretty {
 		printPretty(accounts, totalRemain, totalUsed, totalSize, okCount, stdout)
 		return 0
 	}

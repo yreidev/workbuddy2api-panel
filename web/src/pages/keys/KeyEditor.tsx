@@ -6,33 +6,20 @@
 import { useMemo, useState } from 'react'
 import { Copy } from '@gravity-ui/icons'
 import {
-  Button, Calendar, ComboBox, DateField, DatePicker, type DateValue, Description, Input, Label, ListBox, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
+  Button, ComboBox, Input, Label, ListBox, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
 } from '@heroui/react'
-import { CalendarDateTime, getLocalTimeZone } from '@internationalized/date'
 import { useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { copyText } from '../../lib/clipboard'
-import { toastError, useNow } from '../../lib/hooks'
+import { toastError, useLast } from '../../lib/hooks'
 import {
   LIMIT_KINDS, addModelPattern, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, validateKeyForm,
   type KeyForm, type LimitForm,
 } from '../../lib/keys'
 import { qk, useModels } from '../../lib/queries'
 import type { ApiKey } from '../../lib/types'
+import { ExpiryField } from '../../components/ExpiryField'
 import { BusyButton } from '../../components/Feedback'
-
-const toValue = (ms: number) => {
-  const d = new Date(ms)
-  return new CalendarDateTime(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes())
-}
-const DAY = 86_400_000
-
-/** 弹窗关闭时留住上一次的内容，退场动画里标题不会变空或变成别的 */
-function useLast<T>(v: T | null): T | null {
-  const [last, setLast] = useState<T | null>(v)
-  if (v != null && v !== last) setLast(v)
-  return v ?? last
-}
 
 export function KeyEditor({ target, onClose, onCreated }: {
   /** new = 新建；null = 关闭 */
@@ -109,7 +96,13 @@ function EditorBody({ editing, onClose, onCreated }: { editing: ApiKey | null; o
           <TextArea rows={2} placeholder="可选：给谁用、什么时候给的" />
         </TextField>
 
-        <ExpiryField value={form.expires} onChange={(expires) => set({ expires })} />
+        <ExpiryField
+          value={form.expires}
+          onChange={(expires) => set({ expires })}
+          description="不设就一直有效；到期后网关回 401 并说明已过期。"
+          pastWarning="这个时间已经过了，保存后密钥立即不能用。"
+          presets={[7, 30, 90]}
+        />
 
         <fieldset className="flex flex-col gap-3">
           <legend className="mb-1 text-sm font-medium">用量上限</legend>
@@ -126,55 +119,6 @@ function EditorBody({ editing, onClose, onCreated }: { editing: ApiKey | null; o
         <BusyButton busy={saving} isDisabled={!!error} onPress={() => void save()}>{editing ? '保存' : '创建'}</BusyButton>
       </Modal.Footer>
     </>
-  )
-}
-
-/** 到期时间：不过期 / 选一个时刻（本机时区），另给几个常用时长 */
-function ExpiryField({ value, onChange }: { value: number | null; onChange: (ms: number | null) => void }) {
-  const now = useNow(30_000)
-  const pick = (v: DateValue | null) => onChange(v ? v.toDate(getLocalTimeZone()).getTime() : null)
-  const after = (days: number) => {
-    const d = new Date(Date.now() + days * DAY)
-    d.setSeconds(0, 0)
-    onChange(d.getTime())
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      <Switch isSelected={value != null} onChange={(on) => (on ? after(30) : onChange(null))}>
-        <Switch.Content>
-          <Switch.Control><Switch.Thumb /></Switch.Control>
-          设到期时间
-        </Switch.Content>
-        <Description>不设就一直有效；到期后网关回 401 并说明已过期。</Description>
-      </Switch>
-      {value != null && (
-        <div className="flex flex-wrap items-end gap-2">
-          <DatePicker aria-label="到期时间" granularity="minute" hourCycle={24} value={toValue(value)} onChange={pick} className="w-52">
-            <DateField.Group>
-              <DateField.Input>{(segment) => <DateField.Segment segment={segment} />}</DateField.Input>
-              <DateField.Suffix>
-                <DatePicker.Trigger><DatePicker.TriggerIndicator /></DatePicker.Trigger>
-              </DateField.Suffix>
-            </DateField.Group>
-            <DatePicker.Popover>
-              <Calendar aria-label="选择到期日期">
-                <Calendar.Header>
-                  <Calendar.Heading />
-                  <Calendar.NavButton slot="previous" />
-                  <Calendar.NavButton slot="next" />
-                </Calendar.Header>
-                <Calendar.Grid>
-                  <Calendar.GridHeader>{(day) => <Calendar.HeaderCell>{day}</Calendar.HeaderCell>}</Calendar.GridHeader>
-                  <Calendar.GridBody>{(date) => <Calendar.Cell date={date} />}</Calendar.GridBody>
-                </Calendar.Grid>
-              </Calendar>
-            </DatePicker.Popover>
-          </DatePicker>
-          {[7, 30, 90].map((n) => <Button key={n} size="sm" variant="ghost" onPress={() => after(n)}>{n} 天后</Button>)}
-          {value <= now && <span className="w-full text-xs text-warning">这个时间已经过了，保存后密钥立即不能用。</span>}
-        </div>
-      )}
-    </div>
   )
 }
 

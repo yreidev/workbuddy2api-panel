@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream/upstreamtest"
 )
 
@@ -153,7 +154,7 @@ func TestCreditRunJSON(t *testing.T) {
 	t.Setenv("WB2A_AUTH_DIR", dir)
 	fake := &creditFake{}
 	var out bytes.Buffer
-	if code := run(nil, &out, &http.Client{Transport: fake}); code != 0 {
+	if code := run(nil, &out, io.Discard, &upstream.Client{HTTP: &http.Client{Transport: fake}}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	var got creditOutput
@@ -232,7 +233,7 @@ func TestCreditEnterpriseError(t *testing.T) {
 		return creditResponse(400, `{"code":10001,"msg":"enterprise boom"}`), nil
 	})}
 	var out bytes.Buffer
-	if code := run(nil, &out, client); code != 0 {
+	if code := run(nil, &out, io.Discard, &upstream.Client{HTTP: client}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	var got creditOutput
@@ -260,7 +261,7 @@ func TestCreditPrettyAndAuthDir(t *testing.T) {
 
 	fake := &creditFake{}
 	var out bytes.Buffer
-	if code := run([]string{"-pretty"}, &out, &http.Client{Transport: fake}); code != 0 {
+	if code := run([]string{"-pretty"}, &out, io.Discard, &upstream.Client{HTTP: &http.Client{Transport: fake}}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	text := out.String()
@@ -285,7 +286,7 @@ func TestCreditEmpty(t *testing.T) {
 	setAccountGap0(t)
 	t.Setenv("WB2A_AUTH_DIR", t.TempDir())
 	var out bytes.Buffer
-	if code := run(nil, &out, &http.Client{Transport: &creditFake{}}); code != 0 {
+	if code := run(nil, &out, io.Discard, &upstream.Client{HTTP: &http.Client{Transport: &creditFake{}}}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	var got creditOutput
@@ -347,7 +348,7 @@ func TestCreditUnlimitedAndRealmCase(t *testing.T) {
 		return creditResponse(status, body), nil
 	})}
 	var out bytes.Buffer
-	if code := run(nil, &out, client); code != 0 {
+	if code := run(nil, &out, io.Discard, &upstream.Client{HTTP: client}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	var got creditOutput
@@ -371,7 +372,7 @@ func TestCreditUnlimitedAndRealmCase(t *testing.T) {
 	}
 
 	out.Reset()
-	if code := run([]string{"-pretty"}, &out, client); code != 0 {
+	if code := run([]string{"-pretty"}, &out, io.Discard, &upstream.Client{HTTP: client}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	if !strings.Contains(out.String(), "账号: 2/2") {

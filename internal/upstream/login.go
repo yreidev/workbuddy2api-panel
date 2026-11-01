@@ -199,7 +199,7 @@ func (c *Client) loginRequest(method, rawURL, realm string, kind loginKind, tok 
 	if kind == loginKindState {
 		body = bytes.NewReader([]byte("{}"))
 	}
-	req, err := http.NewRequest(method, rawURL, body)
+	req, err := http.NewRequestWithContext(withLoginRoute(context.Background(), tr.Proxy), method, rawURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +392,7 @@ func loginAuthStateValid(data json.RawMessage) bool {
 // 状态的传输错误（含 DNS 失败），或 200 但响应体不合格。4xx/500/504 等不换。
 func loginAuthStateRetryable(status int, data json.RawMessage, err error) bool {
 	if status == 0 {
-		return err != nil && !errors.Is(err, context.Canceled)
+		return err != nil && !errors.Is(err, context.Canceled) && !IsRouteError(err)
 	}
 	if status >= 300 {
 		switch status {
@@ -410,9 +410,11 @@ func loginAuthStateRetryable(status int, data json.RawMessage, err error) bool {
 
 // LoginAuthState 发起授权：POST <域>/v2/plugin/auth/state?platform=<P>，body 为 {}。
 // State 或 AuthURL 缺失算错误。每次新开一条登录链路（Trace），授权页地址按官方 openAuthUrl 修饰。
-func (c *Client) LoginAuthState(realm string) (LoginAuthState, error) {
+// proxy 是这次登录走的代理（代理池里的 ID，空为默认线路），记在 Trace 里，后面的请求都走它。
+func (c *Client) LoginAuthState(realm, proxy string) (LoginAuthState, error) {
 	base, platform, _ := loginEndpoint(realm)
 	tr := NewLoginTrace()
+	tr.Proxy = proxy
 	code, msg, data, status, err := c.loginDo(http.MethodPost,
 		base+"/v2/plugin/auth/state?platform="+platform, realm, loginKindState, LoginToken{}, tr)
 	if err != nil {

@@ -6,35 +6,56 @@
 import { dur, fmtLocalDateTime, formatLatency, timeMs } from './format'
 import type { Account, LivenessResult, Model, Overview, RateLimitedModel } from './types'
 
-/** paused = 暂停选号：不参与选号，但签到 / 活跃上报 / 保活 / 刷新余额照常 */
-export type AccountState = 'ok' | 'cooling' | 'paused' | 'disabled'
-/** 与后端总览计数同口径：禁用优先，其次暂停选号（暂停中的号哪怕在冷却也算暂停），再次冷却 */
-export type StatusFilter = 'all' | 'ok' | 'cooling' | 'paused' | 'disabled'
+/**
+ * paused = 暂停选号：不参与选号，但签到 / 活跃上报 / 保活 / 刷新余额照常；
+ * blocked = 被代理池拦着（代理不通或到期、在等代理、开着「只许走号的代理」却没绑）：不接请求、不跑定时任务
+ */
+export type AccountState = 'ok' | 'cooling' | 'paused' | 'blocked' | 'disabled'
+/** 与后端总览计数同口径：禁用优先，其次暂停选号（暂停中的号哪怕在冷却也算暂停），再次被代理拦着，再次冷却 */
+export type StatusFilter = 'all' | 'ok' | 'cooling' | 'paused' | 'blocked' | 'disabled'
 
 export interface Health {
   state: AccountState
-  /** 冷却截止时刻（毫秒）；未冷却为 null。暂停选号的账号也可能同时在冷却 */
+  /** 冷却截止时刻（毫秒）；未冷却为 null。暂停选号、被代理拦着的账号也可能同时在冷却 */
   coolEnd: number | null
   /** 冷却类型：熔断 / 连败降权 / 积分冷却 / 风控暂停 / 限流冷却 */
   kind: string
+  /** 被代理池拦着时的短说明（见 blockedLabel）；没拦时没有 */
+  proxy?: string
 }
 
 /**
- * 账号健康：禁用优先，其次暂停选号；冷却取「账号级冷却、熔断、连败降权」三者最晚的截止时刻。
+ * 代理池拦着号的原因归成短说明，卡片上的状态标签用。按原因开头的几个字认（文案在
+ * internal/proxies/bind.go 的 gateLocked），认不出就笼统说「因代理暂停」。
+ */
+export function blockedLabel(reason: string): string {
+  if (reason.startsWith('没绑代理')) return '没绑代理'
+  if (reason.startsWith('等代理')) return '等代理'
+  if (reason.startsWith('代理「') && reason.endsWith('」已到期')) return '代理到期'
+  if (reason.startsWith('代理「') && reason.includes('」连不上')) return '代理不通'
+  return '因代理暂停'
+}
+
+/**
+ * 账号健康：禁用优先，其次暂停选号，再次被代理拦着；冷却取「账号级冷却、熔断、连败降权」三者最晚的截止时刻。
  * cool_remaining_sec 是接口返回时刻的剩余秒数，用 fetchedAt 换算成绝对时刻，页面才能逐秒倒数。
  */
 export function accountHealth(a: Account, fetchedAt: number): Health {
   if (a.disabled) return { state: 'disabled', coolEnd: null, kind: '已禁用' }
+  const proxy = a.proxy_blocked ? blockedLabel(a.proxy_blocked) : undefined
   const soft = a.cool_remaining_sec ? fetchedAt + a.cool_remaining_sec * 1000 : 0
   const breaker = timeMs(a.breaker_until) ?? 0
   const degrade = timeMs(a.degrade_until) ?? 0
   const end = Math.max(soft, breaker, degrade)
-  if (end <= fetchedAt) return a.paused ? { state: 'paused', coolEnd: null, kind: '已暂停选号' } : { state: 'ok', coolEnd: null, kind: '可用' }
+  if (end <= fetchedAt) {
+    if (a.paused) return { state: 'paused', coolEnd: null, kind: '已暂停选号', proxy }
+    return proxy ? { state: 'blocked', coolEnd: null, kind: proxy, proxy } : { state: 'ok', coolEnd: null, kind: '可用' }
+  }
   const kind = breaker > Math.max(soft, degrade) ? '熔断'
     : degrade > soft ? '连败降权'
     : a.cool_kind === 'hard_credit' ? '积分冷却'
     : a.cool_kind === 'restriction_wave' ? '风控暂停' : '限流冷却'
-  return { state: a.paused ? 'paused' : 'cooling', coolEnd: end, kind }
+  return { state: a.paused ? 'paused' : proxy ? 'blocked' : 'cooling', coolEnd: end, kind, proxy }
 }
 
 /** 禁用或冷却中：操作按钮给「解冻」（解冻是全清，会一并解除暂停选号） */
@@ -169,6 +190,13 @@ export function notesOf(o: Pick<Overview, 'accounts'>): Map<string, string> {
   const out = new Map<string, string>()
   for (const a of o.accounts || []) if (a.note) out.set(a.uid, a.note)
   return out
+}
+
+/** 总览里各账号的备注和昵称：只给 uid 的接口（代理绑了哪些号）显示名靠昵称补上 */
+export function namesOf(o: Pick<Overview, 'accounts'>) {
+  const nicks = new Map<string, string>()
+  for (const a of o.accounts || []) if (a.nickname) nicks.set(a.uid, a.nickname)
+  return { notes: notesOf(o), nicks }
 }
 
 /**

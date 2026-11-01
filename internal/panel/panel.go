@@ -37,6 +37,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
 	"github.com/yreidev/workbuddy2api-panel/internal/logarchive"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
 	"github.com/yreidev/workbuddy2api-panel/internal/scheduler"
 	"github.com/yreidev/workbuddy2api-panel/internal/selfupdate"
@@ -93,6 +94,9 @@ type Config struct {
 	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
 	// 只读展示：网关不解析、不依赖其内容做任何路由/出站决策。
 	ProbeFile string
+
+	// Proxies 代理池（按号代理，见 proxies.go）。nil = 代理接口返回 501，加号、删号、导出凭证照旧不碰代理。
+	Proxies *proxies.Registry
 }
 
 // Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
@@ -163,6 +167,9 @@ type loginSession struct {
 	created time.Time
 	realm   string              // "cn" / "global"，缺省 cn
 	trace   upstream.LoginTrace // 这次登录的链路（发起授权时生成，轮询、取账号沿用）
+	// pool 选的代理池（空 = 默认池，proxies.NoPool = 不绑）；hold、proxy 登录在池里占的位子和代理
+	// （登录请求走这个代理，新号也绑在它上面）。没装代理池时都为空。
+	pool, hold, proxy string
 }
 
 // New 构建面板。
@@ -253,6 +260,21 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/keys/{id}/regenerate", p.withAuth(p.keyRegenerate))
 	p.mux.HandleFunc("POST /panel/api/keys/{id}/delete", p.withAuth(p.keyDelete))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
+	p.mux.HandleFunc("GET /panel/api/proxies", p.withAuth(p.proxiesList))
+	p.mux.HandleFunc("POST /panel/api/proxies/preview", p.withAuth(p.proxiesPreview))
+	p.mux.HandleFunc("POST /panel/api/proxies/import", p.withAuth(p.proxiesImport))
+	p.mux.HandleFunc("GET /panel/api/proxies/export", p.withAuth(p.proxiesExport))
+	p.mux.HandleFunc("POST /panel/api/proxies/test_all", p.withAuth(p.proxiesTestAll))
+	p.mux.HandleFunc("POST /panel/api/proxies/delete", p.withAuth(p.proxiesDelete))
+	p.mux.HandleFunc("POST /panel/api/proxies/delete_unavailable", p.withAuth(p.proxiesDeleteUnavailable))
+	p.mux.HandleFunc("POST /panel/api/proxies/settings", p.withAuth(p.proxiesSettings))
+	p.mux.HandleFunc("POST /panel/api/proxies/bind", p.withAuth(p.proxiesBind))
+	p.mux.HandleFunc("POST /panel/api/proxies/{id}", p.withAuth(p.proxyUpdate))
+	p.mux.HandleFunc("POST /panel/api/proxies/{id}/test", p.withAuth(p.proxyTest))
+	p.mux.HandleFunc("POST /panel/api/proxy_pools", p.withAuth(p.proxyPoolCreate))
+	p.mux.HandleFunc("POST /panel/api/proxy_pools/{id}", p.withAuth(p.proxyPoolUpdate))
+	p.mux.HandleFunc("POST /panel/api/proxy_pools/{id}/delete", p.withAuth(p.proxyPoolDelete))
+	p.mux.HandleFunc("POST /panel/api/proxy_pools/{id}/rebalance", p.withAuth(p.proxyPoolRebalance))
 }
 
 // ServeHTTP 统一入口：先写安全响应头再分发，保证页面、静态资源、API
@@ -298,8 +320,8 @@ func (p *Panel) expiringSoonWindow() time.Duration {
 // overview 总览：池计数 + 每账号状态 + 面板元信息。
 func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	// 用 WithPaused 而不是 CountsDetailed：后者把暂停号并进 disabled（/status 的
-	// 「不可用」口径），而概况卡片要分开展示（issue #125）。
-	total, healthy, cooling, disabled, paused, inFlightFull := p.cfg.Pool.CountsDetailedWithPaused()
+	// 「不可用」口径），而概况卡片要分开展示（issue #125）；被代理池拦着的号也单独计（proxy_blocked）。
+	total, healthy, cooling, disabled, paused, proxyBlocked, inFlightFull := p.cfg.Pool.CountsDetailedWithPaused()
 	sticky := 0
 	if p.cfg.StickyCount != nil {
 		sticky = p.cfg.StickyCount()
@@ -315,12 +337,30 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"cooling":         cooling,
 		"disabled":        disabled,
 		"paused":          paused,
+		"proxy_blocked":   proxyBlocked,
 		"in_flight_full":  inFlightFull,
 		"accounts":        p.cfg.Pool.List(),
 		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久）：
 		// 与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
 		"model_locks": p.cfg.Pool.ModelLockView(),
+		// proxies 代理池的概况（总览的提醒、账号池卡片上的代理），没装代理池时为 null。
+		"proxies": p.proxyOverview(),
 	})
+}
+
+// proxyOverview 总览里代理池的部分：有没有用代理池、要提醒的数、每个号的代理情况。
+func (p *Panel) proxyOverview() map[string]any {
+	if p.cfg.Proxies == nil {
+		return nil
+	}
+	v := p.cfg.Proxies.View()
+	return map[string]any{
+		"pools":         len(v.Pools),
+		"proxies":       len(v.Proxies),
+		"require_bound": v.Settings.RequireBound,
+		"warnings":      v.Warnings,
+		"accounts":      p.cfg.Proxies.AccountViews(),
+	}
 }
 
 // logsHandler 返回日志环形缓冲快照（时间升序，含频道标记 chat/task/sys）。
@@ -692,6 +732,9 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
+	}
+	if p.cfg.Proxies != nil {
+		p.cfg.Proxies.Untrack(uid) // 号走了，它占的代理空出来给等代理的号
 	}
 	fileMsg := ""
 	if a.FilePath != "" {

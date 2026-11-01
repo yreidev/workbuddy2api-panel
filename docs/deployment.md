@@ -136,6 +136,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit     ./cmd/credit
 2. 在浏览器里打开链接并登录；
 3. 面板自动检测到登录完成，凭证写入 `auths/workbuddy-<uid>.json`，账号**热加载进池，不用重启**，并顺带完成首次签到。
 
+用了[代理池](proxy.md)时，第 1 步还可以选池：登录请求本身就走池里分到的代理，新号绑在这个代理上。
+
 也可以在同一个对话框里导入 JSON，失败项会逐条列出：账号池「导出凭证」得到的文件（企业版、国际版等信息原样保留，适合备份或迁到另一台网关），或 cockpit tools 导出的账号（没有企业 ID，按域名判断国内版 / 国际版）。
 
 **方式 B：命令行（Linux / macOS，依赖 bash 与 python3）**
@@ -143,6 +145,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit     ./cmd/credit
 ```bash
 ./login.sh
 # 按提示在浏览器打开授权链接 → 回到终端确认 → 凭证落盘 auths/workbuddy-<uid>.json
+./login.sh --pool=国内
+# 用了代理池时：登录请求走池「国内」里分到的代理，新号绑在它上面（不写 --pool = 这个域的默认池，--pool=- = 不绑）
 ```
 
 账号池启动时会和 `auths/` 目录对齐，新增的凭证文件会被自动发现。多台机器之间迁移账号，复制 `auths/workbuddy-<uid>.json` 即可。
@@ -174,6 +178,7 @@ Compose 部署：`git pull && docker compose up -d --build`。
 | 池状态（积分、冷却、计数、暂停标记） | `data/state.json` |
 | 用量统计与日志留存 | `data/usage.json`、`data/request-logs/`（请求记录）、`data/runtime-logs/`（任务日志、系统日志） |
 | 客户端密钥（含密钥原文和各自的用量） | `data/api_keys.json` |
+| 代理池（代理地址含密码、池、设置、检测结果；号绑哪个代理记在各自的凭证文件里） | `data/proxies.json` |
 | 会话记录（客户端没给会话 id 时网关定的会话 id、每段对话用过的号） | `data/sessions.json` |
 | 配置 | `config.json`（或 `data/config.json`） |
 
@@ -200,7 +205,7 @@ Compose 部署：`git pull && docker compose up -d --build`。
 | `python3 scripts/probe_active.py` | 活跃上报诊断与补跑：probe 只读，report / unlock 为写操作，默认 dry-run，加 `--yes` 才执行 |
 | `python3 scripts/probe_max_tokens.py` | 探测各模型真实输出上限，结果可直接给面板展示（见下节） |
 
-脚本首次使用时会自动 `go build` 对应的 `cmd/*`；Docker 镜像里已经预编译好。
+脚本首次使用时会自动 `go build` 对应的 `cmd/*`；Docker 镜像里已经预编译好。用了代理池时，签到、积分日报、登录这几个工具读网关的 `data/proxies.json`，号照样走自己的代理，被代理拦着的号跳过，参数见[按号代理与代理池 · 命令行工具](proxy.md#命令行工具)。
 
 ## 探测模型真实输出上限
 

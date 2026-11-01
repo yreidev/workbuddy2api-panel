@@ -16,6 +16,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,7 +33,7 @@ func (c *Client) schoolJSON(a *auth.Auth, method, path string, body map[string]a
 	if body != nil {
 		raw, _ = json.Marshal(body)
 	}
-	req, err := http.NewRequest(method, c.billingBase(a)+schoolBase+path, bytes.NewReader(raw))
+	req, err := newAccountRequest(context.Background(), a, method, c.billingBase(a)+schoolBase+path, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -106,7 +107,7 @@ func (c *Client) ReportMPEvent(a *auth.Auth, events ...map[string]any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.BillingBaseCN+mpReportPath, bytes.NewReader(raw))
+	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.BillingBaseCN+mpReportPath, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}

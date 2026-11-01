@@ -132,6 +132,20 @@ func (p *Pool) SetNote(uid, note string) bool {
 	return true
 }
 
+// SetProxyBlocked 代理池推送号现在为什么不能出站，reason 为空是放开（见 entry.proxyBlocked）。号不在池里
+// 时忽略：代理池在号加进池以后登记它，会再推一遍。放开时叫醒在等空位的请求（多了一个能用的号）。
+func (p *Pool) SetProxyBlocked(uid, reason string) {
+	p.mu.Lock()
+	e, ok := p.byUID[uid]
+	if ok {
+		e.proxyBlocked = reason
+	}
+	p.mu.Unlock()
+	if ok && reason == "" {
+		p.notifySlotFreed()
+	}
+}
+
 // Resume 解除暂停选号（幂等，对未暂停账号为空操作）。uid 不存在返回 false。
 func (p *Pool) Resume(uid string) bool {
 	p.mu.Lock()
@@ -455,25 +469,27 @@ func (p *Pool) PickByUID(uid string) *auth.Auth {
 // 与 ServableNow 的区别见该函数注释。
 // 保持既有语义：paused 并入 disabled（= /status 的「不可用」口径）。监控/脚本只
 // 关心"还能不能用"，这个口径对它们是稳定契约，不因面板展示需要而改变。
-// 面板概况需要分开计数，用 CountsDetailedWithPaused。
+// 面板概况需要分开计数，用 CountsDetailedWithPaused。被代理池拦着的号（等代理、代理不通）算进 cooling：
+// 和冷却一样是暂时不能用。
 func (p *Pool) CountsDetailed() (total, healthy, cooling, disabled, inFlightFull int) {
-	t, h, c, d, pz, f := p.countsDetailedForRealm("")
-	return t, h, c, d + pz, f
+	t, h, c, d, pz, b, f := p.countsDetailedForRealm("")
+	return t, h, c + b, d + pz, f
 }
 
-// CountsDetailedWithPaused 同 CountsDetailed，但 paused 与 disabled 分开返回。
+// CountsDetailedWithPaused 同 CountsDetailed，但 paused 与 disabled 分开返回，被代理池拦着的号也单独
+// 返回（proxyBlocked，不算进 cooling）。
 //
 // 面板概况要回答「禁用几个、暂停几个」——暂停只关选号、照常签到保活，与禁用混成
-// 一个数字会让人误判池子的真实状况（issue #125）。
-func (p *Pool) CountsDetailedWithPaused() (total, healthy, cooling, disabled, paused, inFlightFull int) {
+// 一个数字会让人误判池子的真实状况（issue #125）；被代理拦着的号要换代理才好，和等着解冻的冷却也分开。
+func (p *Pool) CountsDetailedWithPaused() (total, healthy, cooling, disabled, paused, proxyBlocked, inFlightFull int) {
 	return p.countsDetailedForRealm("")
 }
 
 // CountsDetailedForRealm 同 CountsDetailed，但仅统计 Realm()==realm 的账号；
 // realm=="" 不加谓词（= CountsDetailed）。供 /status 按域分组透出。
 func (p *Pool) CountsDetailedForRealm(realm string) (total, healthy, cooling, disabled, inFlightFull int) {
-	t, h, c, d, pz, f := p.countsDetailedForRealm(realm)
-	return t, h, c, d + pz, f
+	t, h, c, d, pz, b, f := p.countsDetailedForRealm(realm)
+	return t, h, c + b, d + pz, f
 }
 
 // countsDetailedForRealm 是两函数共用的遍历实现；realm=="" 不加谓词。
@@ -482,8 +498,8 @@ func (p *Pool) CountsDetailedForRealm(realm string) (total, healthy, cooling, di
 // paused 单独返回、不并进 disabled：调用方按自己的口径决定合不合并。
 // /status 要的是「还能不能用」（暂停与禁用同样不可选，合并）；面板概况要的是
 // 「禁用几个、暂停几个」（分开，issue #125）。两种口径都合理，所以把选择权
-// 留在调用方，而不是让一个共享函数替所有人做决定。
-func (p *Pool) countsDetailedForRealm(realm string) (total, healthy, cooling, disabled, paused, inFlightFull int) {
+// 留在调用方，而不是让一个共享函数替所有人做决定。被代理池拦着的号（proxyBlocked）同理单独返回。
+func (p *Pool) countsDetailedForRealm(realm string) (total, healthy, cooling, disabled, paused, proxyBlocked, inFlightFull int) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := time.Now()
@@ -499,6 +515,8 @@ func (p *Pool) countsDetailedForRealm(realm string) (total, healthy, cooling, di
 			// 暂停选号：退出选号候选，但照常签到 / 活跃上报 / 保活 / 刷新余额。
 			// 它与「禁用」是两种运维状态，这里分开计；要不要合并由调用方决定。
 			paused++
+		case e.proxyBlocked != "":
+			proxyBlocked++
 		case !e.healthy(now):
 			cooling++
 		default:
@@ -508,7 +526,7 @@ func (p *Pool) countsDetailedForRealm(realm string) (total, healthy, cooling, di
 			}
 		}
 	}
-	return total, healthy, cooling, disabled, paused, inFlightFull
+	return total, healthy, cooling, disabled, paused, proxyBlocked, inFlightFull
 }
 
 // ServableNow 报告池当前是否可服务：存在至少一个 healthy 且未占满在途名额的账号。
@@ -579,6 +597,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Cooling:                  now.Before(e.until) || now.Before(e.breakerUntil),
 		Disabled:                 e.disabled,
 		Paused:                   e.paused,
+		ProxyBlocked:             e.proxyBlocked,
 		SuccessCount:             e.successCount,
 		ErrTotal:                 e.errTotal,
 		CheckinDone:              e.lastCheckinDay == now.Format("2006-01-02"),

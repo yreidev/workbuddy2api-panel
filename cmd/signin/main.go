@@ -4,9 +4,15 @@
 
 // signin 一次性批量签到工具：遍历 ./auths/workbuddy-*.json 全部账号，
 // 自动 RefreshToken（过期时），逐个调 daily-checkin，顺手查余额。
+//
+//	signin [-proxies data/proxies.json] [凭证目录]
+//
+// 号按网关代理池里的绑定走代理（-proxies 指网关的 proxies.json，只读）；代理不通、在等代理、开着
+// 「只许走号的代理」却没绑的号不发请求，记 SKIP。
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -24,7 +31,7 @@ type row struct {
 	file     string
 	uid      string
 	nick     string
-	status   string // OK | ALREADY | FAIL | AUTH_INVALID | LOAD_ERR
+	status   string // OK | ALREADY | FAIL | AUTH_INVALID | LOAD_ERR | SKIP（代理池拦着）
 	detail   string
 	remain   int64
 	hasQuota bool
@@ -38,9 +45,15 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
+	fs := flag.NewFlagSet("signin", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	proxiesPath := fs.String("proxies", filepath.Join("data", "proxies.json"), "网关的代理池文件（只读），号按绑定走代理；文件不存在就都走默认线路")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	dir := "auths"
-	if len(args) > 0 {
-		dir = args[0]
+	if fs.NArg() > 0 {
+		dir = fs.Arg(0)
 	}
 	files, err := filepath.Glob(filepath.Join(dir, "workbuddy-*.json"))
 	if err != nil || len(files) == 0 {
@@ -48,9 +61,15 @@ func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
 		return 1
 	}
 	sort.Strings(files)
+	reg, err := proxies.OpenReadOnly(*proxiesPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	up.SetRouter(reg)
 
 	var rows []row
-	okN, alreadyN, failN := 0, 0, 0
+	okN, alreadyN, failN, skipN := 0, 0, 0, 0
 	for _, f := range files {
 		r := row{file: filepath.Base(f)}
 		raw, err := os.ReadFile(f)
@@ -69,6 +88,13 @@ func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
 		}
 		a.FilePath = f
 		r.uid, r.nick = a.UID, a.Nickname
+		reg.Track(a, false)
+		if reason := reg.Blocked(a.UID); reason != "" {
+			r.status, r.detail = "SKIP", "代理："+reason // 不用 short：按字节截会截坏中文
+			rows = append(rows, r)
+			skipN++
+			continue
+		}
 
 		// 2 小时内过期的 token 先刷新
 		if a.NeedsRefresh(2 * time.Hour) {
@@ -122,7 +148,7 @@ func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
 		fmt.Fprintf(stdout, "%-36s | %-11s | %-12s | %-6s | %s\n",
 			trunc(r.uid, 36), trunc(r.nick, 11), r.status, remain, r.detail)
 	}
-	fmt.Fprintf(stdout, "\ntotal=%d ok=%d already=%d fail=%d\n", len(rows), okN, alreadyN, failN)
+	fmt.Fprintf(stdout, "\ntotal=%d ok=%d already=%d fail=%d skip=%d\n", len(rows), okN, alreadyN, failN, skipN)
 	return 0
 }
 

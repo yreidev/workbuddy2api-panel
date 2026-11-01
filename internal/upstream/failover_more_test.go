@@ -116,7 +116,7 @@ func TestLoginRetryTimeoutResets(t *testing.T) {
 		return jsonResp(http.StatusOK, loginFoStateBody), nil
 	}}
 	c := loginFoClient(f)
-	if _, err := c.LoginAuthState("cn"); err != nil {
+	if _, err := c.LoginAuthState("cn", ""); err != nil {
 		t.Fatalf("LoginAuthState: %v", err)
 	}
 	reqs := f.seen()

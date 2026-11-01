@@ -55,7 +55,7 @@ func (s *Scheduler) TestAccount(ctx context.Context, uid, model string) (pool.Li
 	return fn(ctx, uid, model, false)
 }
 
-// StartLivenessAll 面板「全部测活」：后台测所有没被人工禁用的号（暂停选号、网关自动禁用的也测），
+// StartLivenessAll 面板「全部测活」：后台测所有没被人工禁用、没被代理池拦着的号（暂停选号、网关自动禁用的也测），
 // 同时测 livenessAllConcurrency 个，结果记在各号的「上次测活」里。返回要测的号数。
 func (s *Scheduler) StartLivenessAll() (int, error) {
 	fn := s.liveness()
@@ -67,8 +67,8 @@ func (s *Scheduler) StartLivenessAll() (int, error) {
 	}
 	var uids []string
 	for _, st := range s.cfg.Pool.List() {
-		if st.Disabled && st.DisabledReason == pool.ManualDisableReason {
-			continue
+		if (st.Disabled && st.DisabledReason == pool.ManualDisableReason) || st.ProxyBlocked != "" {
+			continue // 人工禁用的不测；代理池拦着的请求出不去，测不了
 		}
 		uids = append(uids, st.UID)
 	}

@@ -106,7 +106,7 @@ func TestLoginFailoverAuthStatePinnedRetry(t *testing.T) {
 		return jsonResp(http.StatusOK, loginFoStateBody), nil
 	}}
 	c := loginFoClient(f)
-	st, err := c.LoginAuthState("cn")
+	st, err := c.LoginAuthState("cn", "")
 	if err != nil || st.State != "st-1" {
 		t.Fatalf("LoginAuthState = %+v, %v", st, err)
 	}
@@ -137,7 +137,7 @@ func TestLoginFailoverAuthStateInvalidBodyRetry(t *testing.T) {
 		return jsonResp(http.StatusOK, loginFoStateBody), nil
 	}}
 	c := loginFoClient(f)
-	st, err := c.LoginAuthState("cn")
+	st, err := c.LoginAuthState("cn", "")
 	if err != nil || st.State != "st-1" {
 		t.Fatalf("LoginAuthState = %+v, %v", st, err)
 	}
@@ -180,7 +180,7 @@ func TestLoginFailoverNoRetryRequests(t *testing.T) {
 			return jsonResp(http.StatusBadGateway, `{"code":502}`), nil
 		}}
 		c := loginFoClient(f)
-		if _, err := c.LoginAuthState("global"); err == nil {
+		if _, err := c.LoginAuthState("global", ""); err == nil {
 			t.Fatal("应返回错误")
 		}
 		reqs := f.seen()
@@ -245,7 +245,7 @@ func TestLoginFailoverTimeouts(t *testing.T) {
 	c := loginFoClient(f)
 	c.ChatBaseCN = cnProductEndpoint
 
-	if _, err := c.LoginAuthState("cn"); err != nil {
+	if _, err := c.LoginAuthState("cn", ""); err != nil {
 		t.Fatalf("LoginAuthState: %v", err)
 	}
 	if _, _, err := c.LoginPollToken("cn", "st-1", LoginTrace{}); err != nil {

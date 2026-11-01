@@ -86,6 +86,9 @@ type Pool struct {
 	waveWindow    time.Duration
 	wavePause     time.Duration
 	waveHits      map[string][]restrictionHit
+	// exitKey 号的出口（SetExitKey，代理池装上）：风控波按出口分两层；nil 照旧整域暂停。调用时持着
+	// p.mu，它只取代理池自己的锁，不回调号池。
+	exitKey func(uid string) (key, label string)
 	// randInt64N 仅供测试注入确定性随机源；nil 时用 math/rand/v2 全局源。
 	// 生产代码不应设置此字段。
 	randInt64N func(n int64) int64

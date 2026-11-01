@@ -27,6 +27,9 @@ func (s *Scheduler) RunStreakBonusNow() {
 		if st.Disabled {
 			continue
 		}
+		if st.ProxyBlocked != "" {
+			continue // 代理池拦着（代理不通、在等代理、没绑代理）：请求出不去
+		}
 		a := s.cfg.Pool.AuthByUID(st.UID)
 		if a == nil || a.AccessTokenValue() == "" {
 			continue

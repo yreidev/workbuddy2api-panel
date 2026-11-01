@@ -82,14 +82,14 @@ func (p *Pool) RecoverAfterLiveness(uid, model string) bool {
 }
 
 // LivenessDue 定时测活要测的号：整个号在限流冷却、熔断或连败降权中的。余额不足的冷却有余额刷新管，
-// 风控波暂停是整域的保护，只是某个模型限额的号别的模型照常能用，都不测；禁用（人工或网关自动）
-// 和暂停选号的也不测。按 UID 排序。
+// 风控波暂停是整域的保护，只是某个模型限额的号别的模型照常能用，都不测；禁用（人工或网关自动）、
+// 暂停选号和被代理池拦着（请求出不去）的也不测。按 UID 排序。
 func (p *Pool) LivenessDue(now time.Time) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	var out []string
 	for uid, e := range p.byUID {
-		if e.disabled || e.paused {
+		if e.excluded() {
 			continue
 		}
 		soft := now.Before(e.until) && e.coolKind == CoolSoft

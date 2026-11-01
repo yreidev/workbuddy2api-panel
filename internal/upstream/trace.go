@@ -67,6 +67,9 @@ type LoginTrace struct {
 	SessionID string `json:"sessionId"`
 	OwnerID   string `json:"ownerId"`
 	SpanID    string `json:"spanId"`
+	// Proxy 这次登录走的代理（代理池里的 ID，见 route.go）：发起授权时定下，轮询令牌、取账号都走它；
+	// 空为默认线路。
+	Proxy string `json:"proxy,omitempty"`
 }
 
 // NewLoginTrace 生成一次登录的链路。
@@ -77,7 +80,9 @@ func NewLoginTrace() LoginTrace {
 // orNew 零值（或不完整）的链路现生成一条。
 func (t LoginTrace) orNew() LoginTrace {
 	if t.SessionID == "" || len(t.SpanID) != 16 {
-		return NewLoginTrace()
+		n := NewLoginTrace()
+		n.Proxy = t.Proxy
+		return n
 	}
 	return t
 }

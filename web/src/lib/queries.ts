@@ -6,15 +6,15 @@
 // 只读网关内存的接口（总览、日志、队列、版本）按页面需要轮询；标签页切到后台时轮询自动暂停。
 import { useMemo } from 'react'
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
-import { accountName, notesOf, relabel } from './accounts'
+import { accountName, namesOf, relabel } from './accounts'
 import { ApiError, acct, api, errorMessage } from './api'
 import { creditLogQuery } from './credits'
 import { logArchiveQuery, type LevelFilter, type LogChannel } from './logs'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
 import { SEEN_VERSION_KEY, readStored, updateBusy } from './update'
 import type {
-  CompensationResp, ConfigResp, CreditLogResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, QueueState, RequestEvent,
-  RequestMetrics, Task, UsageResp, VersionResp, VoucherAccount,
+  CompensationResp, ConfigResp, CreditLogResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, ProxiesResp, QueueState,
+  RequestEvent, RequestMetrics, Task, UsageResp, VersionResp, VoucherAccount,
 } from './types'
 
 export const queryClient = new QueryClient({
@@ -41,6 +41,7 @@ export const qk = {
   probes: ['model_probes'] as const,
   usage: (range: TimeRange, key: string) => ['usage', rangeKey(range), key] as const,
   keys: ['keys'] as const,
+  proxies: ['proxies'] as const,
   packages: ['packages'] as const,
   config: ['config'] as const,
   tasks: (uid: string) => ['tasks', uid] as const,
@@ -59,20 +60,21 @@ export function useOverview(intervalMs = 30_000) {
   })
 }
 
-const NO_NOTES = new Map<string, string>()
+const NO_NAMES: ReturnType<typeof namesOf> = { notes: new Map(), nicks: new Map() }
 
 /**
  * 账号显示名（备注 > 昵称 > UID 前 8 位），给只带 uid 和昵称的接口数据（用量、积分、任务、补偿、请求记录…）
- * 补上备注。备注取自外壳一直在轮询的总览缓存，这个钩子自己不发请求。
+ * 补上备注；没给昵称的（代理绑了哪些号只有 uid）用总览里的昵称。备注、昵称取自外壳一直在轮询的总览缓存，
+ * 这个钩子自己不发请求。
  */
 export function useAccountNames() {
-  const { data: notes = NO_NOTES } = useQuery({ queryKey: qk.overview, queryFn: () => api<Overview>('overview'), enabled: false, select: notesOf })
+  const { data: names = NO_NAMES } = useQuery({ queryKey: qk.overview, queryFn: () => api<Overview>('overview'), enabled: false, select: namesOf })
   return useMemo(() => ({
-    note: (uid: string) => notes.get(uid),
-    name: (uid: string, nickname?: string) => accountName({ uid, nickname, note: notes.get(uid) }),
+    note: (uid: string) => names.notes.get(uid),
+    name: (uid: string, nickname?: string) => accountName({ uid, nickname: nickname || names.nicks.get(uid), note: names.notes.get(uid) }),
     /** 请求记录里的「昵称(uid8)」标签 */
-    label: (label: string) => relabel(label, notes),
-  }), [notes])
+    label: (label: string) => relabel(label, names.notes),
+  }), [names])
 }
 
 export function useLogs(live: boolean) {
@@ -196,6 +198,22 @@ export function useKeys(intervalMs: number | false = false) {
     queryKey: qk.keys,
     queryFn: () => api<KeysResp>('keys'),
     refetchInterval: intervalMs,
+  })
+}
+
+/**
+ * 代理池（只读网关内存）：代理页 5 秒一刷（健康检查、出口 IP 在后台变）；绑定、登录选池的弹窗打开时查一次。
+ * 没装代理池（501）时返回 null，弹窗里就不显示选池。
+ */
+export function useProxies(intervalMs: number | false = false, enabled = true) {
+  return useQuery({
+    queryKey: qk.proxies,
+    queryFn: () => api<ProxiesResp>('proxies').catch((e: unknown) => {
+      if (e instanceof ApiError && e.status === 501) return null
+      throw e
+    }),
+    refetchInterval: intervalMs,
+    enabled,
   })
 }
 

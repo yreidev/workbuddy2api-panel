@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证）+ 批量任务（含全部测活）+ 模型锁池。
+// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 代理提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证、绑定代理）
+// + 批量任务（含全部测活）+ 模型锁池。
 // 宽屏默认卡片网格，可切换成表格（记在本浏览器）；窄屏只有卡片。
 import { useMemo, useState } from 'react'
 import {
@@ -15,17 +16,19 @@ import { post } from '../../lib/api'
 import { ago } from '../../lib/format'
 import { toastError, useNow, useStartedToast, useStoredChoice } from '../../lib/hooks'
 import { useOverview } from '../../lib/queries'
-import type { Account, Overview } from '../../lib/types'
+import type { Account, Overview, ProxyAccount } from '../../lib/types'
 import { Empty, Loaded } from '../../components/Feedback'
 import { Panel, Stat } from '../../components/Panel'
 import { AccountButtons } from './AccountButtons'
 import { AccountCard } from './AccountCard'
 import { AccountName, CreditsCell, StatusCell, UsageChips } from './AccountCells'
 import { AccountDrawer } from './AccountDrawer'
+import { BindProxyModal } from './BindProxyModal'
 import { ExpiryReminder } from './ExpiryReminder'
 import { ExportActions, SelectionCheckbox } from './ExportBar'
 import { LivenessModal } from './LivenessModal'
 import { ModelLocks } from './ModelLocks'
+import { ProxyReminder } from './ProxyReminder'
 import { TasksModal } from './TasksModal'
 import { useAccountActions } from './useAccountActions'
 
@@ -60,7 +63,13 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const [detail, setDetail] = useState<string | null>(null)
   const [tasksOf, setTasksOf] = useState<string | null>(null)
   const [livenessOf, setLivenessOf] = useState<string | null>(null)
+  const [bindUids, setBindUids] = useState<string[] | null>(null)
   const { busy, run, confirmEl } = useAccountActions(setTasksOf, setLivenessOf)
+  // 用了代理池（建过池、导过代理或开着「只许走号的代理」）才给绑定入口和「因代理暂停」一栏
+  const px = data.proxies
+  const proxiesInUse = !!px && (px.pools > 0 || px.proxies > 0 || px.require_bound)
+  const proxyOf = (uid: string): ProxyAccount | undefined => px?.accounts?.[uid]
+  const onBind = proxiesInUse ? (uids: string[]) => setBindUids(uids) : undefined
 
   const accounts = useMemo(() => data.accounts || [], [data])
   const pool = useMemo(() => poolCredits(accounts), [accounts])
@@ -95,13 +104,15 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
     { id: 'disabled', label: '已禁用', value: data.disabled, color: 'text-danger' },
     { id: 'paused', label: '已暂停选号', value: data.paused },
   ]
+  // 被代理池拦着的号（等代理、代理不通或到期、没绑代理）：不算冷却，单独一栏
+  if (proxiesInUse || data.proxy_blocked) tiles.push({ id: 'blocked', label: '因代理暂停', value: data.proxy_blocked ?? 0, color: 'text-warning' })
   // 企业版不限量的号没有可加的数，合计里不算，另外注明
   const creditSum = pool.total > 0 ? `${pool.remain} / ${pool.total}` : pool.remain
 
   return (
     <>
-      {/* 宽屏一行放下：五张状态卡均分，积分合计、粘性会话按内容定宽（积分合计数字长，均分会折行） */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
+      {/* 宽屏一行放下：状态卡均分，积分合计、粘性会话按内容定宽（积分合计数字长，均分会折行） */}
+      <div className={`grid grid-cols-2 gap-3 sm:grid-cols-4 ${tiles.length > 5 ? 'xl:grid-cols-[repeat(6,minmax(0,1fr))_auto_auto]' : 'xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]'}`}>
         <ToggleButtonGroup
           aria-label="按状态筛选"
           isDetached
@@ -123,6 +134,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
       </div>
 
       <ExpiryReminder accounts={accounts} />
+      <ProxyReminder warnings={px?.warnings} />
 
       <Panel
         title="账号池"
@@ -139,7 +151,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
             </SearchField.Group>
           </SearchField>
           <div className="flex flex-wrap items-center gap-3">
-            {isDesktop && selected.length > 0 && <ExportActions selected={selected} onClear={clearSelection} />}
+            {isDesktop && selected.length > 0 && <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} />}
             {/* 卡片没有表头复选框和可点的表头，在这里给「全选」和排序 */}
             {cards && rows.length > 0 && (
               <SelectionCheckbox
@@ -182,7 +194,10 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         ) : rows.length === 0 ? (
           <Empty title="没有符合条件的账号" action={<Button size="sm" variant="secondary" onPress={() => { setQ(''); setStatus('all') }}>清除筛选</Button>} />
         ) : !cards ? (
-          <AccountTable rows={rows} fetchedAt={fetchedAt} now={now} poolMax={poolMax} sort={sort} onSort={setSort} selection={selection} onSelect={setSelection} busy={busy} run={run} onOpen={setDetail} />
+          <AccountTable
+            rows={rows} fetchedAt={fetchedAt} now={now} poolMax={poolMax} sort={sort} onSort={setSort} selection={selection} onSelect={setSelection}
+            busy={busy} run={run} onOpen={setDetail} proxyOf={proxyOf}
+          />
         ) : (
           // 卡片至少 340px 宽，放得下几列就排几列
           <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr))]">
@@ -191,6 +206,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
                 key={a.uid}
                 a={a}
                 health={accountHealth(a, fetchedAt)}
+                proxy={proxyOf(a.uid)}
                 now={now}
                 poolMax={poolMax}
                 selected={selected.includes(a.uid)}
@@ -203,7 +219,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
             {/* 宽屏的导出按钮在搜索框那一行，窄屏滚动时贴在底部 */}
             {!isDesktop && selected.length > 0 && (
               <Card className="sticky bottom-3 z-30 col-span-full flex-row flex-wrap items-center gap-3 p-3 shadow-lg">
-                <ExportActions selected={selected} onClear={clearSelection} />
+                <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} />
               </Card>
             )}
           </div>
@@ -215,13 +231,16 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
       <AccountDrawer
         account={detailAcct}
         health={detailAcct ? accountHealth(detailAcct, fetchedAt) : null}
+        proxy={detailAcct ? proxyOf(detailAcct.uid) : undefined}
         now={now}
         busy={busy}
         run={run}
+        onBind={onBind && ((uid) => onBind([uid]))}
         onClose={() => setDetail(null)}
       />
       <TasksModal uid={tasksOf} name={tasksAcct ? accountName(tasksAcct) : tasksOf?.slice(0, 16) || ''} onClose={() => setTasksOf(null)} />
       <LivenessModal account={livenessAcct} onClose={() => setLivenessOf(null)} />
+      <BindProxyModal uids={bindUids} onClose={() => setBindUids(null)} />
       {confirmEl}
     </>
   )
@@ -237,7 +256,7 @@ const SelectBox = ({ label }: { label: string }) => (
   </Checkbox>
 )
 
-function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, selection, onSelect, busy, run, onOpen }: {
+function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, selection, onSelect, busy, run, onOpen, proxyOf }: {
   rows: Account[]
   fetchedAt: number
   now: number
@@ -249,6 +268,7 @@ function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, selection, 
   busy: string | null
   run: ReturnType<typeof useAccountActions>['run']
   onOpen: (uid: string) => void
+  proxyOf: (uid: string) => ProxyAccount | undefined
 }) {
   const sortable = (id: AccountSortKey, label: string) => (
     <Table.Column id={id} allowsSorting className="whitespace-nowrap">
@@ -287,7 +307,7 @@ function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, selection, 
                 <Table.Row key={a.uid} id={a.uid} className="cursor-pointer">
                   <Table.Cell className="pe-0"><SelectBox label={'选择 ' + accountName(a)} /></Table.Cell>
                   <Table.Cell><div className="max-w-40"><AccountName a={a} /></div></Table.Cell>
-                  <Table.Cell><StatusCell a={a} health={health} now={now} /></Table.Cell>
+                  <Table.Cell><StatusCell a={a} health={health} now={now} proxy={proxyOf(a.uid)} /></Table.Cell>
                   <Table.Cell><CreditsCell a={a} poolMax={poolMax} now={now} /></Table.Cell>
                   <Table.Cell className="whitespace-nowrap">
                     <div className="font-mono tabular-nums">

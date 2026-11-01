@@ -8,10 +8,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
 // creditExit 捕获 exitFunc 的退出码。
@@ -61,7 +64,7 @@ func TestCreditPrettyAllFailed(t *testing.T) {
 	t.Setenv("WB2A_AUTH_DIR", dir)
 
 	var out bytes.Buffer
-	if code := run([]string{"-pretty"}, &out, &http.Client{Transport: &creditFake{}}); code != 0 {
+	if code := run([]string{"-pretty"}, &out, io.Discard, &upstream.Client{HTTP: &http.Client{Transport: &creditFake{}}}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	text := out.String()

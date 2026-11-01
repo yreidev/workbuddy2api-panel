@@ -55,6 +55,7 @@ export function requestLogText(e: RequestEvent): string {
     e.error ? '原因 ' + e.error : '',
     e.model || '—',
     e.account || '—',
+    e.proxy ? '代理 ' + e.proxy : '',
     e.api_key ? '密钥 ' + e.api_key : '',
     e.client_ip || '—',
     e.user_agent || '—',
@@ -81,6 +82,6 @@ export function matchRequest(e: RequestEvent, f: RequestFilter, account = ''): b
   if (f.outcome && e.outcome !== f.outcome) return false
   const kws = f.q.toLowerCase().split(/\s+/).filter(Boolean)
   if (!kws.length) return true
-  const text = [e.client_ip, e.user_agent, e.model, e.account, account, e.api_key, e.error, e.request_id].filter(Boolean).join(' ').toLowerCase()
+  const text = [e.client_ip, e.user_agent, e.model, e.account, account, e.proxy, e.api_key, e.error, e.request_id].filter(Boolean).join(' ').toLowerCase()
   return kws.every((kw) => text.includes(kw))
 }

@@ -385,7 +385,7 @@ func TestFull7ThinkingSkipsNonMapMessages(t *testing.T) {
 // --- global_register.go ----------------------------------------------------
 
 func TestFull7GlobalRegisterReqMarshalError(t *testing.T) {
-	if _, err := (&Client{}).globalRegisterReq(http.MethodPost, "https://x/", "t", func() {}); err == nil {
+	if _, err := (&Client{}).globalRegisterReq(&auth.Auth{}, http.MethodPost, "https://x/", func() {}); err == nil {
 		t.Fatal("不可序列化 body 应返回错误")
 	}
 }

@@ -29,6 +29,13 @@ export function useStoredChoice<T extends string>(key: string, choices: readonly
   return [value, set] as const
 }
 
+/** 弹窗关闭时留住上一次的内容，退场动画里标题不会变空或变成别的 */
+export function useLast<T>(v: T | null): T | null {
+  const [last, setLast] = useState<T | null>(v)
+  if (v != null && v !== last) setLast(v)
+  return v ?? last
+}
+
 /** 停下 ms 毫秒不再变才跟上的值：关键字交给网关筛时，不必每敲一个字查一次 */
 export function useDebounced<T>(value: T, ms = 400): T {
   const [v, setV] = useState(value)

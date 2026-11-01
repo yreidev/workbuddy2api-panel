@@ -224,7 +224,7 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.desktopBase(a)+desktopReportPath, bytes.NewReader(raw))
+	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.desktopBase(a)+desktopReportPath, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -340,7 +340,7 @@ func (c *Client) SetAppearanceTheme(a *auth.Auth, resourceKey string) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.desktopBase(a)+desktopAppearanceSet, bytes.NewReader(raw))
+	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.desktopBase(a)+desktopAppearanceSet, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -376,7 +376,7 @@ func (c *Client) AppearanceThemes(a *auth.Auth) ([]AppearanceTheme, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.desktopBase(a)+desktopAppearanceResources, bytes.NewReader(raw))
+	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.desktopBase(a)+desktopAppearanceResources, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +480,7 @@ func (c *Client) ReportWebEvent(a *auth.Auth, eventCode, pageURL, elementID, ele
 		return err
 	}
 	build := func() (*http.Request, error) {
-		req, err := http.NewRequest(http.MethodPost, c.webBase(a)+"/v2/report", bytes.NewReader(raw))
+		req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.webBase(a)+"/v2/report", bytes.NewReader(raw))
 		if err != nil {
 			return nil, err
 		}
@@ -694,7 +694,7 @@ func (c *Client) marketExpertList(a *auth.Auth, expertType, keyword string, page
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.chatBase(a)+"/portal/operation-platform/market/expert/list", bytes.NewReader(raw))
+	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.chatBase(a)+"/portal/operation-platform/market/expert/list", bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}

@@ -47,6 +47,8 @@ type Config struct {
 	Session *session.Router
 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
 	StickyCount func() int
+	// ProxyName 号走的代理的名字（代理池 Registry.ProxyName），记进请求记录；nil 或返回空 = 没绑代理。
+	ProxyName func(uid string) string
 	// RedisMode 观测字段（"upstash" / "noop"），供 /status 透出。
 	RedisMode    string
 	SoftCooldown time.Duration // 429/限流文案软冷却基数，默认 600s（连续触发指数退避，封顶 soft_rate_max）
@@ -741,6 +743,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	tried := map[string]bool{}
 	var lastErr error
+	// wafExit 最近一次回 WAF 403 的号所在的出口：末端文案看这个出口是不是整个被拦了。
+	wafExit := ""
 	// modelBlock 记录本次是否因「模型级冷却」而选不到号（下方 acct==nil 分支填充）。
 	// 默认零值 Blocked=false = 按既有的"没有可用账号"口径报错。
 	var modelBlock pool.ModelBlockStatus
@@ -1021,6 +1025,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.uid = acct.UID
 		// 同步昵称：请求流水行只写 uid8 时无法直观看是哪一号，昵称随本次选号带入日志行。
 		st.nick = acct.Nickname
+		st.proxy = h.proxyName(acct.UID)
 		if crossRouted {
 			// 跨域选号：日志与请求记录写实际服务的域，看得出这次落在国内版还是国际版
 			st.model = acct.Realm() + ":" + bareModel
@@ -1068,8 +1073,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				var ue *upstream.Error
 				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
 					h.cfg.Pool.Disable(acct.UID, "refresh session dead")
-				} else {
-					h.cfg.Pool.NoteError(acct.UID)
+				} else if !upstream.IsRouteError(err) {
+					h.cfg.Pool.NoteError(acct.UID) // 号的代理连不上不罚号（同下方传输层分支）
 				}
 				fail(acct.UID)
 				if !rotateBackoff(i, r.Context()) {
@@ -1106,6 +1111,22 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			status = uerr.Status
 		}
 		if uerr == nil && terr != nil {
+			// 号的线路出了问题（号的代理连不上，或号此刻被代理池拦着，见 upstream/route.go）：不是这个号的
+			// 问题，也不是上游的问题——不罚号、不喂连败，换个号再试。连不上的代理已经标成不通，绑在上面的号
+			// 不会再被选中。放在超时判定之前：连代理超时也是 net.Error 超时，不能当成上游慢而止损。
+			if upstream.IsRouteError(terr) {
+				var rerr *upstream.RouteError
+				if errors.As(terr, &rerr); !rerr.Blocked {
+					recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0) // 被拦的根本没发出去
+				}
+				st.status = http.StatusServiceUnavailable
+				lastErr = terr
+				fail(acct.UID)
+				if !rotateBackoff(i, r.Context()) {
+					break // ctx 取消：终止轮转
+				}
+				continue
+			}
 			// 上游超时 / 停滞：**不换号、不罚号**。
 			//
 			// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
@@ -1268,11 +1289,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 			fail(acct.UID)
 			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
-			// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）
-			// 则立即终止轮转——继续换号只会把请求放大 MaxRotate 倍打同一出口 IP，
-			// 加重风控。账号级软冷却已在上方 applyErrorPolicy 照常记账。
-			if kind == upstream.ErrWafBlock && h.wafIP.noteWaf(acct.UID) {
-				break
+			// 该次 WAF 403 喂入这个号所在出口的 IP 级状态机，若激活（短窗内同出口多号命中，IP 被拦而非
+			// 账号）则同出口的号这次都不再试——继续换同出口的号只会把请求放大 MaxRotate 倍打同一出口 IP，
+			// 加重风控；别的出口（号挂了别的代理）还有号能接就接着换，没有就立即终止轮转（见 wafip.go）。
+			// 账号级软冷却已在上方 applyErrorPolicy 照常记账。
+			if kind == upstream.ErrWafBlock {
+				var stop bool
+				if wafExit, stop = h.noteWafBlock(acct.UID, tried, bareModel, realm); stop {
+					break
+				}
 			}
 			if !rotateBackoff(i, r.Context()) {
 				break // ctx 取消：终止轮转（分类错误换号退避）
@@ -1454,6 +1479,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		code = "upstream_timeout"
 		msg = "upstream timed out: rotation stopped (another account would hit the same slow upstream), please retry later"
 	}
+	// 最后一个号的代理连不上（或号被代理池拦着）：客户端只知道是代理的问题，请求记录（含测活结果）写上
+	// 是哪个代理、为什么。
+	if upstream.IsRouteError(lastErr) {
+		msg = "all accounts are temporarily unavailable: the proxy of the account could not be reached, please retry later"
+		st.errMsg = lastErr.Error()
+	}
 	// gateway_hint（末端透传）：上游错误按 Kind + 原文 + 请求形态判定；本地调度类
 	// 错误（无上游原文）固定 no_healthy_account hint。
 	hint := upstream.NoHealthyAccountHint()
@@ -1474,7 +1505,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			code = "rate_limit_exceeded"
 			msg = "rate limited: all accounts are cooling down, please wait a moment and try again"
 		case upstream.ErrWafBlock:
-			if h.wafIP.active() {
+			if h.wafIP.active(wafExit) {
 				// IP 级拦截措辞（fail-fast 终止路径）：网关出口 IP 被 WAF 拦截、
 				// 轮转已止损、窗口过后自动解除。客户端提前重试无意义（换号不换 IP）；
 				// 有上游原文时原文优先（下方统一）。

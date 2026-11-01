@@ -512,14 +512,15 @@ func TestNewChatClientNoTotalTimeoutAndSharedTransport(t *testing.T) {
 	if c.ChatHTTP.Timeout != 0 {
 		t.Errorf("ChatHTTP.Timeout=%v want 0 (no total cap)", c.ChatHTTP.Timeout)
 	}
-	// 共享同一个 Transport 实例，连接池不重复。
+	// 共享同一个按号选线路的 Transport（route.go），连接池不重复。
 	if c.ChatHTTP.Transport != c.HTTP.Transport {
-		t.Errorf("ChatHTTP and HTTP must share the same *http.Transport")
+		t.Errorf("ChatHTTP and HTTP must share the same Transport")
 	}
-	htr, ok := c.ChatHTTP.Transport.(*http.Transport)
-	if !ok {
+	rt, ok := c.ChatHTTP.Transport.(routedTransport)
+	if !ok || rt.t != c.routes {
 		t.Fatalf("Transport type=%T", c.ChatHTTP.Transport)
 	}
+	htr := c.routes.base
 	if htr.ResponseHeaderTimeout != 60*time.Second { // 连接层加固：响应头上限从 120s 收到 60s（慢冷启动留 3.75× 余量）
 		t.Errorf("ResponseHeaderTimeout=%v want 60s", htr.ResponseHeaderTimeout)
 	}

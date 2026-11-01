@@ -135,3 +135,19 @@ func TestPad(t *testing.T) {
 		})
 	}
 }
+
+// TestMaskIPs IPv4 和方括号里的 IPv6 换成 <IP>，端口、域名和别的数字不动。
+func TestMaskIPs(t *testing.T) {
+	cases := map[string]string{
+		"连代理 http://203.0.113.7:8080：dial tcp 203.0.113.7:8080: connect: connection refused": "连代理 http://<IP>:8080：dial tcp <IP>:8080: connect: connection refused",
+		"dial tcp [2001:db8::1]:443: i/o timeout":                                            "dial tcp <IP>:443: i/o timeout",
+		"lookup proxy.example.com on [::1]:53: no such host":                                 "lookup proxy.example.com on <IP>:53: no such host",
+		"代理 socks5://proxy.example.com:1080 拒绝 CONNECT www.workbuddy.cn:443：407":             "代理 socks5://proxy.example.com:1080 拒绝 CONNECT www.workbuddy.cn:443：407",
+		"版本 5.9.4，耗时 12.5s":                                                                  "版本 5.9.4，耗时 12.5s",
+	}
+	for in, want := range cases {
+		if got := MaskIPs(in); got != want {
+			t.Errorf("MaskIPs(%q) = %q，应为 %q", in, got, want)
+		}
+	}
+}

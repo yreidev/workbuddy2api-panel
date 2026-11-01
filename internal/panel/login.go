@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -69,31 +70,51 @@ func loginStartError(err error) string {
 
 // loginStart 发起设备授权：POST auth/state 拿授权 URL。
 // body 可带 {"realm":"global"}（缺省 cn）；state 会话记 realm，poll 同 realm 落盘。
+// 装了代理池时还可带 pool（空 = 这个域的默认池，"-" = 不绑，其余是池 ID）：先在池里占一个代理，
+// 登录请求走它，登录成功后新号就绑在它上面。
 func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
-	realm := "cn"
+	realm, pool := "cn", ""
 	if r.Body != nil {
 		var reqBody struct {
 			Realm string `json:"realm"`
+			Pool  string `json:"pool"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&reqBody); err == nil {
 			if reqBody.Realm == "global" {
 				realm = "global"
 			}
+			pool = reqBody.Pool
 		}
 	}
-	st, err := p.cfg.Upstream.LoginAuthState(realm)
+	// 顺手回收过期会话，防"开弹窗走开"的 state 滞留；它们在代理池里占的位子先放掉，下面才占得到。
+	p.loginMu.Lock()
+	var stale []string
+	for s, sess := range p.logins {
+		if time.Since(sess.created) > loginTTL {
+			stale = append(stale, sess.hold)
+			delete(p.logins, s)
+		}
+	}
+	p.loginMu.Unlock()
+	for _, h := range stale {
+		p.releaseLogin(h)
+	}
+	hold, proxy := "", ""
+	if p.cfg.Proxies != nil {
+		var err error
+		if hold, proxy, err = p.cfg.Proxies.HoldForLogin(pool, realm); err != nil {
+			writeProxyErr(w, err)
+			return
+		}
+	}
+	st, err := p.cfg.Upstream.LoginAuthState(realm, proxy)
 	if err != nil {
+		p.releaseLogin(hold)
 		writeErr(w, http.StatusBadGateway, loginStartError(err))
 		return
 	}
 	p.loginMu.Lock()
-	// 顺手回收过期会话，防"开弹窗走开"的 state 滞留。
-	for s, sess := range p.logins {
-		if time.Since(sess.created) > loginTTL {
-			delete(p.logins, s)
-		}
-	}
-	p.logins[st.State] = loginSession{created: time.Now(), realm: realm, trace: st.Trace}
+	p.logins[st.State] = loginSession{created: time.Now(), realm: realm, trace: st.Trace, pool: pool, hold: hold, proxy: proxy}
 	p.loginMu.Unlock()
 	log.Printf("panel: 发起 OAuth 添加账号 realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": st.AuthURL, "state": st.State, "realm": realm})
@@ -165,20 +186,42 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		// CN 也显式补 realm 键（幂等），让 auth 文件形态统一（与 LoadDir 存量迁移对齐）。
 		_, _ = a.BackfillRealm()
 	}
+	// 代理：原来就在号池里的号沿用原来的绑定（重新登录只是换凭证）；新号绑在登录走的那个代理上。
+	_, existing := p.cfg.Pool.Status(acct.UID)
+	if p.cfg.Proxies != nil {
+		if existing {
+			a.SetProxyBinding(p.cfg.Proxies.Binding(acct.UID))
+		} else if sess.proxy != "" {
+			a.SetProxyBinding(auth.ProxyBinding{ID: sess.proxy})
+		}
+	}
 	if err := a.SaveAtomic(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save auth: "+err.Error())
 		return
 	}
 	p.cfg.Pool.Add(a)
 	p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
+	var proxyView proxies.AccountView
+	if p.cfg.Proxies != nil {
+		if existing || sess.pool == proxies.NoPool {
+			p.cfg.Proxies.Track(a, false)
+		} else {
+			p.cfg.Proxies.TrackInto(a, sess.pool) // 占的代理没了就在这个池（没选池就是默认池）里重新分
+		}
+		p.releaseLogin(sess.hold)
+		proxyView = p.cfg.Proxies.AccountViews()[acct.UID]
+	}
 
 	// 顺带签到 + 余额刷新（幂等；失败不影响登录结果，只体现在返回字段里）。
 	// realm 分支：CN 走 DailyCheckin；global 无 CN 签到体系，改为注册激活 + trial 领取
 	// （D4 门控同 scheduler：CN 任务端点对 global 不发起任何调用）。
+	// 号现在不能出站（代理不通、在等代理）就先不发，等代理好了定时任务会补上。
 	checkinMsg := ""
 	remain := int64(-1)
 	total := int64(0)
-	if sess.realm == "global" {
+	if proxyView.Blocked != "" {
+		checkinMsg = "先不签到：" + proxyView.Blocked
+	} else if sess.realm == "global" {
 		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
 		if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
@@ -202,9 +245,11 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 			checkinMsg = err.Error()
 		}
 	}
-	if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
-		remain, total = rm, tt
-		p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
+	if proxyView.Blocked == "" {
+		if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
+			remain, total = rm, tt
+			p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
+		}
 	}
 
 	p.loginMu.Lock()
@@ -219,7 +264,17 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		"credits":         remain,
 		"credits_total":   total,
 		"checkin_message": checkinMsg,
+		// proxy 号的代理情况（没装代理池或没绑时是零值）；proxy_kept 号原来就在号池里，沿用了原来的绑定。
+		"proxy":      proxyView,
+		"proxy_kept": existing && p.cfg.Proxies != nil,
 	})
+}
+
+// releaseLogin 放掉登录在代理池里占的位子（没装代理池或没占位时什么都不做）。
+func (p *Panel) releaseLogin(hold string) {
+	if p.cfg.Proxies != nil {
+		p.cfg.Proxies.ReleaseLogin(hold)
+	}
 }
 
 // joinMsg 拼接 login 完成后的提示消息（多段用「；」连接，空段跳过）。

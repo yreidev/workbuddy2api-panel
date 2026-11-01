@@ -3,7 +3,7 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 账号详情抽屉：展示后端已有、账号表放不下的运维信息——模型级限额台账、成本台账、
-// 最早到期批次、连败 / 熔断计数、最近一次请求、上次测活。数据取自总览（随 5 秒轮询实时更新）。
+// 最早到期批次、连败 / 熔断计数、最近一次请求、上次测活、代理。数据取自总览（随 5 秒轮询实时更新）。
 // 账号备注也在这里改（存在网关的号池状态里，各页的账号名都优先用它）。
 import { useState, type ReactNode } from 'react'
 import { Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, TextField, toast, useMediaQuery } from '@heroui/react'
@@ -13,7 +13,7 @@ import { acct, post } from '../../lib/api'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
 import { qk } from '../../lib/queries'
-import type { Account, Overview } from '../../lib/types'
+import type { Account, Overview, ProxyAccount } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
 import { HealthChip, RealmChips } from './AccountCells'
 import { ExportOneButton } from './ExportBar'
@@ -42,12 +42,16 @@ const when = (iso?: string) => {
   return t == null ? '—' : dateTime(t)
 }
 
-export function AccountDrawer({ account: a, health, now, busy, run, onClose }: {
+export function AccountDrawer({ account: a, health, proxy, now, busy, run, onBind, onClose }: {
   account: Account | null
   health: Health | null
+  /** 号的代理情况；没绑也没被拦时没有 */
+  proxy?: ProxyAccount
   now: number
   busy: string | null
   run: (a: Account, action: AccountAction) => void
+  /** 打开绑定代理的弹窗；没用代理池时不给（详情里也不显示代理一节） */
+  onBind?: (uid: string) => void
   onClose: () => void
 }) {
   const isWide = useMediaQuery('(min-width: 640px)')
@@ -56,7 +60,7 @@ export function AccountDrawer({ account: a, health, now, busy, run, onClose }: {
       <Drawer.Content placement={isWide ? 'right' : 'bottom'}>
         <Drawer.Dialog className={isWide ? 'w-[440px] max-w-full' : 'max-h-[88dvh]'}>
           {isWide ? <Drawer.CloseTrigger /> : <Drawer.Handle />}
-          {a && health && <Body a={a} health={health} now={now} busy={busy} run={run} />}
+          {a && health && <Body a={a} health={health} proxy={proxy} now={now} busy={busy} run={run} onBind={onBind} />}
         </Drawer.Dialog>
       </Drawer.Content>
     </Drawer.Backdrop>
@@ -92,12 +96,14 @@ function NoteEditor({ a }: { a: Account }) {
   )
 }
 
-function Body({ a, health, now, busy, run }: {
+function Body({ a, health, proxy, now, busy, run, onBind }: {
   a: Account
   health: Health
+  proxy?: ProxyAccount
   now: number
   busy: string | null
   run: (a: Account, action: AccountAction) => void
+  onBind?: (uid: string) => void
 }) {
   const limited = activeRateLimits(a)
   const costs = (a.model_costs || []).filter((c) => c.model)
@@ -130,6 +136,31 @@ function Body({ a, health, now, busy, run }: {
           {!!a.soft_streak && <Row label="连续软冷却">{a.soft_streak} 次（退避指数）</Row>}
           <Row label="在途请求">{a.in_flight}</Row>
         </Section>
+
+        {(onBind || proxy) && (
+          <>
+            <Separator />
+            <Section title="代理">
+              {proxy?.proxy ? (
+                <>
+                  <Row label="代理">{proxy.proxy_name || proxy.proxy}{proxy.manual && <span className="text-muted">（单独指定）</span>}</Row>
+                  <Row label="池">{proxy.pool_name || '—'}</Row>
+                  <Row label="出口"><span className="break-all">{proxy.exit_ip ? proxy.exit_ip + (proxy.exit_geo ? ' · ' + proxy.exit_geo : '') : '还没查到'}</span></Row>
+                </>
+              ) : proxy?.waiting ? (
+                <Row label="池">{proxy.pool_name || proxy.pool}（池里没有空位，在等代理）</Row>
+              ) : (
+                <p className="text-sm text-muted">没绑代理，走服务器自己的网络（或环境变量里的全局代理）。</p>
+              )}
+              {a.proxy_blocked && <Row label="现在"><span className="break-all text-warning">{a.proxy_blocked}</span></Row>}
+              {onBind && (
+                <div className="pt-1">
+                  <Button size="sm" variant="secondary" onPress={() => onBind(a.uid)}>{proxy?.proxy || proxy?.waiting ? '改绑代理' : '绑定代理'}</Button>
+                </div>
+              )}
+            </Section>
+          </>
+        )}
 
         <Separator />
         <Section title={`模型限流与不可用${limited.length ? `（${limited.length}）` : ''}`}>

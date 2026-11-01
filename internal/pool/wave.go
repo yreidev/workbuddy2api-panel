@@ -7,11 +7,15 @@
 // 此时继续轮换只会把剩下的号一个个送进风控。达到阈值后整域暂停一段时间，
 // 被暂停的号记为 CoolPause：不参与全冷却兜底，也不随余额刷新解冻，到期自动恢复，
 // 面板「解冻」可提前恢复单个号。参数默认照 hub 的做法：15 分钟内 2 个号 → 暂停 30 分钟。
+//
+// 装了出口函数（SetExitKey，代理池按号的代理算出口）时分两层：窗口内被限的号都在同一个出口，
+// 只暂停这个域里这个出口下的号；分布在几个出口，才照旧暂停整个域。
 package pool
 
 import (
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -21,10 +25,51 @@ const (
 	defaultRestrictionWavePause     = 30 * time.Minute
 )
 
-// restrictionHit 一次 11140 限制记录（窗口内按账号去重）。
+// restrictionHit 一次 11140 限制记录（窗口内按账号去重）。exit 是号当时的出口（没装出口函数为空）。
 type restrictionHit struct {
-	uid string
-	at  time.Time
+	uid  string
+	at   time.Time
+	exit string
+}
+
+// SetExitKey 装上「号从哪个出口出去」的函数（代理池的 ExitKey）：key 相同的号算同一个出口，label 写进
+// 日志和冷却原因。在 NoteRestriction 之前调用；不装照旧整域暂停。
+func (p *Pool) SetExitKey(f func(uid string) (key, label string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.exitKey = f
+}
+
+// ExitOf 号 uid 的出口（SetExitKey 装上的函数算的）；没装出口函数时 key 为空，所有号算同一个出口。
+func (p *Pool) ExitOf(uid string) (key, label string) {
+	p.mu.RLock()
+	f := p.exitKey
+	p.mu.RUnlock()
+	if f == nil {
+		return "", ""
+	}
+	return f(uid)
+}
+
+// SameExit 和号 uid 同一个出口的号（含它自己），按 UID 排序；没装出口函数时是池里所有号。
+func (p *Pool) SameExit(uid string) []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	exit := ""
+	if p.exitKey != nil {
+		exit, _ = p.exitKey(uid)
+	}
+	var out []string
+	for u := range p.byUID {
+		if p.exitKey != nil {
+			if k, _ := p.exitKey(u); k != exit {
+				continue
+			}
+		}
+		out = append(out, u)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SetRestrictionWave 注入风控波熔断参数（main 从 config 解析后调用）。
@@ -62,13 +107,17 @@ func (p *Pool) NoteRestriction(uid string) int {
 	}
 	realm := e.a.Realm()
 	now := time.Now()
+	exit, label := "", ""
+	if p.exitKey != nil {
+		exit, label = p.exitKey(uid)
+	}
 	hits := make([]restrictionHit, 0, len(p.waveHits[realm])+1)
 	for _, h := range p.waveHits[realm] {
 		if h.uid != uid && now.Sub(h.at) < p.waveWindow {
 			hits = append(hits, h)
 		}
 	}
-	hits = append(hits, restrictionHit{uid: uid, at: now})
+	hits = append(hits, restrictionHit{uid: uid, at: now, exit: exit})
 	if len(hits) < p.waveThreshold {
 		if p.waveHits == nil {
 			p.waveHits = map[string][]restrictionHit{}
@@ -79,12 +128,25 @@ func (p *Pool) NoteRestriction(uid string) int {
 	delete(p.waveHits, realm)
 
 	until := now.Add(p.wavePause)
+	sameExit := exit != ""
+	for _, h := range hits {
+		sameExit = sameExit && h.exit == exit
+	}
 	reason := fmt.Sprintf("restriction wave: %d %s accounts restricted by upstream (11140) within %s, realm paused until %s",
 		len(hits), realm, p.waveWindow, until.Format("15:04:05"))
+	if sameExit {
+		reason = fmt.Sprintf("风控波：%g 分钟内 %d 个号在%s上被上游 11140 限制，这个出口的号暂停到 %s",
+			p.waveWindow.Minutes(), len(hits), label, until.Format("15:04:05"))
+	}
 	paused := 0
 	for _, x := range p.byUID {
 		if x.disabled || x.a.Realm() != realm {
 			continue
+		}
+		if sameExit {
+			if k, _ := p.exitKey(x.a.UID); k != exit {
+				continue // 只暂停同一个出口的号
+			}
 		}
 		if now.Before(x.until) && !x.until.Before(until) {
 			continue // 已有更晚截止的冷却（例如积分冷却到次日 04:00），不缩短

@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  accountHealth, accountName, activeRateLimits, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, livenessModels, livenessSummary, notesOf,
+  accountHealth, accountName, activeRateLimits, blockedLabel, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, livenessModels, livenessSummary, namesOf, notesOf,
   parseCardSort, poolCredits, rateLimitInfo, relabel, sortAccounts,
 } from './accounts'
 import type { Account, Model } from './types'
@@ -30,6 +30,22 @@ describe('accountHealth', () => {
     expect(isFrozen(accountHealth({ ...base, paused: true, cool_remaining_sec: 60 }, now))).toBe(true)
     expect(isFrozen(accountHealth({ ...base, disabled: true }, now))).toBe(true)
     expect(isFrozen(accountHealth(base, now))).toBe(false)
+  })
+  it('被代理拦着：排在禁用、暂停选号之后，冷却之前；冷却中照样带上冷却截止', () => {
+    const reason = '等代理：池「国内」里没有可用的空位'
+    expect(accountHealth({ ...base, proxy_blocked: reason }, now)).toEqual({ state: 'blocked', coolEnd: null, kind: '等代理', proxy: '等代理' })
+    expect(accountHealth({ ...base, proxy_blocked: reason, cool_remaining_sec: 60 }, now))
+      .toEqual({ state: 'blocked', coolEnd: now + 60_000, kind: '限流冷却', proxy: '等代理' })
+    expect(accountHealth({ ...base, proxy_blocked: reason, paused: true }, now)).toEqual({ state: 'paused', coolEnd: null, kind: '已暂停选号', proxy: '等代理' })
+    expect(accountHealth({ ...base, proxy_blocked: reason, disabled: true }, now).state).toBe('disabled')
+    expect(isFrozen(accountHealth({ ...base, proxy_blocked: reason }, now))).toBe(false)
+  })
+  it('代理拦截原因归成短说明（文案同 internal/proxies 的 gateLocked）', () => {
+    expect(blockedLabel('没绑代理（开着「只许走号的代理」）')).toBe('没绑代理')
+    expect(blockedLabel('等代理：池「国内」里没有可用的空位')).toBe('等代理')
+    expect(blockedLabel('代理「甲」已到期')).toBe('代理到期')
+    expect(blockedLabel('代理「已到期」连不上（11-01 09:30 起）')).toBe('代理不通')
+    expect(blockedLabel('别的原因')).toBe('因代理暂停')
   })
   it('取三种冷却里最晚的截止时刻，并按来源命名', () => {
     expect(accountHealth({ ...base, cool_remaining_sec: 60 }, now)).toEqual({ state: 'cooling', coolEnd: now + 60_000, kind: '限流冷却' })
@@ -71,6 +87,10 @@ describe('账号表辅助', () => {
     expect(filterAccounts(withPaused, now, 'disabled', '').map((a) => a.uid)).toEqual(['bbb', 'eee'])
     expect(filterAccounts(withPaused, now, 'paused', '').map((a) => a.uid)).toEqual(['ddd'])
     expect(filterAccounts(withPaused, now, 'cooling', '').map((a) => a.uid)).toEqual(['ccc'])
+    // 被代理拦着的号也单独一栏（哪怕在冷却），不算进冷却
+    const withBlocked = [...withPaused, { ...base, uid: 'fff', proxy_blocked: '代理「甲」已到期', cool_remaining_sec: 30 }]
+    expect(filterAccounts(withBlocked, now, 'blocked', '').map((a) => a.uid)).toEqual(['fff'])
+    expect(filterAccounts(withBlocked, now, 'cooling', '').map((a) => a.uid)).toEqual(['ccc'])
     expect(filterAccounts(list, now, 'all', '乙').map((a) => a.uid)).toEqual(['bbb'])
     expect(sortAccounts(list, 'credits', true).map((a) => a.uid)).toEqual(['bbb', 'ccc', 'aaa'])
     expect(sortAccounts(list, null, false)).toBe(list)
@@ -98,6 +118,11 @@ describe('账号显示名', () => {
     const notes = notesOf({ accounts: [{ ...base, uid: 'a', note: '甲' }, { ...base, uid: 'b' }] })
     expect([...notes]).toEqual([['a', '甲']])
     expect(notesOf({ accounts: null }).size).toBe(0)
+  })
+  it('总览里的备注和昵称（只给 uid 的接口用昵称补上显示名）', () => {
+    const n = namesOf({ accounts: [{ ...base, uid: 'a', note: '甲', nickname: '一号' }, { ...base, uid: 'b' }] })
+    expect([...n.notes]).toEqual([['a', '甲']])
+    expect([...n.nicks]).toEqual([['a', '一号']])
   })
   it('请求记录的标签按 uid8 换成备注，认不出的照原样', () => {
     const notes = new Map([['abcdefgh-1111', '主力'], ['zzzzzzzz-1', '甲'], ['zzzzzzzz-2', '乙']])

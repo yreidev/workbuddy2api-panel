@@ -56,6 +56,10 @@ func (h *Handler) TestAccount(ctx context.Context, uid, model string, scheduled 
 	if a == nil || !ok {
 		return pool.LivenessResult{}, "", fmt.Errorf("account %s not found", uid)
 	}
+	if before.ProxyBlocked != "" {
+		// 被代理池拦着：请求出不去，测了也只是白记一次不通。
+		return pool.LivenessResult{}, "", fmt.Errorf("account %s: %s，先处理好代理再测", uid, before.ProxyBlocked)
+	}
 	if model == "" {
 		if model = h.livenessModel(a, before.Enterprise); model == "" {
 			return pool.LivenessResult{}, "", fmt.Errorf("account %s: 模型目录还没拉到，指定一个模型再测", uid)

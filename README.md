@@ -10,7 +10,7 @@ Claude Code / Codex 直连 · 模型路由 · 请求头对齐官方桌面端 5.9
 
 [![构建](https://img.shields.io/github/actions/workflow/status/yreidev/workbuddy2api-panel/go-binaries.yml?branch=main&style=flat-square&label=build)](https://github.com/yreidev/workbuddy2api-panel/actions/workflows/go-binaries.yml)
 [![版本](https://img.shields.io/github/v/release/yreidev/workbuddy2api-panel?style=flat-square&label=release)](https://github.com/yreidev/workbuddy2api-panel/releases/latest)
-[![测试覆盖率](https://img.shields.io/badge/coverage-98.5%25-brightgreen?style=flat-square)](docs/deployment.md#从源码构建)
+[![测试覆盖率](https://img.shields.io/badge/coverage-98.8%25-brightgreen?style=flat-square)](docs/deployment.md#从源码构建)
 [![Docker 镜像](https://img.shields.io/badge/ghcr.io-latest-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/yreidev/workbuddy2api-panel/pkgs/container/workbuddy2api-panel)
 [![下载最新构建](https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-%E6%9C%80%E6%96%B0%E6%9E%84%E5%BB%BA-0DBD8B?style=flat-square&logo=github)](https://github.com/yreidev/workbuddy2api-panel/releases/tag/latest)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
@@ -42,13 +42,14 @@ GitHub 上叫 workbuddy2api-panel 的仓库有好几个。本仓库是在原版 
 | **网络容错** | 主入口出错切备用入口，DNS 失败或网关错误换 HTTPDNS 候选 IP，按入口熔断，规则照官方 | 单一入口，没有失败切换 |
 | **对话隐私** | 默认告诉上游不许拿你的对话做模型优化（`X-Private-Data`），面板里可改 | 不发 |
 | **企业号** | 用官方企业目录接口按账号拉模型，企业开通的 Claude 等模型只派给有它的号 | 所有企业号探测同一个旧端点 |
+| **按号代理** | 每个号走自己的代理，分散出口 IP：代理分池、批量导入、按绑号最少分配并设上限；自动测连通、查出口 IP、到期提醒，代理坏了只暂停绑在上面的号、久了改绑；风控波按出口分开算 | 所有号从同一个出口 IP 出去 |
 | **国内 + 国际** | 可以合成一个池负载均衡，或者国内版优先、国内版没号可用才用国际版（`pool.cross_realm`），也能用前缀钉死一域 | 用前缀分开用；另有默认关闭的跨域回退，国内选不到号才改用国际 |
 | **会话缓存** | 客户端不带会话 id 时，从第一轮起给同一段对话定一个会话 id（UUID v7，官方形状），存盘、重启不变，两个域都发；换号时先回到这段对话用过的号 | 不带就拿网关自算的会话键充当，不是官方形状；连会话键也没有时每次随机补一个 |
 | **成长中心** | 照官方桌面端用登录码换官网 Cookie 走网页接口，任务事件字段照 5.8.3 逐个核对 | 没有网页登录态 |
 | **客户端密钥** | 给别人用另建密钥：到期时间、每天和总量上限、模型白名单，用量和请求记录按密钥分开 | 只有一把共用的 `api_key` |
 | **管理面板** | React + HeroUI 重写，手机端、明暗主题、凭证导出与批量导出 | 原生 JS 面板 |
 | **升级** | 面板提醒新版本，一键更新，新版跑不稳自动退回 | 没有一键更新 |
-| **工程质量** | 188 个测试文件，断网全量可跑，覆盖率 98.6%；CI 跑 gofmt、go vet、golangci-lint 和提交规则检查，提交全部签名 | 97 个测试文件 |
+| **工程质量** | 233 个测试文件，断网全量可跑，覆盖率 98.8%；CI 跑 gofmt、go vet、golangci-lint 和提交规则检查，提交全部签名 | 97 个测试文件 |
 
 ## 功能亮点
 
@@ -67,6 +68,10 @@ GitHub 上叫 workbuddy2api-panel 的仓库有好几个。本仓库是在原版 
   - 限流、余额不足、登录失效分别处置，出错自动换号重试。
   - 每个号都能一键测活；限流冷却、熔断中的号每 30 分钟自动测一次，测通就提前恢复。
   - 同一会话尽量不跳号。
+- 🌐 **按号代理，分散出口 IP**
+  - 号绑在代理池上，按绑号最少分到一个代理并固定下来；代理批量粘贴导入，先预览再导。
+  - 自动测连通、查出口 IP，标出出口重复、和服务器同 IP、动态 IP；代理可设到期时间，提前提醒。
+  - 代理坏了或到期，只暂停绑在上面的号、不罚号，久了自动改绑到同池能用的代理；从不退回服务器 IP。
 - 🌏 **国内版 + 国际版同池管理**
   - 模型名加 `cn:` / `global:` 前缀指定走哪一版。
   - 也可打开跨域负载均衡，让两边的账号一起分担，或者国内版优先、国际版只做后备。
@@ -230,6 +235,7 @@ flowchart LR
 | [部署与运维](docs/deployment.md) | Docker、Compose、二进制、源码构建；添加账号、升级、备份、优雅停机、工具脚本 |
 | [配置](docs/configuration.md) | 全部配置项与默认值、上游超时、环境变量、热生效规则 |
 | [网关与选号](docs/gateway.md) | 选号策略、跨域负载均衡、会话粘性、错误处置、提示词与内容审核、工具调用还原 |
+| [按号代理与代理池](docs/proxy.md) | 代理池分组、批量导入、分配与上限、代理不通与到期、出口 IP、只许走号的代理、风控波按出口分开算 |
 | [定时任务与积分任务](docs/tasks.md) | 签到、成长任务一键完成、任务中心、连登、旅行、暂停选号、企业版账号 |
 | [Web 管理面板](docs/panel.md) | 各视图功能、时间范围、调用来源、更新提醒与一键更新、面板接口、安全响应头 |
 | [API 参考](docs/api.md) | 对外端点、Claude Code 与 Codex 入口、模型名与模型路由、健康检查、请求日志、上游接口 |
@@ -250,16 +256,16 @@ flowchart LR
 - **[Sliverkiss](https://github.com/Sliverkiss)**：原始项目 workbuddy2api 的作者，奠定了网关、账号池调度、错误分类与提示词体系（原仓库已删除）。
 - **同类项目**：
   - [corrinehu](https://github.com/corrinehu) 的 dsh-workbuddy-connect：企业号拉模型目录必须带齐企业身份的实测（issue #123），企业版模型的支持据此实现（原仓库已删除）。
-  - [caigee-cmd/cli2api](https://github.com/caigee-cmd/cli2api)：每个账号各拉一份模型目录、按目录选号的做法，以及企业号的对话请求头。
+  - [caigee-cmd/cli2api](https://github.com/caigee-cmd/cli2api)：每个账号各拉一份模型目录、按目录选号的做法，企业号的对话请求头，以及号没设代理时回落全局代理的做法。
   - [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)：自我介绍句、DeepSeek Harness、OhMyOpenCode 这几类渠道指纹的清洗规则，国际版号成批被 11140 风控时整域暂停的做法（issue #629），以及每段对话记下用过的号、换号时先回到这些号的做法。
-  - [ithtelab/workbuddy-manager](https://github.com/ithtelab/workbuddy-manager)、[mmqz/cpa-multi-plugins](https://github.com/mmqz/cpa-multi-plugins)：渠道指纹在助手历史和用户消息里同样会被拦的实测。
+  - [ithtelab/workbuddy-manager](https://github.com/ithtelab/workbuddy-manager)、[mmqz/cpa-multi-plugins](https://github.com/mmqz/cpa-multi-plugins)：渠道指纹在助手历史和用户消息里同样会被拦的实测；cpa-multi-plugins 凭证文件里带 `proxy_url` 的写法，导入凭证时据此认出号的代理。
   - [sofs2005/w2a](https://github.com/sofs2005/w2a)：用原始字节确认上游回的是数字码 `11128`。
   - [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel)：AutoBot.yml 整理好的同类项目清单；对齐登录的提交提醒了授权被拒的登录业务码和毫秒的到期时间，网关对照官方安装包核实后补上；它的真机抓包里积分、签到用的是 `axios/1.16.1`，国际版后台请求的 UA 两段都是 `workbuddy-ai`，网关据此回安装包查实，改掉了这两处旧缺口。
   - [magpie-community/plugins](https://github.com/magpie-community/plugins) 的 WorkBuddy 插件：对齐桌面端 5.9.3 时对照了它的请求头，它的说明提醒了官方对话经 OpenAI SDK 发出、带 `X-Stainless-*` 头，网关对照官方安装包核实后记进了[官方客户端对照](docs/official-client.md#与桌面端-593-的对照)。
 - **其他 API 网关**：
   - [QuantumNous/new-api](https://github.com/QuantumNous/new-api)：调用日志单独成页、失败请求直接显示原因的做法，以及渠道测试（单测、测试全部、定时只测被自动禁用的渠道、测通自动启用）的做法，网关的账号测活照此实现。
   - [router-for-me/Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center)：账号卡片网格的排法，以及日志页把服务日志和出错请求分开的做法。
-  - [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)：号都在途占满时请求排队等空位、最多等 30 秒的做法（`fallback_wait_timeout`），以及各类日志各设保留天数、改了立即生效的做法（`ops.cleanup` 的 `*_retention_days`），账号「测试连接」弹窗和定时测试测通后自动恢复账号（`auto_recover`）的做法。
+  - [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)：号都在途占满时请求排队等空位、最多等 30 秒的做法（`fallback_wait_timeout`），以及各类日志各设保留天数、改了立即生效的做法（`ops.cleanup` 的 `*_retention_days`），账号「测试连接」弹窗和定时测试测通后自动恢复账号（`auto_recover`）的做法，以及代理管理的做法（代理表、账号绑定代理、代理到期、经代理查出口 IP、错误按代理归因），代理池照此实现。
 - **上游的每一位贡献者**：
 
   <a href="https://github.com/linguo2625469/workbuddy2api-panel/graphs/contributors"><img src="https://contrib.rocks/image?repo=linguo2625469/workbuddy2api-panel" alt="linguo2625469/workbuddy2api-panel 的贡献者"></a>

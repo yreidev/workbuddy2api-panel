@@ -31,6 +31,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 	"github.com/yreidev/workbuddy2api-panel/internal/panel"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/redisstore"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
 	"github.com/yreidev/workbuddy2api-panel/internal/scheduler"
@@ -204,10 +205,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	// 短 RPC 总时长上限（refresh/checkin/balance/FetchModels），语义不变。
 	up.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	// 聊天 SSE 首字节前（响应头）上限：cfg 已 normalize（缺省回落 timeout_seconds）。
-	up.HeaderTimeout = time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second
-	if tr, ok := up.ChatHTTP.Transport.(*http.Transport); ok {
-		tr.ResponseHeaderTimeout = up.HeaderTimeout
-	}
+	up.SetHeaderTimeout(time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second)
 	// 聊天 SSE 流中空闲上限（S3 空闲监控读取）。
 	up.IdleTimeout = time.Duration(cfg.Upstream.IdleTimeoutSeconds) * time.Second
 	up.SanitizeFingerprints.Store(cfg.Features.SanitizeBlacklistFingerprints)
@@ -234,6 +232,17 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	// 数据目录与 state.json 同风格（Docker volume 持久化路径）。首次缺失/损坏自动
 	// 回落仓库内嵌种子；models.dev 按需拉取成功后原子写回。
 	upstream.SetModelCatalogPath(stateSibling(cfg.StateFile, "model.json"))
+
+	// 代理池（按号代理）：与 state 文件同目录。读不了就不启动——当成没有代理会让本该走代理的号从服务器
+	// IP 直接出去。在调度器和面板发出第一个号的请求之前接好。
+	proxyReg, err := proxies.Open(stateSibling(cfg.StateFile, "proxies.json"))
+	if err != nil {
+		return false, err
+	}
+	wireProxies(proxyReg, p, up, auths)
+	if v := proxyReg.View(); len(v.Proxies) > 0 {
+		log.Printf("[proxy] 代理池已载入：%d 个池、%d 个代理", len(v.Pools), len(v.Proxies))
+	}
 
 	sch := scheduler.New(scheduler.Config{
 		Pool:           p,
@@ -402,6 +411,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
+		Proxies:    proxyReg,
 		ConfigPath: cfgPath,
 		LoadConfig: func() (any, error) {
 			return Load(cfgPath)
@@ -423,6 +433,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		Keys:         keys,
 		Session:      sessRouter,
 		StickyCount:  sessCount,
+		ProxyName:    proxyReg.ProxyName,
 		RedisMode:    redisMode,
 		SoftCooldown: cfg.SoftRateDur,
 		Panel:        pn,
@@ -458,6 +469,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		requestRestart()
 	}
 	go sch.Run(ctx)
+	go proxyReg.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
 	sch.StartLiveness(ctx, cfg.LivenessInterval)
 	pn.StartUpdateCheck(ctx)
@@ -609,7 +621,7 @@ var enterpriseCatalogTick = 5 * time.Minute
 const enterpriseCatalogMaxAge = 30 * time.Minute
 
 // refreshEnterpriseCatalogs 定时给国内版企业号各拉一份自己的模型目录（启动时先跑一轮），
-// 并清掉已移除、已禁用账号的目录。单号失败只记 WARN，保留它上次的目录。
+// 并清掉已移除、已禁用账号的目录。单号失败只记 WARN，保留它上次的目录；被代理池拦着的号不拉，也保留。
 func refreshEnterpriseCatalogs(ctx context.Context, up *upstream.Client, p *pool.Pool) {
 	t := time.NewTicker(enterpriseCatalogTick)
 	defer t.Stop()
@@ -637,6 +649,9 @@ func refreshEnterpriseCatalogsOnce(ctx context.Context, up *upstream.Client, p *
 		a := p.AuthByUID(uid)
 		if a == nil {
 			continue
+		}
+		if st, _ := p.Status(uid); st.ProxyBlocked != "" {
+			continue // 代理池拦着（请求出不去）：留着上次的目录，放开后下一轮再拉
 		}
 		if infos, err := up.FetchAccountCatalog(a); err != nil {
 			log.Printf("WARN: [upstream] enterprise catalog %s: %v", logfmt.Label(a.UID, a.Nickname), err)

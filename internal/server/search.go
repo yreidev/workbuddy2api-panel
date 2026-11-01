@@ -144,6 +144,7 @@ func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model s
 		}
 		tried[acct.UID] = true
 		st.uid, st.nick, st.model = acct.UID, acct.Nickname, searchModel
+		st.proxy = h.proxyName(acct.UID)
 		if acct.IsGlobal() {
 			st.model = "global:" + searchModel
 		}
@@ -168,8 +169,8 @@ func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model s
 				var ue *upstream.Error
 				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
 					h.cfg.Pool.Disable(acct.UID, "refresh session dead")
-				} else {
-					h.cfg.Pool.NoteError(acct.UID)
+				} else if !upstream.IsRouteError(err) {
+					h.cfg.Pool.NoteError(acct.UID) // 号的代理连不上不罚号
 				}
 				if !rotateBackoff(i, ctx) {
 					break
@@ -191,6 +192,15 @@ func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model s
 			break // 客户端走了：不换号，也不罚号
 		}
 		var ue *upstream.Error
+		if upstream.IsRouteError(err) {
+			// 号的代理连不上、号被代理池拦着：不罚号，只换号（同对话）。请求记录写上是哪个代理。
+			st.errMsg = err.Error()
+			if !rotateBackoff(i, ctx) {
+				break
+			}
+			continue
+		}
+		st.errMsg = ""
 		if !errors.As(err, &ue) {
 			if isUpstreamTimeout(err, false) {
 				// 超时不是号的问题，换号也是同一个慢上游：不罚号、不换号（同对话）。
@@ -204,8 +214,10 @@ func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model s
 			return nil, f
 		} else if searchPenalized(ue.Kind) {
 			h.applyErrorPolicy(acct.UID, ue.Kind, ue.Msg, "", ue)
-			if ue.Kind == upstream.ErrWafBlock && h.wafIP.noteWaf(acct.UID) {
-				break // 出口 IP 被 WAF 拦了：换号不换 IP（同对话）
+			if ue.Kind == upstream.ErrWafBlock {
+				if _, stop := h.noteWafBlock(acct.UID, tried, "", realm); stop {
+					break // 出口 IP 被 WAF 拦了，别的出口也没有号能接：换号不换 IP（同对话）
+				}
 			}
 		}
 		// 其余（上游故障、404、认不出的 4xx、6022）说明不了号有问题：不罚号，只换号。
@@ -242,6 +254,8 @@ func (h *Handler) searchGaveUp(lastErr error, slot *slotWait) *searchFailure {
 		f.hint = "in_flight_full: raise pool.max_in_flight / pool.max_in_flight_global, add accounts, or retry later"
 	case errors.Is(lastErr, errUpstreamTimeout):
 		f.code, f.msg = "upstream_timeout", "web search timed out upstream, please retry later"
+	case upstream.IsRouteError(lastErr):
+		f.msg = "all accounts are temporarily unavailable: the proxy of the account could not be reached, please retry later"
 	case errors.As(lastErr, &ue):
 		f.code, f.hint = "search_failed", h.hintOf(ue.Kind, ue.Msg, "", false, ue)
 		if ue.Kind == upstream.ErrSoftRate {

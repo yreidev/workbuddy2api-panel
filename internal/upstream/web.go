@@ -21,6 +21,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,7 +137,7 @@ func (c *Client) webJSON(a *auth.Auth, method, path, referer string, body any) (
 		if raw != nil {
 			rdr = bytes.NewReader(raw)
 		}
-		req, err := http.NewRequest(method, c.webBase(a)+path, rdr)
+		req, err := newAccountRequest(context.Background(), a, method, c.webBase(a)+path, rdr)
 		if err != nil {
 			return nil, err
 		}

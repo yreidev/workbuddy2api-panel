@@ -310,27 +310,9 @@ func (c *Client) nextAddrSlot(ctx context.Context, cur *addrSlot, host string) *
 	return cur
 }
 
-// newPinTransportFactory 构造生产用的「钉 IP Transport」工厂：每个 IP 从原
-// *http.Transport Clone() 一个，缓存复用。URL、Host 头、TLS 的 SNI 与证书校验都还是
-// 原域名，只把 TCP 拨到指定 IP（端口不变），所以不能用原 Transport 的连接池——
-// 池里的连接连的是别的 IP。
-func newPinTransportFactory(base *http.Transport) func(string) http.RoundTripper {
-	var mu sync.Mutex
-	cache := make(map[string]http.RoundTripper)
-	return func(ip string) http.RoundTripper {
-		mu.Lock()
-		defer mu.Unlock()
-		if rt, ok := cache[ip]; ok {
-			return rt
-		}
-		rt := pinTransport(base, ip)
-		cache[ip] = rt
-		return rt
-	}
-}
-
 // pinTransport 从 base Clone 一个 Transport，把拨号换成「直连 ip、端口不变」，SNI 与证书校验仍按
-// 请求的原域名。https 走 DialTLSContext（uTLS 伪装官方 ClientHello + 钉 IP，见 tlsmimic.go），
+// 请求的原域名（每个 IP 一个，由 route.go 的线路表缓存：URL、Host 头、SNI 都还是原域名，只把 TCP 拨到
+// 指定 IP，所以不能用原 Transport 的连接池——池里的连接连的是别的 IP）。https 走 DialTLSContext（uTLS 伪装官方 ClientHello + 钉 IP，见 tlsmimic.go），
 // 非 https 走 DialContext（同样钉 IP，兜底）。钉 IP 的连接照官方不走代理（见 proxy.go），所以不沿用
 // base 的拨号。
 func pinTransport(base *http.Transport, ip string) *http.Transport {

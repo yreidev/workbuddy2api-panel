@@ -348,7 +348,7 @@ func TestAcceptEncodingPerRequestKind(t *testing.T) {
 	r = newReq(http.MethodGet)
 	c.webMPHeaders(r, a)
 	check("小程序网页", r, acceptEncodingBrowser)
-	r, err := c.globalRegisterReq(http.MethodPost, "https://x.example/", "", map[string]string{"k": "v"})
+	r, err := c.globalRegisterReq(&auth.Auth{}, http.MethodPost, "https://x.example/", map[string]string{"k": "v"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestAcceptEncodingPerRequestKind(t *testing.T) {
 		login = r
 		return jsonResp(http.StatusOK, loginFoStateBody), nil
 	}}
-	if _, err := loginFoClient(f).LoginAuthState("cn"); err != nil {
+	if _, err := loginFoClient(f).LoginAuthState("cn", ""); err != nil {
 		t.Fatalf("LoginAuthState: %v", err)
 	}
 	check("登录", login, acceptEncodingAxios)

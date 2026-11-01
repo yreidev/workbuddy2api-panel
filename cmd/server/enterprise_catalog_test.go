@@ -23,7 +23,7 @@ type rtFunc func(*http.Request) (*http.Response, error)
 func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // TestRefreshEnterpriseCatalogsOnce 只给国内版企业号拉目录；目录还新鲜时不重拉，过期才重拉；
-// 账号禁用后它的目录被清掉。
+// 被代理池拦着时不拉、保留；账号禁用后它的目录被清掉。
 func TestRefreshEnterpriseCatalogsOnce(t *testing.T) {
 	var calls atomic.Int32
 	up := &upstream.Client{
@@ -57,6 +57,13 @@ func TestRefreshEnterpriseCatalogsOnce(t *testing.T) {
 	if calls.Load() != first {
 		t.Error("目录还新鲜时不应重拉")
 	}
+	// 被代理池拦着：请求出不去，不拉也不清，留着上次的目录。
+	p.SetProxyBlocked("ent1", "代理「甲」连不上")
+	refreshEnterpriseCatalogsOnce(ctx, up, p, now.Add(enterpriseCatalogMaxAge+time.Minute))
+	if _, ok := up.AccountCatalogFetched("ent1"); !ok || calls.Load() != first {
+		t.Error("被拦的企业号不拉目录、保留上次的")
+	}
+	p.SetProxyBlocked("ent1", "")
 	refreshEnterpriseCatalogsOnce(ctx, up, p, now.Add(enterpriseCatalogMaxAge+time.Minute))
 	if calls.Load() == first {
 		t.Error("目录过期后应重拉")

@@ -63,6 +63,55 @@ type Auth struct {
 	// 手写扁平形 auth 文件可直接写 "device_token": "..."；插件 OAuth 嵌套形
 	// 顶层 device_token 也会被解析（与桌面端共用状态文件的部署方式）。
 	DeviceToken string
+
+	// proxy 号绑的出站代理（代理池，见 internal/proxies），落盘于顶层 proxy 对象，嵌套形与扁平形
+	// 共用。零值 = 没绑，走默认线路（环境变量里的代理或直连）。读写都持 a.mu（ProxyBinding /
+	// SetProxyBinding），刷新令牌写回凭证时原样保留。
+	proxy ProxyBinding
+	// proxyURL 凭证顶层的 proxy_url（CLIProxyAPI 插件等工具的写法）：只在导入、启动时用来认出该绑
+	// 哪个代理（TakeProxyURL），取走即清空，不写回。
+	proxyURL string
+}
+
+// ProxyBinding 号绑的出站代理。ID 为空而 Pool 非空 = 绑了池但池里暂时没有空位（等代理）。
+// Manual 表示代理是单独指定的，池内重新均分时不动它。
+type ProxyBinding struct {
+	Pool   string `json:"pool,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Manual bool   `json:"manual,omitempty"`
+}
+
+// Empty 没绑任何池或代理。
+func (b ProxyBinding) Empty() bool { return b.Pool == "" && b.ID == "" }
+
+// ProxyBinding 读号绑的出站代理。
+func (a *Auth) ProxyBinding() ProxyBinding {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.proxy
+}
+
+// SetProxyBinding 改号绑的出站代理（只改内存，落盘由调用方 SaveAtomic）。
+func (a *Auth) SetProxyBinding(b ProxyBinding) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.proxy = b
+}
+
+// SetProxyURL 记下凭证里带的 proxy_url（自己解析凭证文件、不走 Parse 的命令行工具用），号进代理池时认出代理。
+func (a *Auth) SetProxyURL(u string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.proxyURL = strings.TrimSpace(u)
+}
+
+// TakeProxyURL 取走凭证里带的 proxy_url（取一次就清空）。
+func (a *Auth) TakeProxyURL() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	u := a.proxyURL
+	a.proxyURL = ""
+	return u
 }
 
 // Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。
@@ -316,6 +365,9 @@ func Parse(raw []byte) (*Auth, error) {
 			} `json:"account"`
 			// DeviceToken 顶层 device_token（嵌套形与扁平形共用；手写时无需嵌进 auth 对象）。
 			DeviceToken string `json:"device_token"`
+			// Proxy、ProxyURL 顶层 proxy、proxy_url（两种形状共用），见 Auth.proxy。
+			Proxy    ProxyBinding `json:"proxy"`
+			ProxyURL string       `json:"proxy_url"`
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -336,23 +388,27 @@ func Parse(raw []byte) (*Auth, error) {
 			IDP:                n.Account.IDP,
 			TokenType:          n.Auth.TokenType,
 			DeviceToken:        n.DeviceToken,
+			proxy:              n.Proxy,
+			proxyURL:           strings.TrimSpace(n.ProxyURL),
 		}
 	} else {
 		var f struct {
-			AccessToken    string  `json:"accessToken"`
-			RefreshToken   string  `json:"refreshToken"`
-			ExpiresAt      int64   `json:"expiresAt"`
-			Domain         string  `json:"domain"`
-			Realm          string  `json:"realm"`
-			UID            string  `json:"uid"`
-			EnterpriseID   string  `json:"enterpriseId"`
-			Nickname       string  `json:"nickname"`
-			Department     *string `json:"departmentFullName"`
-			Type           *string `json:"type"`
-			OneIDAccountID *string `json:"oneidAccountId"`
-			IDP            *string `json:"idp"`
-			TokenType      *string `json:"tokenType"`
-			DeviceToken    string  `json:"device_token"`
+			AccessToken    string       `json:"accessToken"`
+			RefreshToken   string       `json:"refreshToken"`
+			ExpiresAt      int64        `json:"expiresAt"`
+			Domain         string       `json:"domain"`
+			Realm          string       `json:"realm"`
+			UID            string       `json:"uid"`
+			EnterpriseID   string       `json:"enterpriseId"`
+			Nickname       string       `json:"nickname"`
+			Department     *string      `json:"departmentFullName"`
+			Type           *string      `json:"type"`
+			OneIDAccountID *string      `json:"oneidAccountId"`
+			IDP            *string      `json:"idp"`
+			TokenType      *string      `json:"tokenType"`
+			DeviceToken    string       `json:"device_token"`
+			Proxy          ProxyBinding `json:"proxy"`
+			ProxyURL       string       `json:"proxy_url"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -373,6 +429,8 @@ func Parse(raw []byte) (*Auth, error) {
 			IDP:                f.IDP,
 			TokenType:          f.TokenType,
 			DeviceToken:        f.DeviceToken,
+			proxy:              f.Proxy,
+			proxyURL:           strings.TrimSpace(f.ProxyURL),
 		}
 	}
 	if strings.TrimSpace(a.AccessToken) == "" {
@@ -430,6 +488,10 @@ func (a *Auth) documentLocked() map[string]any {
 	// （保持与插件 OAuth 输出形状一致，插件读取忽略未知键）。
 	if a.DeviceToken != "" {
 		doc["device_token"] = a.DeviceToken
+	}
+	// 绑了代理才写 proxy；proxy_url 只是导入时的线索，不写回（认出的代理已记在 proxy 里）。
+	if !a.proxy.Empty() {
+		doc["proxy"] = a.proxy
 	}
 	return doc
 }

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
 type loginRT func(*http.Request) (*http.Response, error)
@@ -79,7 +81,7 @@ func runLogin(t *testing.T, args []string, stdin io.Reader, client *http.Client)
 				fatal, code = true, p.code
 			}
 		}()
-		run(args, stdin, &out, &errb, client)
+		run(args, stdin, &out, &errb, &upstream.Client{HTTP: client})
 	}()
 	return out.String(), errb.String(), fatal, code
 }

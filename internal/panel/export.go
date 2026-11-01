@@ -13,7 +13,7 @@ import (
 
 // accountsExport 导出账号凭证，供备份或迁到另一台网关。每项与数据目录里的
 // workbuddy-<uid>.json 同形（auth.Document），面板「导入」原样认回，企业 ID / 域 /
-// 设备 token 不丢。
+// 设备 token 不丢；绑了代理的号还带 proxy_url（代理的完整地址，含密码），导进别的网关时认出同一个代理。
 //
 //	POST /panel/api/accounts/export
 //	Body: {"uids":["..."]}
@@ -42,7 +42,14 @@ func (p *Panel) accountsExport(w http.ResponseWriter, r *http.Request) {
 			missing = append(missing, uid)
 			continue
 		}
-		docs = append(docs, a.Document())
+		doc := a.Document()
+		if p.cfg.Proxies != nil {
+			// 带上代理的完整地址：导进别的网关时按它认出（或新建）同一个代理，号的出口 IP 不变。
+			if u := p.cfg.Proxies.ProxyURL(uid); u != "" {
+				doc["proxy_url"] = u
+			}
+		}
+		docs = append(docs, doc)
 	}
 	if len(missing) > 0 {
 		writeErr(w, http.StatusNotFound, "账号不在池里："+strings.Join(missing, ", "))

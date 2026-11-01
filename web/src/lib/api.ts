@@ -61,6 +61,13 @@ export async function api<T>(path: string, init: { method?: 'GET' | 'POST'; body
 
 export const post = <T>(path: string, body?: unknown) => api<T>(path, { method: 'POST', body })
 
+/** 读纯文本接口（导出代理）；出错时同 api 的处理 */
+export async function apiText(path: string): Promise<string> {
+  const r = await fetch('/panel/api/' + path, { headers: authHeaders() })
+  if (!r.ok) return handle<never>(r)
+  return r.text()
+}
+
 export async function upload<T>(path: string, form: FormData): Promise<T> {
   const r = await fetch('/panel/api/' + path, { method: 'POST', body: form, headers: authHeaders() })
   return handle<T>(r)

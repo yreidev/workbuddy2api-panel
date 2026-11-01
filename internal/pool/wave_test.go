@@ -157,3 +157,82 @@ func TestRestrictionWavePauseNotShortened(t *testing.T) {
 		t.Fatalf("面板解冻应提前解除暂停: %+v", st)
 	}
 }
+
+// exitPool wavePool 再加一个国内版号 c4，并装上出口函数：c1、c2、c4 和 g1 在出口 A（代理「甲」），c3 在出口 B。
+func exitPool(t *testing.T, exits map[string]string) *Pool {
+	t.Helper()
+	p := wavePool(t)
+	p.Add(&auth.Auth{UID: "c4", Domain: "www.codebuddy.cn"})
+	p.SetCredits("c4", 1000, 0)
+	p.SetExitKey(func(uid string) (string, string) {
+		k := exits[uid]
+		return k, "代理「" + map[string]string{"ip:A": "甲", "ip:B": "乙"}[k] + "」"
+	})
+	return p
+}
+
+// TestRestrictionWaveSameExit 被限的号都在同一个出口：只暂停这个域里这个出口下的号，原因写出口；别的出口、
+// 别的域照常。
+func TestRestrictionWaveSameExit(t *testing.T) {
+	p := exitPool(t, map[string]string{"c1": "ip:A", "c2": "ip:A", "c3": "ip:B", "c4": "ip:A", "g1": "ip:A"})
+	restrict(p, "c1")
+	if n := restrict(p, "c2"); n != 1 {
+		t.Fatalf("同出口应只暂停 c4，实际暂停 %d 个", n)
+	}
+	st, _ := p.Status("c4")
+	if st.CoolKind != "restriction_wave" || !strings.Contains(st.Reason, "风控波：15 分钟内 2 个号在代理「甲」上") {
+		t.Fatalf("c4 应按出口暂停，原因写出口: %+v", st)
+	}
+	if st, _ := p.Status("c3"); st.Cooling {
+		t.Fatalf("别的出口不受影响: %+v", st)
+	}
+	if st, _ := p.Status("g1"); st.Cooling {
+		t.Fatalf("同出口但别的域不受影响: %+v", st)
+	}
+	if acct := p.PickExcludingForRealm(nil, "", "cn"); acct == nil || acct.UID != "c3" {
+		t.Fatalf("国内版应只剩 c3 可选，实际 %+v", acct)
+	}
+}
+
+// TestRestrictionWaveMixedExits 被限的号分布在几个出口，或有一条记录没有出口：照旧暂停整个域。
+func TestRestrictionWaveMixedExits(t *testing.T) {
+	p := exitPool(t, map[string]string{"c1": "ip:A", "c2": "ip:B", "c3": "ip:B", "c4": "ip:A"})
+	restrict(p, "c1")
+	if n := restrict(p, "c2"); n != 2 {
+		t.Fatalf("不同出口应暂停整个域剩下的 2 个号，实际 %d", n)
+	}
+	for _, uid := range []string{"c3", "c4"} {
+		if st, _ := p.Status(uid); st.CoolKind != "restriction_wave" || !strings.Contains(st.Reason, "restriction wave") {
+			t.Fatalf("%s 应按整域暂停: %+v", uid, st)
+		}
+	}
+
+	// c1 被限时还没装出口函数（记录里没有出口），c2 被限时装上了：不能断定同出口，整域暂停。
+	p2 := wavePool(t)
+	restrict(p2, "c1")
+	p2.SetExitKey(func(string) (string, string) { return "ip:A", "代理「甲」" })
+	if n := restrict(p2, "c2"); n != 1 {
+		t.Fatalf("有一条记录没有出口时应整域暂停，实际 %d", n)
+	}
+	if st, _ := p2.Status("c3"); !strings.Contains(st.Reason, "restriction wave") {
+		t.Fatalf("应按整域暂停: %+v", st)
+	}
+}
+
+// TestExitOf 出口查询：没装出口函数时所有号算一个出口；装了按出口分。
+func TestExitOf(t *testing.T) {
+	p := wavePool(t)
+	if k, l := p.ExitOf("c1"); k != "" || l != "" {
+		t.Fatalf("没装出口函数应为空: %q %q", k, l)
+	}
+	if got := strings.Join(p.SameExit("c1"), ","); got != "c1,c2,c3,g1" {
+		t.Fatalf("没装出口函数时所有号同一个出口: %s", got)
+	}
+	p = exitPool(t, map[string]string{"c1": "ip:A", "c2": "ip:B", "c3": "ip:B", "c4": "ip:A", "g1": "ip:A"})
+	if k, l := p.ExitOf("c2"); k != "ip:B" || l != "代理「乙」" {
+		t.Fatalf("出口不对: %q %q", k, l)
+	}
+	if got := strings.Join(p.SameExit("c1"), ","); got != "c1,c4,g1" {
+		t.Fatalf("同出口的号不对: %s", got)
+	}
+}

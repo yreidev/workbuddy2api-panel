@@ -13,6 +13,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -47,7 +48,7 @@ func (c *Client) billingDo(a *auth.Auth, method, path string, body any, headers 
 		}
 		rdr = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, c.billingBase(a)+path, rdr)
+	req, err := newAccountRequest(context.Background(), a, method, c.billingBase(a)+path, rdr)
 	if err != nil {
 		return nil, err
 	}

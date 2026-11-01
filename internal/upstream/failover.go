@@ -228,9 +228,10 @@ func failoverIsInfraStatus(status int) bool {
 // failoverIsInfraError 报告传输错误是否属于基础设施类失败（熔断器计数口径）：
 // 连接被重置（ECONNRESET）、连接中止（ECONNABORTED）、连接被拒（ECONNREFUSED）、
 // 超时（ETIMEDOUT 或 net.Error.Timeout 为真）、DNS 解析失败（*net.DNSError）。
-// 调用方取消、EOF、TLS 证书类错误不算——它们不是入口不可用的证据。
+// 调用方取消、EOF、TLS 证书类错误、号的线路问题（连不上号的代理，见 route.go）不算——它们不是入口
+// 不可用的证据。
 func failoverIsInfraError(err error) bool {
-	if err == nil {
+	if err == nil || IsRouteError(err) {
 		return false
 	}
 	var dns *net.DNSError
@@ -413,8 +414,8 @@ func (c *Client) chatStreamWithFailover(ctx context.Context, a *auth.Auth, plan 
 			continue
 		}
 
-		// 调用方取消：不再试，原样返回这次的结果。
-		if ctx.Err() != nil {
+		// 调用方取消、号的线路问题（route.go，不是入口的问题）：不再试、不记熔断，原样返回这次的结果。
+		if ctx.Err() != nil || IsRouteError(res.err) {
 			return res.rc, res.status, res.body, res.err
 		}
 

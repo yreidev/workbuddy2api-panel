@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 凭证导出：账号表多选后的操作（已选 N 个 / 导出凭证 / 取消选择）、勾选框，以及详情抽屉里的单个导出按钮。
+// 凭证导出：账号表多选后的操作（已选 N 个 / 导出凭证 / 绑定代理 / 取消选择）、勾选框，以及详情抽屉里的单个导出按钮。
 // 宽屏操作放在搜索框旁；窄屏卡片列表很长，操作改放底部吸附条（同配置页的保存条），滚到哪都看得到。
 import type { ReactNode } from 'react'
 import { Button, Checkbox } from '@heroui/react'
@@ -33,13 +33,14 @@ export function SelectionCheckbox({ label, isSelected, isIndeterminate, onChange
   )
 }
 
-/** 已选并且在当前筛选结果里的 uid 的操作 */
-export function ExportActions({ selected, onClear }: { selected: string[]; onClear: () => void }) {
+/** 已选并且在当前筛选结果里的 uid 的操作；onBind 打开绑定代理的弹窗（没用代理池时不给） */
+export function ExportActions({ selected, onClear, onBind }: { selected: string[]; onClear: () => void; onBind?: () => void }) {
   const { busy, run } = useExportCredentials()
   return (
     <>
       <span className="text-sm text-muted">已选 {selected.length} 个</span>
       <Button size="sm" variant="secondary" isPending={busy} onPress={() => void run(selected)}>导出凭证</Button>
+      {onBind && <Button size="sm" variant="secondary" onPress={onBind}>绑定代理</Button>}
       <Button size="sm" variant="tertiary" onPress={onClear}>取消选择</Button>
     </>
   )

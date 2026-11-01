@@ -25,6 +25,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -151,7 +152,7 @@ func (c *Client) growthJSONMP(a *auth.Auth, method, path string, body any) (json
 		}
 		rdr = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, c.webBase(a)+path, rdr)
+	req, err := newAccountRequest(context.Background(), a, method, c.webBase(a)+path, rdr)
 	if err != nil {
 		return nil, err
 	}

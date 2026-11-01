@@ -6,7 +6,7 @@
 import { Chip, ProgressBar } from '@heroui/react'
 import { activeRateLimits, creditPercent, isUnlimited, livenessSummary, rateLimitInfo, type Health } from '../../lib/accounts'
 import { ago, dateTime, dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
-import type { Account } from '../../lib/types'
+import type { Account, ProxyAccount } from '../../lib/types'
 import { Hint } from '../../components/Hint'
 
 /** 账号名：有备注时备注当主名、昵称浅色跟在后面；下一行是 UID，所以没名字时写「未命名」 */
@@ -39,11 +39,14 @@ export function HealthChip({ health, now }: { health: Health; now: number }) {
   const cooling = health.coolEnd != null && (
     <Chip size="sm" variant="soft" color="warning">{health.kind} · {dur((health.coolEnd - now) / 1000)}</Chip>
   )
-  if (health.state === 'paused') {
-    // 暂停选号的号也可能同时在冷却，两个都标出来（不然只看到「解冻」按钮不知道为什么）
+  // 被代理拦着（等代理、代理不通…）：不接请求，换了代理或代理恢复才好
+  const proxy = health.proxy && <Chip size="sm" variant="soft" color="warning">{health.proxy}</Chip>
+  if (health.state === 'paused' || health.state === 'blocked') {
+    // 暂停选号、被代理拦着的号也可能同时在冷却，都标出来（不然只看到「解冻」按钮不知道为什么）
     return (
       <span className="inline-flex flex-wrap gap-1">
-        <Chip size="sm" variant="soft" color="default">已暂停选号</Chip>
+        {health.state === 'paused' && <Chip size="sm" variant="soft" color="default">已暂停选号</Chip>}
+        {proxy}
         {cooling}
       </span>
     )
@@ -51,12 +54,31 @@ export function HealthChip({ health, now }: { health: Health; now: number }) {
   return cooling || <Chip size="sm" variant="soft" color="success">可用</Chip>
 }
 
-export function StatusCell({ a, health, now }: { a: Account; health: Health; now: number }) {
+/**
+ * 号的代理：「代理 乙 · 203.0.113.7」，悬停看池、是不是单独指定的、出口地区。没分到代理的号不显示
+ * （等代理、开着「只许走号的代理」却没绑，状态标签和拦截原因已经写了）。
+ */
+export function ProxyLine({ v, className = '' }: { v?: ProxyAccount; className?: string }) {
+  if (!v?.proxy) return null
+  const tip = [
+    v.pool_name && '池「' + v.pool_name + '」' + (v.manual ? '（单独指定的代理）' : ''),
+    v.exit_ip && '出口 ' + v.exit_ip + (v.exit_geo ? ' · ' + v.exit_geo : ''),
+  ].filter(Boolean).join('\n')
+  return (
+    <Hint tip={tip} className={`truncate text-xs ${v.blocked ? 'text-warning' : 'text-muted'} ${className}`}>
+      代理 {v.proxy_name || v.proxy}{v.exit_ip && ' · ' + v.exit_ip}
+    </Hint>
+  )
+}
+
+export function StatusCell({ a, health, now, proxy }: { a: Account; health: Health; now: number; proxy?: ProxyAccount }) {
   return (
     <div className="flex min-w-40 flex-col items-start gap-1">
       <HealthChip health={health} now={now} />
+      {a.proxy_blocked && <span className="line-clamp-2 max-w-40 text-xs text-warning">{a.proxy_blocked}</span>}
       {a.reason && <span className="line-clamp-2 max-w-40 text-xs text-muted">{a.reason}</span>}
       <RateLimitList a={a} now={now} />
+      <ProxyLine v={proxy} className="max-w-40" />
       <LivenessLine a={a} now={now} className="max-w-40" />
     </div>
   )

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 )
 
 // cockpitAccount 映射 cockpit tools 导出格式的单个账号。
@@ -48,9 +49,13 @@ type cockpitAccount struct {
 //
 //	POST /panel/api/import（旧路径 /panel/api/import/cockpit 保留，同一个处理）
 //	Content-Type: multipart/form-data
-//	Body: file=<json>
+//	Body: file=<json>, proxy_pool=<池 ID>（可省：空 = 新号进这个域的默认池，"-" = 新号不绑）
 //
-// 返回 {ok, total, imported, skipped, errors}。
+// 代理：凭证里带 proxy_url 的认出（或新建）那个代理单独指定；选了池的号都放进那个池；原来就在号池里、
+// 凭证里又没带代理的号沿用原来的绑定。导入后现在不能出站的号（代理不通、在等代理、没绑代理）先不签到，
+// 记进 notes。
+//
+// 返回 {ok, total, imported, skipped, errors, notes}。
 func (p *Panel) importAccounts(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErr(w, http.StatusBadRequest, "parse form: "+err.Error())
@@ -79,8 +84,13 @@ func (p *Panel) importAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pool := strings.TrimSpace(r.FormValue("proxy_pool"))
+	if p.cfg.Proxies != nil && pool != "" && pool != proxies.NoPool && p.cfg.Proxies.PoolByName(pool) != pool {
+		writeErr(w, http.StatusNotFound, "代理池不存在："+pool)
+		return
+	}
 	var imported, skipped int
-	var errs []string
+	var errs, notes []string
 
 	for i, item := range items {
 		var a *auth.Auth
@@ -96,6 +106,9 @@ func (p *Panel) importAccounts(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		uid := a.UID
+		if p.cfg.Proxies != nil && a.ProxyBinding().Empty() {
+			a.SetProxyBinding(p.cfg.Proxies.Binding(uid)) // 凭证里没带绑定：已有的号沿用原来的（新号是零值）
+		}
 
 		if err := a.SaveAtomic(); err != nil {
 			skipped++
@@ -105,6 +118,18 @@ func (p *Panel) importAccounts(w http.ResponseWriter, r *http.Request) {
 
 		p.cfg.Pool.Add(a)
 		p.cfg.Pool.Revive(uid)
+		if p.cfg.Proxies != nil {
+			if pool == proxies.NoPool {
+				p.cfg.Proxies.Track(a, false)
+			} else {
+				p.cfg.Proxies.TrackInto(a, pool)
+			}
+			if reason := p.cfg.Proxies.Blocked(uid); reason != "" {
+				notes = append(notes, fmt.Sprintf("uid=%s: 先不签到，%s", uid, reason))
+				imported++
+				continue
+			}
+		}
 
 		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
 		if a.IsGlobal() {
@@ -139,6 +164,7 @@ func (p *Panel) importAccounts(w http.ResponseWriter, r *http.Request) {
 		"imported": imported,
 		"skipped":  skipped,
 		"errors":   errs,
+		"notes":    notes,
 	})
 }
 

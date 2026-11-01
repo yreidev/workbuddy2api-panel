@@ -779,8 +779,11 @@ type Client struct {
 	// addr 地址层的成功/失败记忆、在途换入口表与钉 IP 备忘，零值可用、并发安全。
 	addr addressState
 	// proxy 出站代理（proxy.go），New() 按环境变量装上，nil 直连。连接本身由 Transport 的拨号经代理建，
-	// 这里只用来判断拉模型目录时跳不跳过备用 IP。
+	// 这里只用来判断拉模型目录时跳不跳过备用 IP（viaEnvProxy），以及告诉代理池默认线路的代理（EnvProxyURL）。
 	proxy *outboundProxy
+	// routes 各条线路的 Transport（route.go），New() 装上；HTTP、ChatHTTP 的 Transport 和 PinIP 都经它
+	// 按号选线路。零值 Client（测试）没有，全走 HTTP 自己的 Transport。
+	routes *routeTable
 
 	// refreshMu/refreshInFlight 同账号刷新单飞（按 UID 分桶）：同一时刻只放一个刷新在途，
 	// 其余调用等它的结果，见 RefreshToken。
@@ -793,10 +796,11 @@ type Client struct {
 // kongjianguan 4 连击实测经验）。
 func New() *Client {
 	px := envProxy()
-	tr := newTransport(px)
+	routes := newRouteTable(newTransport(px))
+	rt := routedTransport{routes}
 	c := &Client{
-		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:      &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: rt},
+		ChatHTTP:      &http.Client{Timeout: 0, Transport: rt}, // 无总时长；首字节由 ResponseHeaderTimeout 管
 		ChatBaseCN:    cnProductEndpoint,
 		BillingBaseCN: cnProductEndpoint,
 		WebBaseCN:     cnProductEndpoint,
@@ -804,12 +808,13 @@ func New() *Client {
 		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。
 		GlobalEnabled: true,
 	}
-	// 地址层只在 New() 里装上真实实现：HTTPDNS 查询与基于共享 Transport 的钉 IP
-	// 工厂。零值 Client（测试都这样建）两个函数都是 nil，地址层不生效。
+	// 地址层只在 New() 里装上真实实现：HTTPDNS 查询与按线路钉 IP（route.go）。零值 Client（测试都
+	// 这样建）两个函数都是 nil，地址层不生效。
 	dns := newHTTPDNSClient()
 	c.HTTPDNSQuery = dns.query
-	c.PinIP = newPinTransportFactory(tr)
+	c.PinIP = routes.pin
 	c.proxy = px
+	c.routes = routes
 	c.SanitizeFingerprints.Store(true)
 	return c
 }
@@ -1142,7 +1147,7 @@ func (c *Client) refreshTokenOnce(a *auth.Auth) error {
 		ctx, cancel = context.WithTimeout(ctx, refreshIOTimeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader([]byte("{}")))
+	req, err := newAccountRequest(ctx, a, http.MethodPost, endpoint, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return err
 	}
@@ -1314,8 +1319,8 @@ func refreshAttemptRetryable(res jsonAttempt) bool {
 		}
 		return false
 	}
-	// 没有 HTTP 状态的传输错误（含 DNS 失败与超时）；调用方取消不算。
-	return res.status == 0 && !errors.Is(res.err, context.Canceled)
+	// 没有 HTTP 状态的传输错误（含 DNS 失败与超时）；调用方取消、号的线路问题（route.go）不算。
+	return res.status == 0 && !errors.Is(res.err, context.Canceled) && !IsRouteError(res.err)
 }
 
 // refreshAccessToken 取响应里的 accessToken：data.accessToken；data 缺失（或为 null）
@@ -1366,7 +1371,7 @@ func (c *Client) refreshAccountCheck(ctx context.Context, base string, global bo
 	if global {
 		path = "/v2/plugin/accounts"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	req, err := newAccountRequest(ctx, a, http.MethodGet, base+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1488,7 +1493,7 @@ func (c *Client) chatStreamOnce(ctx context.Context, a *auth.Auth, origin string
 	// 从调用方 ctx 派生：保留取消传播（父 ctx 取消 → 本 ctx 取消），
 	// 同时 monitorBody.Close 仍能独立 cancel 本分支（空闲掐流）。
 	reqCtx, cancel := context.WithCancel(ctx)
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, origin+chatCompletionsPath, bytes.NewReader(prepared))
+	req, err := newAccountRequest(reqCtx, a, http.MethodPost, origin+chatCompletionsPath, bytes.NewReader(prepared))
 	if err != nil {
 		cancel()
 		return chatOnceResult{err: err}
@@ -1804,7 +1809,7 @@ func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
 	endpoint := c.chatBase(a) + fmt.Sprintf(enterpriseModelsPath, url.PathEscape(a.EnterpriseID))
 	ctx, cancel := context.WithTimeout(context.Background(), enterpriseModelsTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := newAccountRequest(ctx, a, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2207,7 +2212,7 @@ func (c *Client) configFetchOnce(a *auth.Auth, base string, rt http.RoundTripper
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v3/config", nil)
+	req, err := newAccountRequest(ctx, a, http.MethodGet, base+"/v3/config", nil)
 	if err != nil {
 		return configAttempt{err: err}
 	}
@@ -2222,7 +2227,7 @@ func (c *Client) configFetchOnce(a *auth.Auth, base string, rt http.RoundTripper
 	resp, err := doDecoded(hc, req)
 	if err != nil {
 		return configAttempt{err: err, timeout: configIsTimeout(err),
-			retryable: !errors.Is(err, context.Canceled)}
+			retryable: !errors.Is(err, context.Canceled) && !IsRouteError(err)}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -2369,9 +2374,9 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth) (map[string]ModelInfo, erro
 		at = next
 	}
 
-	// 试备用 IP：只在备用入口上；地址层不生效（钉 IP 函数为 nil）时跳过；备用入口走代理时也跳过
-	// （照官方：这一步只给直连的请求用，见 proxy.go）。
-	if c.PinIP == nil || len(failoverFallbackIPs) == 0 || c.proxy.applies(failoverHost(failoverBackupOrigin)) {
+	// 试备用 IP：只在备用入口上；地址层不生效（钉 IP 函数为 nil）时跳过；备用入口走环境变量里的代理时
+	// 也跳过（照官方：这一步只给直连的请求用，见 proxy.go）。走号的代理时经代理连备用 IP（route.go）。
+	if c.PinIP == nil || len(failoverFallbackIPs) == 0 || c.viaEnvProxy(a, failoverHost(failoverBackupOrigin)) {
 		return nil, lastErr
 	}
 	budget := nextBudget(at)

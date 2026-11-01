@@ -59,6 +59,7 @@ type chatStat struct {
 	mode             string // "stream" | "sync"
 	uid              string // 完整 uid，展示时只取前 8 位
 	nick             string // 账号昵称（随选号同步），流水行经 logfmt.Label 拼成 "昵称(uid8)"
+	proxy            string // 号走的代理名（只进请求记录，不进流水行：没起名的代理名字就是 IP）
 	ttfb             time.Duration
 	toks             int // <0 表示 usage 缺失 → 显示 "-"
 	status           int
@@ -82,7 +83,8 @@ type chatStat struct {
 	userAgent string
 
 	// errMsg 流已开始后才出错时的原因（HTTP 头已发出、状态码是 200，响应观察器截不到
-	// 失败正文）；其余失败的原因从回给客户端的错误响应里取，见 failureReason。
+	// 失败正文），或请求记录里要写得比回给客户端的更具体的原因（号的代理连不上：客户端不该看到代理名）；
+	// 其余失败的原因从回给客户端的错误响应里取，见 failureReason。
 	errMsg string
 
 	logged bool
@@ -403,6 +405,14 @@ func requestTraceFrom(r *http.Request) *requestTrace {
 	return tr
 }
 
+// proxyName 号走的代理名（请求记录用），没装代理池为空。
+func (h *Handler) proxyName(uid string) string {
+	if h.cfg.ProxyName == nil {
+		return ""
+	}
+	return h.cfg.ProxyName(uid)
+}
+
 // event 组装一条请求记录。errBody 是失败响应正文的开头（见 responseObserver），用来提取失败原因。
 func (t *requestTrace) event(status int, errBody []byte) reqlog.Event {
 	e := reqlog.Event{
@@ -422,6 +432,7 @@ func (t *requestTrace) event(status int, errBody []byte) reqlog.Event {
 	if t.stat != nil {
 		s := t.stat
 		e.Account = logfmt.Label(s.uid, s.nick)
+		e.Proxy = s.proxy
 		e.Model = s.model
 		e.Outcome = s.outcome
 		e.TTFBMs = s.ttfb.Milliseconds()

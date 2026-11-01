@@ -8,7 +8,9 @@
 // 用法：
 //
 //	# 本地：在项目根目录（需 config.json + auths/ + data/）直接 run
-//	go run ./cmd/trial
+//	go run ./cmd/trial [-proxies data/proxies.json] [凭证目录]
+//
+// 号按网关代理池里的绑定走代理（-proxies 指网关的 proxies.json，只读）；被代理池拦着的号记 SKIP。
 //
 //	# 容器内：先 cp 进去再 exec
 //	docker cp trial workbuddy2api:/tmp/trial
@@ -21,9 +23,11 @@
 //	... | GLOBAL | OK | trial granted
 //	... | GLOBAL | ALREADY | 已领取过（幂等，不算失败）
 //	... | CN     | N/A   | not applicable
+//	... | GLOBAL | SKIP  | 代理：代理「甲」连不上（…）
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +35,7 @@ import (
 	"sort"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -55,6 +60,7 @@ const (
 	trialAlready trialStatus = "ALREADY"
 	trialNotApp  trialStatus = "N/A" // CN 账号不适用
 	trialFailed  trialStatus = "FAIL"
+	trialSkipped trialStatus = "SKIP" // 代理池拦着：请求出不去
 )
 
 type trialRow struct {
@@ -72,9 +78,15 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
+	fs := flag.NewFlagSet("trial", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	proxiesPath := fs.String("proxies", filepath.Join("data", "proxies.json"), "网关的代理池文件（只读），号按绑定走代理；文件不存在就都走默认线路")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	authDir := "auths"
-	if len(args) > 0 {
-		authDir = args[0]
+	if fs.NArg() > 0 {
+		authDir = fs.Arg(0)
 	}
 	files, err := filepath.Glob(filepath.Join(authDir, "workbuddy-*.json"))
 	if err != nil || len(files) == 0 {
@@ -82,6 +94,12 @@ func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
 		return 1
 	}
 	sort.Strings(files)
+	reg, err := proxies.OpenReadOnly(*proxiesPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	up.SetRouter(reg)
 
 	// trial 是 global 专属端点：必须开启 global realm 路由，否则 upstream.New() 的
 	// GlobalEnabled 零值 false 会把请求路由到 CN base（codebuddy.cn）而必然失败。
@@ -110,12 +128,18 @@ func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
 			rows = append(rows, r)
 			continue
 		}
+		reg.Track(a, false)
+		if reason := reg.Blocked(a.UID); reason != "" {
+			r.status, r.detail = trialSkipped, "代理："+reason
+			rows = append(rows, r)
+			continue
+		}
 
 		r.status, r.detail = classifyTrial(up.ClaimTrial(a))
 		rows = append(rows, r)
 	}
 
-	var okN, alreadyN, notAppN, failN int
+	var okN, alreadyN, notAppN, skipN, failN int
 	fmt.Fprintf(stdout, "uid                                  | nick        | status  | detail\n")
 	fmt.Fprintf(stdout, "-------------------------------------+-------------+---------+------------------------------\n")
 	for _, r := range rows {
@@ -128,12 +152,14 @@ func run(args []string, stdout, stderr io.Writer, up *upstream.Client) int {
 			alreadyN++
 		case trialNotApp:
 			notAppN++
+		case trialSkipped:
+			skipN++
 		default:
 			failN++
 		}
 	}
-	fmt.Fprintf(stdout, "\ntotal=%d ok=%d already=%d na=%d fail=%d\n",
-		len(rows), okN, alreadyN, notAppN, failN)
+	fmt.Fprintf(stdout, "\ntotal=%d ok=%d already=%d na=%d fail=%d skip=%d\n",
+		len(rows), okN, alreadyN, notAppN, failN, skipN)
 	return 0
 }
 

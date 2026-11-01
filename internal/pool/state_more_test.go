@@ -197,10 +197,10 @@ func TestCountsDetailedForRealm(t *testing.T) {
 		t.Errorf("CountsDetailed = %d/%d/%d/%d/%d，应为 6/3/1/2/1",
 			total, healthy, cooling, disabled, inFlightFull)
 	}
-	total, healthy, cooling, disabled, paused, inFlightFull := p.CountsDetailedWithPaused()
-	if total != 6 || healthy != 3 || cooling != 1 || disabled != 1 || paused != 1 || inFlightFull != 1 {
-		t.Errorf("CountsDetailedWithPaused = %d/%d/%d/%d/%d/%d，应为 6/3/1/1/1/1",
-			total, healthy, cooling, disabled, paused, inFlightFull)
+	total, healthy, cooling, disabled, paused, blocked, inFlightFull := p.CountsDetailedWithPaused()
+	if total != 6 || healthy != 3 || cooling != 1 || disabled != 1 || paused != 1 || blocked != 0 || inFlightFull != 1 {
+		t.Errorf("CountsDetailedWithPaused = %d/%d/%d/%d/%d/%d/%d，应为 6/3/1/1/1/0/1",
+			total, healthy, cooling, disabled, paused, blocked, inFlightFull)
 	}
 
 	total, healthy, cooling, disabled, inFlightFull = p.CountsDetailedForRealm("cn")

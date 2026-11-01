@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 账号卡片：宽屏的卡片网格和窄屏列表共用。边框按状态着色（冷却橙、禁用红），右上角箭头看详情。
+// 账号卡片：宽屏的卡片网格和窄屏列表共用。边框按状态着色（冷却、被代理拦着橙，禁用红），右上角箭头看详情。
 import { ChevronRight } from '@gravity-ui/icons'
 import { Button, Card, Separator, Surface } from '@heroui/react'
 import { accountName, activeRateLimits, type Health } from '../../lib/accounts'
 import { ago } from '../../lib/format'
-import type { Account } from '../../lib/types'
+import type { Account, ProxyAccount } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
-import { AccountName, CreditsCell, HealthChip, LivenessLine, RateLimitList, UsageChips } from './AccountCells'
+import { AccountName, CreditsCell, HealthChip, LivenessLine, ProxyLine, RateLimitList, UsageChips } from './AccountCells'
 import { SelectionCheckbox } from './ExportBar'
 import type { AccountAction } from './useAccountActions'
 
@@ -17,15 +17,18 @@ const RING: Record<Health['state'], string> = {
   ok: '',
   cooling: 'ring-1 ring-warning/40',
   paused: 'ring-1 ring-border',
+  blocked: 'ring-1 ring-warning/40',
   disabled: 'ring-1 ring-danger/40',
 }
 
 /** 成功率（一位小数）；还没有请求时返回 null */
 const successRate = (ok: number, fail: number) => (ok + fail > 0 ? Math.round((ok / (ok + fail)) * 1000) / 10 : null)
 
-export function AccountCard({ a, health, now, poolMax, selected, onSelect, onOpen, busy, run }: {
+export function AccountCard({ a, health, proxy, now, poolMax, selected, onSelect, onOpen, busy, run }: {
   a: Account
   health: Health
+  /** 号的代理情况（总览里的 proxies.accounts）；没绑也没被拦时没有 */
+  proxy?: ProxyAccount
   now: number
   poolMax: number
   selected: boolean
@@ -50,8 +53,9 @@ export function AccountCard({ a, health, now, poolMax, selected, onSelect, onOpe
         </div>
       </div>
 
-      {(a.reason || activeRateLimits(a).length > 0) && (
+      {(a.proxy_blocked || a.reason || activeRateLimits(a).length > 0) && (
         <Surface className="flex flex-col gap-1 rounded-xl px-3 py-2">
+          {a.proxy_blocked && <span className="line-clamp-2 break-all text-xs text-warning">{a.proxy_blocked}</span>}
           {a.reason && <span className="line-clamp-2 break-all text-xs text-muted">{a.reason}</span>}
           <RateLimitList a={a} now={now} />
         </Surface>
@@ -70,6 +74,7 @@ export function AccountCard({ a, health, now, poolMax, selected, onSelect, onOpe
       </div>
 
       <UsageChips a={a} />
+      <ProxyLine v={proxy} />
       <LivenessLine a={a} now={now} />
 
       <div className="mt-auto flex flex-col gap-2">

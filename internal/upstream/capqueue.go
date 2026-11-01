@@ -156,7 +156,7 @@ func (c *Client) queueCall(ctx context.Context, a *auth.Auth, path, model string
 	body, _ := json.Marshal(struct {
 		Model string `json:"model"`
 	}{model})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatBase(a)+path, bytes.NewReader(body))
+	req, err := newAccountRequest(ctx, a, http.MethodPost, c.chatBase(a)+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

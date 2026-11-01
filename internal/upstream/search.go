@@ -119,7 +119,7 @@ func (c *Client) Search(ctx context.Context, a *auth.Auth, q SearchQuery, meta C
 
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatBase(a)+searchPath, bytes.NewReader(body))
+	req, err := newAccountRequest(ctx, a, http.MethodPost, c.chatBase(a)+searchPath, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
