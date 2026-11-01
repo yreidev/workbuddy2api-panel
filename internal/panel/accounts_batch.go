@@ -3,6 +3,7 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 账号运维动作（解冻、禁用、暂停选号、恢复选号、移除）：单号接口和账号表多选后的批量接口共用一份做法。
+// 批量接口另外能测活、给选中的号加或删不接的模型。
 
 package panel
 
@@ -12,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
 	"github.com/yreidev/workbuddy2api-panel/internal/scheduler"
@@ -101,25 +103,48 @@ type batchFailure struct {
 // accountsBatch 账号表多选后的批量动作：逐号执行，一个号失败不影响其余的号。
 //
 //	POST /panel/api/accounts/batch
-//	Body: {"action":"remove|disable|revive|pause|resume|liveness","uids":["..."]}
+//	Body: {"action":"remove|disable|revive|pause|resume|liveness|block_models|unblock_models","uids":["..."],"models":["..."]}
 //
 // 返回 {"ok":成功个数,"failed":[{uid,error}],"file_errors":[{uid,error}]}（重复 uid 只做一次）；file_errors 是
-// 移除时凭证文件没删掉的号（号已出池，算成功）。liveness 不等结果：后台测选中的号，回
-// {"started":true,"total":要测的号数}，已有一批测活在跑时回 409。
+// 移除时凭证文件没删掉的号（号已出池，算成功）。block_models / unblock_models 把 models 加进、删出每个号
+// 不接的模型名单（删的时候自动加的也删）。liveness 不等结果：后台测选中的号，回 {"started":true,"total":要测的号数}，
+// 已有一批测活在跑时回 409。
 func (p *Panel) accountsBatch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Action string   `json:"action"`
 		UIDs   []string `json:"uids"`
+		Models []string `json:"models"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.UIDs) == 0 {
 		writeErr(w, http.StatusBadRequest, "请求体需要 action 和非空的 uids 列表")
 		return
 	}
-	if body.Action == "liveness" {
+	do := func(uid string) (string, error) { return p.doAccountAction(body.Action, uid) }
+	switch {
+	case body.Action == "liveness":
 		p.batchLiveness(w, body.UIDs)
 		return
-	}
-	if !accountActions[body.Action] {
+	case body.Action == "block_models" || body.Action == "unblock_models":
+		models, err := normalizeBlockedModels(body.Models)
+		if err == nil && len(models) == 0 {
+			err = errors.New("要填至少一个模型名")
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		change := p.cfg.Pool.AddBlockedModels
+		if body.Action == "unblock_models" {
+			change = p.cfg.Pool.RemoveBlockedModels
+		}
+		do = func(uid string) (string, error) {
+			if !change(uid, models) {
+				return "", errAccountNotFound
+			}
+			return "", nil
+		}
+		body.Action += " " + strings.Join(models, ",")
+	case !accountActions[body.Action]:
 		writeErr(w, http.StatusBadRequest, "不认识的批量动作："+body.Action)
 		return
 	}
@@ -131,7 +156,7 @@ func (p *Panel) accountsBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[uid] = true
-		fileErr, err := p.doAccountAction(body.Action, uid)
+		fileErr, err := do(uid)
 		if err != nil {
 			failed = append(failed, batchFailure{uid, err.Error()})
 			continue

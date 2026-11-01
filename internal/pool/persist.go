@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
@@ -155,6 +156,7 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			paused:                   s.Paused,
 			note:                     s.Note,
 			liveness:                 s.Liveness,
+			blockedModels:            s.BlockedModels,
 			reason:                   s.Reason,
 			until:                    s.Until,
 			coolKind:                 s.CoolKind,
@@ -195,6 +197,13 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 		// 模型级独立冷却（6004 重置墙钟 / 11102 负缓存）：惰性过滤已过期条目。
 		if len(s.ModelCooldowns) > 0 {
 			for m, mc := range s.ModelCooldowns {
+				if strings.HasPrefix(mc.Reason, "11158") {
+					// 1.12.0 及以前 11158 也按到期避让记在这里，迁到不接的模型名单（一直屏蔽）。
+					if e.refusedBy(m) == nil {
+						e.blockedModels = append(e.blockedModels, BlockedModel{Model: m, Auto: true, Reason: mc.Reason, At: now})
+					}
+					continue
+				}
 				if mc.Until.IsZero() || !now.Before(mc.Until) {
 					continue
 				}
@@ -296,6 +305,7 @@ func (p *Pool) stateOverviewLocked() stateFile {
 			Paused:                   e.paused,
 			Note:                     e.note,
 			Liveness:                 e.liveness,
+			BlockedModels:            e.blockedModels,
 			Reason:                   e.reason,
 			Until:                    e.until,
 			CoolKind:                 e.coolKind,

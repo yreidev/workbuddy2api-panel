@@ -331,6 +331,9 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 		if p.floorBlockedForRealmModel(e, model, realm, now) {
 			continue // 积分保底：触底号不接收费模型（兜底路径同判据）
 		}
+		if e.refusedBy(model) != nil {
+			continue // 号的名单里不接这个模型，调了也是被上游拒
+		}
 		if p.busy(e, now) {
 			continue
 		}

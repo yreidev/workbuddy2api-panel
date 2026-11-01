@@ -78,11 +78,23 @@ export interface Account {
   breaker_until?: string
   /** 上次测活（internal/pool/liveness.go 的 LivenessResult）；从没测过时没有 */
   last_liveness?: LivenessResult
+  /** 这个号不接的模型（上游回 11158 自动加的、手动加的），选号时跳过；没有时没有这个字段 */
+  blocked_models?: BlockedModel[]
   /**
    * 代理池拦着这个号的原因（号的代理不通或到期、在等代理、开着「只许走号的代理」却没绑），拦着的号不接请求、
    * 不跑定时任务；没拦时没有。分类见 accounts.ts 的 blockedLabel
    */
   proxy_blocked?: string
+}
+
+/** 号不接的一个模型（internal/pool/blockedmodels.go） */
+export interface BlockedModel {
+  /** 模型名，手动加的可以带 * 通配 */
+  model: string
+  /** 上游拒绝后自动加的（reason 是上游的原因，如 11158）；手动加的没有这两项 */
+  auto?: boolean
+  reason?: string
+  at: string
 }
 
 /** 一次测活的结果：给这个号发一条最短的真实对话，看它现在能不能用 */

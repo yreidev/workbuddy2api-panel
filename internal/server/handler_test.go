@@ -930,6 +930,10 @@ func TestChatModelForbiddenByAccountTypeReturns400(t *testing.T) {
 	if st := p.ModelBlockedForRealm("gpt-5.6-sol", "global"); !st.Blocked || st.Count != 1 {
 		t.Fatalf("global 账号应写入模型级避让: %+v", st)
 	}
+	// 11158 按账号类型定死：加进号不接的模型名单一直屏蔽，不进到期避让表。
+	if st, _ := p.Status("g1"); len(st.BlockedModels) != 1 || !st.BlockedModels[0].Auto || st.BlockedModels[0].Model != "gpt-5.6-sol" || len(st.RateLimitedModels) != 0 {
+		t.Fatalf("g1 应自动把 gpt-5.6-sol 加进名单: %+v", st)
+	}
 }
 
 func TestModelsEndpoint(t *testing.T) {

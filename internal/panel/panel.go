@@ -227,6 +227,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountAction("pause")))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountAction("resume")))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/note", p.withAuth(p.accountNote))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/blocked_models", p.withAuth(p.accountBlockedModels))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuth(p.accountCheckin))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuth(p.accountBalance))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountAction("remove")))

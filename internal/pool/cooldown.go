@@ -313,9 +313,9 @@ func modelDenied(reason string) bool {
 	return strings.HasPrefix(reason, "11102") || strings.HasPrefix(reason, "11158")
 }
 
-// BlockModelClear 清除 (账号, 模型) 的确定性模型拒绝负缓存（11102/11158；该模型
-// 实测又通了）。半开探测或正常请求对该模型成功后调用（handler 成功路径）。只清
-// 这两类条目、不碰 6004 独立冷却表——6004 有自身上游重置墙钟语义，成功不该抹掉。
+// BlockModelClear 清除 (账号, 模型) 的确定性模型拒绝负缓存（11102，以及不接的模型名单里 11158
+// 自动加的项；该模型实测又通了）。半开探测、正常请求或指定模型测活成功后调用（handler 成功路径）。
+// 只清这两类、不碰 6004 独立冷却表和手动加的名单——6004 有自身上游重置墙钟语义，成功不该抹掉。
 func (p *Pool) BlockModelClear(uid, model string) {
 	if uid == "" || model == "" {
 		return
@@ -323,9 +323,10 @@ func (p *Pool) BlockModelClear(uid, model string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.byUID[uid]
-	if !ok || len(e.modelCooldowns) == 0 {
+	if !ok {
 		return
 	}
+	p.clearAutoBlockLocked(e, model)
 	mc, exists := e.modelCooldowns[model]
 	if !exists || !modelDenied(mc.Reason) {
 		return
@@ -387,11 +388,15 @@ func (p *Pool) ModelBlockedForRealm(model, realm string) ModelBlockStatus {
 		if !p.servesModel(e, model) {
 			continue // 按目录本就接不了这个模型（如企业专属模型之于个人号）：不算「能服务」
 		}
-		if !e.modelCooled(now, model) {
+		refused := e.refusedBy(model)
+		if !e.modelCooled(now, model) && refused == nil {
 			// 还有账号能服务这个模型 → 不是模型级阻塞。
 			return ModelBlockStatus{}
 		}
 		st.Count++
+		if refused != nil && refused.Auto && st.Reason == "" {
+			st.Reason = refused.Reason // 名单里上游拒绝后自动加的：一直屏蔽，没有解封时刻
+		}
 		if mc, ok := e.modelCooldowns[model]; ok {
 			if st.Reason == "" {
 				st.Reason = mc.Reason

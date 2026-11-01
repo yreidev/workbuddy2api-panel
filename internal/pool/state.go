@@ -8,6 +8,7 @@ package pool
 
 import (
 	"log"
+	"slices"
 	"sort"
 	"time"
 
@@ -605,6 +606,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		LastSuccessTime:          e.lastSuccess,
 		LastErrTime:              e.lastErr,
 		LastLiveness:             e.liveness,
+		BlockedModels:            slices.Clone(e.blockedModels),
 		Until:                    e.until,
 		SoftStreak:               e.softStreak,
 		ModelCosts:               p.modelCostsStatusLocked(e, now),

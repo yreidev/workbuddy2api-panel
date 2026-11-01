@@ -6,20 +6,21 @@
 import { useMemo, useState } from 'react'
 import { Copy } from '@gravity-ui/icons'
 import {
-  Button, ComboBox, Input, Label, ListBox, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
+  Button, Input, Label, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
 } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { copyText } from '../../lib/clipboard'
 import { toastError, useLast } from '../../lib/hooks'
 import {
-  LIMIT_KINDS, addModelPattern, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, validateKeyForm,
+  LIMIT_KINDS, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, validateKeyForm,
   type KeyForm, type LimitForm,
 } from '../../lib/keys'
 import { qk, useModels } from '../../lib/queries'
 import type { ApiKey } from '../../lib/types'
 import { ExpiryField } from '../../components/ExpiryField'
 import { BusyButton } from '../../components/Feedback'
+import { ModelPatternInput } from '../../components/ModelPatternInput'
 
 export function KeyEditor({ target, onClose, onCreated }: {
   /** new = 新建；null = 关闭 */
@@ -153,18 +154,6 @@ function LimitRow({ title, value, onChange }: { title: string; value: LimitForm;
 function ModelsField({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   const models = useModels()
   const catalog = useMemo(() => bareModelIds((models.data?.models || []).map((m) => m.id)), [models.data])
-  const [text, setText] = useState('')
-  const [hint, setHint] = useState('')
-  const add = (raw: string) => {
-    const next = addModelPattern(value, raw)
-    if (typeof next === 'string') {
-      setHint(next)
-      return
-    }
-    setHint('')
-    setText('')
-    onChange(next)
-  }
   const allowed = allowedModels(value, catalog)
   return (
     <div className="flex flex-col gap-2">
@@ -180,32 +169,7 @@ function ModelsField({ value, onChange }: { value: string[]; onChange: (v: strin
           </TagGroup.List>
         </TagGroup>
       )}
-      <div className="flex flex-wrap items-end gap-2">
-        <ComboBox
-          aria-label="添加模型"
-          allowsCustomValue
-          inputValue={text}
-          onInputChange={(v) => {
-            setText(v)
-            setHint('')
-          }}
-          value={null}
-          onChange={(k) => { if (k != null) add(String(k)) }}
-          className="min-w-56 flex-1"
-        >
-          <ComboBox.InputGroup>
-            <Input placeholder="从目录选，或手填 glm-*" />
-            <ComboBox.Trigger />
-          </ComboBox.InputGroup>
-          <ComboBox.Popover>
-            <ListBox>
-              {catalog.map((id) => <ListBox.Item key={id} id={id} textValue={id}>{id}<ListBox.ItemIndicator /></ListBox.Item>)}
-            </ListBox>
-          </ComboBox.Popover>
-        </ComboBox>
-        <Button size="sm" variant="secondary" isDisabled={!text.trim()} onPress={() => add(text)} className="mb-0.5">添加</Button>
-      </div>
-      {hint && <span className="text-xs text-danger">{hint}</span>}
+      <ModelPatternInput value={value} onChange={onChange} />
       {value.length > 0 && catalog.length > 0 && (
         <p className={`text-xs ${allowed.length ? 'text-muted' : 'text-warning'}`}>
           {allowed.length

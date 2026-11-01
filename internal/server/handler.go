@@ -1548,7 +1548,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 例外：最早解封就在 modelBusyRetryWindow 内（14003「模型繁忙」这类半分钟的短冷却），
 	// 回 429 + Retry-After 让客户端稍等重试，不叫它换模型。
 	if modelBlock.Blocked {
-		hint = fmt.Sprintf("model_blocked: %d account(s) cooling down this model", modelBlock.Count)
+		hint = fmt.Sprintf("model_blocked: %d account(s) cooling down or not taking this model", modelBlock.Count)
 		if !modelBlock.Until.IsZero() {
 			hint += "; earliest unblock at " + modelBlock.Until.Format(time.RFC3339)
 		}
@@ -1927,11 +1927,15 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 6020 排进容量队列（在号上排过队、没等到才会走到这里）、6022 这个号排队的数量到上限：都是上游
 		// 这一路忙，账号本身健康。零动作（不冷却/不熔断/不喂连败）；6022 换号由轮转做。
 	case upstream.ErrModelBlocked:
-		// 11102「该后端无此模型」/11158「该账号类型无此模型权限」：
-		// (账号, 模型) 负缓存避让。复用 modelCooldowns 机制（与 6004 同域），
+		// 11102「该后端无此模型」：(账号, 模型) 负缓存避让。复用 modelCooldowns 机制（与 6004 同域），
 		// 选号侧 healthyForModel 对该账号自动避开该模型。
-		// 立即换号（本轮 continue），该账号该模型冷却，下次选号避开。
-		h.cfg.Pool.BlockModelBackoff(uid, model, upstream.ModelBlockReasonFor(body))
+		// 11158「该账号类型无此模型权限」按账号类型定死，等多久都一样：加进号不接的模型名单，一直屏蔽。
+		// 两种都立即换号（本轮 continue），下次选号避开。
+		if reason := upstream.ModelBlockReasonFor(body); reason == upstream.ModelForbiddenReason {
+			h.cfg.Pool.BlockModelForever(uid, model, reason)
+		} else {
+			h.cfg.Pool.BlockModelBackoff(uid, model, reason)
+		}
 	default:
 		// 其余（ErrClient/ErrNone）：只换号不罚（防雪崩），不喂熔断。
 		// ErrClient（未知 4xx）喂连败计数（issue #114）：连续 N 次该形态失败 →

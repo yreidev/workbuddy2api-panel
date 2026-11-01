@@ -4,16 +4,19 @@
 
 // 账号详情抽屉：展示后端已有、账号表放不下的运维信息——模型级限额台账、成本台账、
 // 最早到期批次、连败 / 熔断计数、最近一次请求、上次测活、代理。数据取自总览（随 5 秒轮询实时更新）。
-// 账号备注也在这里改（存在网关的号池状态里，各页的账号名都优先用它）。
+// 账号备注、不接的模型也在这里改（存在网关的号池状态里，备注各页的账号名都优先用它）。
 import { useState, type ReactNode } from 'react'
-import { Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, TextField, toast, useMediaQuery } from '@heroui/react'
+import {
+  Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, Tag, TagGroup, TextField, toast, useMediaQuery,
+} from '@heroui/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { activeRateLimits, creditsText, livenessSummary, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
 import { acct, post } from '../../lib/api'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
 import { qk } from '../../lib/queries'
-import type { Account, Overview, ProxyAccount } from '../../lib/types'
+import type { Account, BlockedModel, Overview, ProxyAccount } from '../../lib/types'
+import { ModelPatternInput } from '../../components/ModelPatternInput'
 import { AccountButtons } from './AccountButtons'
 import { HealthChip, RealmChips } from './AccountCells'
 import { ExportOneButton } from './ExportBar'
@@ -92,6 +95,44 @@ function NoteEditor({ a }: { a: Account }) {
       <Button size="sm" variant="secondary" className="mt-6" isDisabled={tooLong || note === (a.note || '')} isPending={save.isPending} onPress={() => save.mutate()}>
         保存
       </Button>
+    </div>
+  )
+}
+
+/** 不接的模型：加一项、点 × 删一项都马上保存（整份发给网关）。上游拒绝后自动加的标出来，删掉就是解除 */
+function BlockedModelsEditor({ a }: { a: Account }) {
+  const qc = useQueryClient()
+  const list = a.blocked_models || []
+  const names = list.map((b) => b.model)
+  const save = useMutation({
+    mutationFn: (models: string[]) => post<{ blocked_models?: BlockedModel[] }>(acct(a.uid, 'blocked_models'), { models }),
+    onSuccess: (d) => {
+      qc.setQueryData<Overview>(qk.overview, (o) => o && {
+        ...o, accounts: (o.accounts || []).map((x) => x.uid === a.uid ? { ...x, blocked_models: d.blocked_models } : x),
+      })
+      toast.success('不接的模型已保存')
+    },
+    onError: (e) => toastError(e),
+  })
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted">
+        选号时不把这些模型派给这个号。上游回 11158（这类账号不能用这个模型）时自动加上，标「上游拒绝」，一直屏蔽；点 × 解除。
+        也可以手动加，按不带 cn: / global: 前缀的模型名匹配，支持 * 通配。
+      </p>
+      {list.length > 0 && (
+        <TagGroup aria-label="不接的模型" onRemove={(keys) => save.mutate(names.filter((m) => !keys.has(m)))}>
+          <TagGroup.List items={list.map((b) => ({ ...b, id: b.model }))}>
+            {(b) => (
+              <Tag id={b.id} textValue={b.model} className="font-mono">
+                {b.model}
+                {b.auto && <span className="font-sans text-muted" title={b.reason}>· 上游拒绝</span>}
+              </Tag>
+            )}
+          </TagGroup.List>
+        </TagGroup>
+      )}
+      <ModelPatternInput value={names} onChange={(next) => save.mutate(next)} isDisabled={save.isPending} />
     </div>
   )
 }
@@ -185,6 +226,11 @@ function Body({ a, health, proxy, now, busy, run, onBind }: {
               })}
             </ul>
           )}
+        </Section>
+
+        <Separator />
+        <Section title={`不接的模型${a.blocked_models?.length ? `（${a.blocked_models.length}）` : ''}`}>
+          <BlockedModelsEditor a={a} />
         </Section>
 
         <Separator />

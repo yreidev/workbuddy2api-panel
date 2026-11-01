@@ -89,6 +89,7 @@ describe('模型白名单', () => {
     expect(addModelPattern(['glm-*'], 'kimi-k2')).toEqual(['glm-*', 'kimi-k2'])
     expect(addModelPattern([], 'cn:glm-5.2')).toMatch(/不带 cn: \/ global: 前缀/)
     expect(addModelPattern([], 'x'.repeat(129))).toMatch(/最长 128/)
+    expect(addModelPattern([], 'glm 5')).toMatch(/不能有空格/)
   })
   it('目录候选与放行范围', () => {
     const bare = bareModelIds(['cn:glm-5.2', 'glm-5.2', 'global:gpt-5.5', 'deepseek-v4.1-flash'])

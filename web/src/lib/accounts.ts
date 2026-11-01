@@ -250,12 +250,17 @@ export function livenessModels(models: Model[], a: Pick<Account, 'realm' | 'ente
 }
 
 /** 账号表多选后的批量操作（POST /panel/api/accounts/batch），菜单按这个顺序列 */
-export type BatchAction = 'liveness' | 'pause' | 'resume' | 'revive' | 'disable' | 'remove'
+export type BatchAction = 'liveness' | 'pause' | 'resume' | 'block_models' | 'unblock_models' | 'revive' | 'disable' | 'remove'
+
+/** 要先填模型名的批量操作（加、删不接的模型） */
+export const MODEL_BATCH_ACTIONS: BatchAction[] = ['block_models', 'unblock_models']
 
 export const BATCH_ACTIONS: { id: BatchAction; label: string }[] = [
   { id: 'liveness', label: '测活' },
   { id: 'pause', label: '暂停选号' },
   { id: 'resume', label: '恢复选号' },
+  { id: 'block_models', label: '加不接的模型' },
+  { id: 'unblock_models', label: '删不接的模型' },
   { id: 'revive', label: '解冻' },
   { id: 'disable', label: '禁用' },
   { id: 'remove', label: '移除' },
