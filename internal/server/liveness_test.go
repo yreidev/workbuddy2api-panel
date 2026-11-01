@@ -34,6 +34,7 @@ type livenessUpstream struct {
 	models      []string
 	maxTokens   []float64
 	fail        map[string]bool // 这些令牌的对话回 429 限流
+	forbid      map[string]bool // 这些模型的对话回 400 11158（这类账号不能用）
 	catalogFail bool
 }
 
@@ -67,10 +68,14 @@ func (u *livenessUpstream) client() *upstream.Client {
 			u.hosts = append(u.hosts, r.URL.Host)
 			u.models = append(u.models, req.Model)
 			u.maxTokens = append(u.maxTokens, req.MaxTokens)
-			fail := u.fail[authz]
+			fail, forbid := u.fail[authz], u.forbid[req.Model]
 			u.mu.Unlock()
 			if fail {
 				return resp(http.StatusTooManyRequests, "application/json", `{"code":1,"msg":"rate limit"}`)
+			}
+			if forbid {
+				return resp(http.StatusBadRequest, "application/json",
+					`{"code":11158,"msg":"model [`+req.Model+`] is not allowed for user type [personal_free_user]","requestId":"r1"}`)
 			}
 			return resp(200, "text/event-stream", sseOK)
 		})},
@@ -259,6 +264,67 @@ func TestTestAccountAutoModel(t *testing.T) {
 		h := NewHandler(Config{Pool: testPoolWith(), Upstream: (&livenessUpstream{}).client()})
 		if _, _, err := h.TestAccount(context.Background(), "nope", "m", false); err == nil || !strings.Contains(err.Error(), "not found") {
 			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+// TestTestAccountRepicksRefusedModel 自动挑的模型被上游拒了（11158，号本身没问题）：加进号不接的模型名单，换下一个
+// 最便宜的再测，最多换 livenessRepicks 次；之后自动挑模型跳过名单里的。别的失败不换模型；都被拒过就挑不出模型。
+func TestTestAccountRepicksRefusedModel(t *testing.T) {
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	newGlobal := func(fake *livenessUpstream) (*Handler, *pool.Pool) {
+		resetModelsCache(t)
+		gl := &auth.Auth{UID: "g1", AccessToken: "at-global", ExpiresAt: 9999999999, Domain: "www.workbuddy.ai"}
+		p := testPoolWith(gl)
+		return NewHandler(Config{Pool: p, Upstream: fake.client(), GlobalEnabled: true}), p
+	}
+
+	t.Run("换模型测通", func(t *testing.T) {
+		logs := captureLog(t)
+		fake := &livenessUpstream{forbid: map[string]bool{"m-hidden": true, "m-cheap": true}}
+		h, p := newGlobal(fake)
+		res, _, err := h.TestAccount(context.Background(), "g1", "", false)
+		if err != nil || !res.OK || res.Model != "m-dear" {
+			t.Fatalf("应换到 m-dear 测通: res=%+v err=%v", res, err)
+		}
+		if _, _, models := fake.calls(); strings.Join(models, ",") != "m-hidden,m-cheap,m-dear" {
+			t.Fatalf("对话请求的模型 = %v", models)
+		}
+		if st, _ := p.Status("g1"); len(st.BlockedModels) != 2 || !st.BlockedModels[0].Auto || st.LastLiveness == nil || !st.LastLiveness.OK {
+			t.Fatalf("两个被拒的模型应自动加进名单、记下最后一次测通: %+v %+v", st.BlockedModels, st.LastLiveness)
+		}
+		if !strings.Contains(logs.String(), "这个号不能用 model=m-hidden，换个模型再测") {
+			t.Fatalf("日志应说明换模型:\n%s", logs)
+		}
+		if res, _, _ := h.TestAccount(context.Background(), "g1", "", false); res.Model != "m-dear" {
+			t.Fatalf("之后自动挑模型应跳过名单里的: %+v", res)
+		}
+	})
+
+	t.Run("换满次数", func(t *testing.T) {
+		fake := &livenessUpstream{forbid: map[string]bool{"m-hidden": true, "m-cheap": true, "m-dear": true}}
+		h, _ := newGlobal(fake)
+		res, _, err := h.TestAccount(context.Background(), "g1", "", false)
+		if err != nil || res.OK || res.Model != "m-dear" || res.Status != http.StatusBadRequest {
+			t.Fatalf("三个都被拒应记不通: res=%+v err=%v", res, err)
+		}
+		if _, _, models := fake.calls(); len(models) != 1+livenessRepicks {
+			t.Fatalf("最多换 %d 次模型: %v", livenessRepicks, models)
+		}
+		if _, _, err := h.TestAccount(context.Background(), "g1", "", false); err == nil || !strings.Contains(err.Error(), "能接的模型都不能用") {
+			t.Fatalf("都被拒过应挑不出模型: %v", err)
+		}
+	})
+
+	t.Run("别的失败不换模型", func(t *testing.T) {
+		fake := &livenessUpstream{fail: map[string]bool{"Bearer at-global": true}}
+		h, _ := newGlobal(fake)
+		if res, _, err := h.TestAccount(context.Background(), "g1", "", false); err != nil || res.OK {
+			t.Fatalf("限流应记不通: res=%+v err=%v", res, err)
+		}
+		if _, _, models := fake.calls(); len(models) != 1 {
+			t.Fatalf("限流不是模型的问题，不应换模型: %v", models)
 		}
 	})
 }

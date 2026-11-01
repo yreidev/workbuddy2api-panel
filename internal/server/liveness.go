@@ -37,6 +37,8 @@ const (
 	livenessMaxTokens = 16
 	// livenessReplyMax 回给面板的上游回复最多多少字节。
 	livenessReplyMax = 2000
+	// livenessRepicks 自动挑的模型被上游拒了（11102/11158，号本身没问题）时，最多换几次模型再测。
+	livenessRepicks = 2
 )
 
 // livenessKey 测活请求的 context 键，值是钉死的号的 UID。
@@ -48,8 +50,9 @@ func livenessFrom(ctx context.Context) string {
 	return uid
 }
 
-// TestAccount 测活一次。model 为空时挑这个号能接的最便宜的模型。号不存在、挑不出模型返回 error；
-// 上游的失败不算 error，写在结果里。返回结果和上游回复的文字。
+// TestAccount 测活一次。model 为空时挑这个号能接的最便宜的模型，挑的模型被上游拒了（这个号不能用这个模型，
+// 号本身没问题）就换一个再测。号不存在、挑不出模型返回 error；上游的失败不算 error，写在结果里。
+// 返回结果和上游回复的文字。
 func (h *Handler) TestAccount(ctx context.Context, uid, model string, scheduled bool) (pool.LivenessResult, string, error) {
 	a := h.cfg.Pool.AuthByUID(uid)
 	before, ok := h.cfg.Pool.Status(uid)
@@ -60,11 +63,25 @@ func (h *Handler) TestAccount(ctx context.Context, uid, model string, scheduled 
 		// 被代理池拦着：请求出不去，测了也只是白记一次不通。
 		return pool.LivenessResult{}, "", fmt.Errorf("account %s: %s，先处理好代理再测", uid, before.ProxyBlocked)
 	}
-	if model == "" {
-		if model = h.livenessModel(a, before.Enterprise); model == "" {
-			return pool.LivenessResult{}, "", fmt.Errorf("account %s: 模型目录还没拉到，指定一个模型再测", uid)
-		}
+	if model != "" {
+		res, reply := h.testModel(ctx, a, before, model, scheduled)
+		return res, reply, nil
 	}
+	for i := 0; ; i++ {
+		if model = h.livenessModel(a, before.Enterprise); model == "" {
+			return pool.LivenessResult{}, "", fmt.Errorf("account %s: 挑不出模型（模型目录还没拉到，或者这个号能接的模型都不能用），指定一个模型再测", uid)
+		}
+		res, reply := h.testModel(ctx, a, before, model, scheduled)
+		if res.OK || i == livenessRepicks || !h.cfg.Pool.ModelRefused(uid, model) {
+			return res, reply, nil
+		}
+		log.Printf("liveness %s: 这个号不能用 model=%s，换个模型再测", logfmt.Label(a.UID, a.Nickname), model)
+	}
+}
+
+// testModel 用这个模型给号发一次测活请求，记下结果。before 是测之前号的状态。
+func (h *Handler) testModel(ctx context.Context, a *auth.Auth, before pool.Status, model string, scheduled bool) (pool.LivenessResult, string) {
+	uid := a.UID
 	name := model
 	if before.Realm == "global" {
 		name = "global:" + model
@@ -107,17 +124,17 @@ func (h *Handler) TestAccount(ctx context.Context, uid, model string, scheduled 
 	} else {
 		log.Printf("liveness %s: WARN 失败 model=%s status=%d scheduled=%v: %s", label, model, res.Status, scheduled, res.Error)
 	}
-	return res, livenessReply(w.body.Bytes()), nil
+	return res, livenessReply(w.body.Bytes())
 }
 
-// livenessModel 这个号能接的最便宜的模型，models.hidden 里藏起来的不算。目录还没拉到（启动预热失败）时
-// 先照 /v1/models 的口径拉一次再挑。
+// livenessModel 这个号能接的最便宜的模型，models.hidden 里藏起来的、这个号确定不能用的（不接的模型名单、
+// 上游回过 11102 还在避让）不算。目录还没拉到（启动预热失败）时先照 /v1/models 的口径拉一次再挑。
 func (h *Handler) livenessModel(a *auth.Auth, enterprise bool) string {
 	realm := a.Realm()
 	hidden := h.loadLive().HiddenModels
 	skip := func(m string) bool {
 		_, hide := hidden[realm+":"+m]
-		return hide
+		return hide || h.cfg.Pool.ModelRefused(a.UID, m)
 	}
 	if m := h.cfg.Upstream.CheapestModel(a.UID, realm, enterprise, skip); m != "" {
 		return m
