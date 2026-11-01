@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  accountHealth, accountName, activeRateLimits, batchSummary, blockedLabel, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, livenessModels, livenessSummary, namesOf, notesOf,
-  parseCardSort, poolCredits, rateLimitInfo, relabel, sortAccounts,
+  accountHealth, accountName, activeRateLimits, batchParam, batchSummary, blockedLabel, cardSortKey, creditPercent, creditsText, filterAccounts, groupLine, isFrozen,
+  livenessModels, livenessSummary, namesOf, NO_GROUP, notesOf, parseCardSort, poolCredits, rateLimitInfo, relabel, sortAccounts,
 } from './accounts'
 import type { Account, Model } from './types'
 
@@ -105,6 +105,26 @@ describe('账号表辅助', () => {
     expect(filterAccounts(list, now, 'all', 'backup').map((a) => a.uid)).toEqual(['ccc'])
     // 按小写后的码位比：backup < 主力（U+4E3B）< 乙（U+4E59）
     expect(sortAccounts(list, 'name', false).map((a) => a.uid)).toEqual(['ccc', 'aaa', 'bbb'])
+  })
+  it('按分组筛选：全部、没分组的号、某个分组（一个号可以在好几个组里）', () => {
+    const list = [
+      { ...base, uid: 'aaa', groups: ['g1', 'g2'] },
+      { ...base, uid: 'bbb', groups: ['g2'] },
+      { ...base, uid: 'ccc' },
+      { ...base, uid: 'ddd', groups: [] },
+    ]
+    expect(filterAccounts(list, now, 'all', '', '').map((a) => a.uid)).toEqual(['aaa', 'bbb', 'ccc', 'ddd'])
+    expect(filterAccounts(list, now, 'all', '', NO_GROUP).map((a) => a.uid)).toEqual(['ccc', 'ddd'])
+    expect(filterAccounts(list, now, 'all', '', 'g2').map((a) => a.uid)).toEqual(['aaa', 'bbb'])
+    expect(filterAccounts(list, now, 'all', '', 'g1').map((a) => a.uid)).toEqual(['aaa'])
+  })
+  it('分组和优先级一行：查不到名字的分组不列，优先级 0 不写', () => {
+    const names: Record<string, string> = { g1: '主力', g2: '备用' }
+    const nameOf = (id: string) => names[id]
+    expect(groupLine({ groups: ['g1', 'gone', 'g2'], priority: 3 }, nameOf)).toBe('分组 主力、备用 · 优先级 3')
+    expect(groupLine({ groups: ['g1'], priority: 0 }, nameOf)).toBe('分组 主力')
+    expect(groupLine({ priority: 5 }, nameOf)).toBe('优先级 5')
+    expect(groupLine({ groups: ['gone'] }, nameOf)).toBe('')
   })
 })
 
@@ -207,6 +227,17 @@ describe('livenessModels', () => {
   })
   it('企业专属模型只给企业号', () => {
     expect(livenessModels(models, { realm: 'cn', enterprise: true })).toEqual(['glm-5.2', 'claude-x', 'deepseek-v4'])
+  })
+})
+
+describe('batchParam', () => {
+  it('要先填参数的批量操作', () => {
+    expect(batchParam('block_models')).toBe('models')
+    expect(batchParam('unblock_models')).toBe('models')
+    expect(batchParam('join_group')).toBe('group')
+    expect(batchParam('leave_group')).toBe('group')
+    expect(batchParam('priority')).toBe('priority')
+    expect(batchParam('pause')).toBeNull()
   })
 })
 

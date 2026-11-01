@@ -43,7 +43,8 @@ Base URL 多写了 `/v1`、请求成了 `/v1/v1/...` 时，网关不校验密钥
 
 - **启用开关和到期时间**：停用、过期、删掉的密钥回 401，`error.code` 分别是 `key_disabled`、`key_expired`、`key_deleted`，`message` 说明是哪个密钥、哪天到期；
 - **每天和总量的用量上限**：请求次数、token、积分三项，不填 = 不限。每天的上限按北京时间 00:00 重置；
-- **模型白名单**：只认 `*` 通配、不区分大小写，按经[模型路由](#模型路由)改写后实际发给上游的模型名匹配，不带 `cn:` / `global:` 前缀。比如 Claude Code 发 `claude-sonnet-4-5`、被路由改成 `glm-5.2`，白名单里要有 `glm-5.2`（或 `glm-*`）。不在白名单里回 403 `model_not_allowed`（Claude Code 入口是 `permission_error`），`GET /v1/models` 也只列白名单放行的模型。
+- **模型白名单**：只认 `*` 通配、不区分大小写，按经[模型路由](#模型路由)改写后实际发给上游的模型名匹配，不带 `cn:` / `global:` 前缀。比如 Claude Code 发 `claude-sonnet-4-5`、被路由改成 `glm-5.2`，白名单里要有 `glm-5.2`（或 `glm-*`）。不在白名单里回 403 `model_not_allowed`（Claude Code 入口是 `permission_error`），`GET /v1/models` 也只列白名单放行的模型；
+- **账号分组**：勾了分组（面板账号池页下方建）就只用这些组里的号，组里的号都接不了时回 503，不借别的号；不勾 = 不限。见[选号策略](gateway.md#选号策略)。
 
 到上限时回 429 `key_quota_exceeded`，带 `X-Should-Retry: false`（Anthropic、OpenAI 的 SDK 看到它不自动重试）；每天的上限另带 `Retry-After`，是到北京时间 00:00 的秒数。计数口径：
 

@@ -4,21 +4,22 @@
 
 // 账号详情抽屉：展示后端已有、账号表放不下的运维信息——模型级限额台账、成本台账、
 // 最早到期批次、连败 / 熔断计数、最近一次请求、上次测活、代理。数据取自总览（随 5 秒轮询实时更新）。
-// 账号备注、不接的模型也在这里改（存在网关的号池状态里，备注各页的账号名都优先用它）。
+// 账号备注、分组、优先级、不接的模型也在这里改（存在网关的号池状态里，备注各页的账号名都优先用它）。
 import { useState, type ReactNode } from 'react'
 import {
-  Button, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, Tag, TagGroup, TextField, toast, useMediaQuery,
+  Button, Checkbox, CheckboxGroup, Chip, Description, Drawer, FieldError, Input, Label, Separator, Surface, Tag, TagGroup, TextField, toast, useMediaQuery,
 } from '@heroui/react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { activeRateLimits, creditsText, livenessSummary, NOTE_MAX, rateLimitInfo, type Health } from '../../lib/accounts'
 import { acct, post } from '../../lib/api'
 import { ago, dateTime, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
-import { qk } from '../../lib/queries'
+import { qk, useGroups } from '../../lib/queries'
 import type { Account, BlockedModel, Overview, ProxyAccount } from '../../lib/types'
 import { ModelPatternInput } from '../../components/ModelPatternInput'
 import { AccountButtons } from './AccountButtons'
 import { HealthChip, RealmChips } from './AccountCells'
+import { PriorityField } from './BatchMenu'
 import { ExportOneButton } from './ExportBar'
 import type { AccountAction } from './useAccountActions'
 
@@ -70,16 +71,23 @@ export function AccountDrawer({ account: a, health, proxy, now, busy, run, onBin
   )
 }
 
+/** 改总览缓存里这个号的几个字段，不等下一次轮询 */
+function usePatchAccount(uid: string) {
+  const qc = useQueryClient()
+  return (patch: Partial<Account>) =>
+    qc.setQueryData<Overview>(qk.overview, (o) => o && { ...o, accounts: (o.accounts || []).map((x) => x.uid === uid ? { ...x, ...patch } : x) })
+}
+
 /** 改备注：改完点保存，清空再保存就是去掉备注。存好后直接改总览缓存，不等下一次轮询 */
 function NoteEditor({ a }: { a: Account }) {
-  const qc = useQueryClient()
+  const patch = usePatchAccount(a.uid)
   const [value, setValue] = useState(a.note || '')
   const note = value.trim()
   const tooLong = [...note].length > NOTE_MAX
   const save = useMutation({
     mutationFn: () => post<{ note: string }>(acct(a.uid, 'note'), { note }),
     onSuccess: (d) => {
-      qc.setQueryData<Overview>(qk.overview, (o) => o && { ...o, accounts: (o.accounts || []).map((x) => x.uid === a.uid ? { ...x, note: d.note } : x) })
+      patch({ note: d.note })
       setValue(d.note)
       toast.success(d.note ? '备注已保存' : '备注已清除')
     },
@@ -101,15 +109,13 @@ function NoteEditor({ a }: { a: Account }) {
 
 /** 不接的模型：加一项、点 × 删一项都马上保存（整份发给网关）。上游拒绝后自动加的标出来，删掉就是解除 */
 function BlockedModelsEditor({ a }: { a: Account }) {
-  const qc = useQueryClient()
+  const patch = usePatchAccount(a.uid)
   const list = a.blocked_models || []
   const names = list.map((b) => b.model)
   const save = useMutation({
     mutationFn: (models: string[]) => post<{ blocked_models?: BlockedModel[] }>(acct(a.uid, 'blocked_models'), { models }),
     onSuccess: (d) => {
-      qc.setQueryData<Overview>(qk.overview, (o) => o && {
-        ...o, accounts: (o.accounts || []).map((x) => x.uid === a.uid ? { ...x, blocked_models: d.blocked_models } : x),
-      })
+      patch({ blocked_models: d.blocked_models })
       toast.success('不接的模型已保存')
     },
     onError: (e) => toastError(e),
@@ -133,6 +139,61 @@ function BlockedModelsEditor({ a }: { a: Account }) {
         </TagGroup>
       )}
       <ModelPatternInput value={names} onChange={(next) => save.mutate(next)} isDisabled={save.isPending} />
+    </div>
+  )
+}
+
+/** 号在哪些分组里：勾上、取消都马上保存（整份发给网关）。还没建分组时提示去账号池页下方建 */
+function GroupsEditor({ a }: { a: Account }) {
+  const qc = useQueryClient()
+  const patch = usePatchAccount(a.uid)
+  const groups = useGroups().data ?? []
+  const save = useMutation({
+    mutationFn: (ids: string[]) => post<{ groups: string[] }>(acct(a.uid, 'groups'), { groups: ids }),
+    onSuccess: (d) => {
+      patch({ groups: d.groups })
+      void qc.invalidateQueries({ queryKey: qk.groups })
+      toast.success('分组已保存')
+    },
+    onError: (e) => toastError(e),
+  })
+  if (groups.length === 0) return <p className="text-sm text-muted">还没有分组，在账号池页下方的「账号分组」里建。</p>
+  return (
+    <CheckboxGroup value={a.groups || []} onChange={(ids) => save.mutate(ids)} isDisabled={save.isPending}>
+      <Label>分组</Label>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {groups.map((g) => (
+          <Checkbox key={g.id} value={g.id}>
+            <Checkbox.Content>
+              <Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>
+              {g.name}
+            </Checkbox.Content>
+          </Checkbox>
+        ))}
+      </div>
+      <Description>限定了分组的客户端密钥只用组里的号；分组本身不影响选号。</Description>
+    </CheckboxGroup>
+  )
+}
+
+/** 改优先级：改完点保存 */
+function PriorityEditor({ a }: { a: Account }) {
+  const patch = usePatchAccount(a.uid)
+  const [value, setValue] = useState(a.priority ?? 0)
+  const save = useMutation({
+    mutationFn: () => post<{ priority: number }>(acct(a.uid, 'priority'), { priority: value }),
+    onSuccess: (d) => {
+      patch({ priority: d.priority })
+      toast.success('优先级已保存')
+    },
+    onError: (e) => toastError(e),
+  })
+  return (
+    <div className="flex items-start gap-2">
+      <PriorityField value={value} onChange={setValue} className="min-w-0 flex-1" />
+      <Button size="sm" variant="secondary" className="mt-6" isDisabled={value === (a.priority ?? 0)} isPending={save.isPending} onPress={() => save.mutate()}>
+        保存
+      </Button>
     </div>
   )
 }
@@ -202,6 +263,14 @@ function Body({ a, health, proxy, now, busy, run, onBind }: {
             </Section>
           </>
         )}
+
+        <Separator />
+        <Section title="分组与优先级">
+          <div className="flex flex-col gap-4">
+            <GroupsEditor a={a} />
+            <PriorityEditor key={a.uid} a={a} />
+          </div>
+        </Section>
 
         <Separator />
         <Section title={`模型限流与不可用${limited.length ? `（${limited.length}）` : ''}`}>

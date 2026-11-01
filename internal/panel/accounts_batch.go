@@ -3,16 +3,19 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 账号运维动作（解冻、禁用、暂停选号、恢复选号、移除）：单号接口和账号表多选后的批量接口共用一份做法。
-// 批量接口另外能测活、给选中的号加或删不接的模型。
+// 批量接口另外能测活、给选中的号加或删不接的模型、加进或退出分组、设优先级。
 
 package panel
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
@@ -103,17 +106,21 @@ type batchFailure struct {
 // accountsBatch 账号表多选后的批量动作：逐号执行，一个号失败不影响其余的号。
 //
 //	POST /panel/api/accounts/batch
-//	Body: {"action":"remove|disable|revive|pause|resume|liveness|block_models|unblock_models","uids":["..."],"models":["..."]}
+//	Body: {"action":"remove|disable|revive|pause|resume|liveness|block_models|unblock_models|join_group|leave_group|priority",
+//	       "uids":["..."],"models":["..."],"group":"分组 id","priority":0}
 //
 // 返回 {"ok":成功个数,"failed":[{uid,error}],"file_errors":[{uid,error}]}（重复 uid 只做一次）；file_errors 是
 // 移除时凭证文件没删掉的号（号已出池，算成功）。block_models / unblock_models 把 models 加进、删出每个号
-// 不接的模型名单（删的时候自动加的也删）。liveness 不等结果：后台测选中的号，回 {"started":true,"total":要测的号数}，
+// 不接的模型名单（删的时候自动加的也删）；join_group / leave_group 把号加进、退出 group 这个分组；priority 把
+// 号的优先级都设成 priority（0～99）。liveness 不等结果：后台测选中的号，回 {"started":true,"total":要测的号数}，
 // 已有一批测活在跑时回 409。
 func (p *Panel) accountsBatch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Action string   `json:"action"`
-		UIDs   []string `json:"uids"`
-		Models []string `json:"models"`
+		Action   string   `json:"action"`
+		UIDs     []string `json:"uids"`
+		Models   []string `json:"models"`
+		Group    string   `json:"group"`
+		Priority *int     `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.UIDs) == 0 {
 		writeErr(w, http.StatusBadRequest, "请求体需要 action 和非空的 uids 列表")
@@ -144,6 +151,32 @@ func (p *Panel) accountsBatch(w http.ResponseWriter, r *http.Request) {
 			return "", nil
 		}
 		body.Action += " " + strings.Join(models, ",")
+	case body.Action == "join_group" || body.Action == "leave_group":
+		if !p.cfg.Pool.HasGroup(body.Group) {
+			writeErr(w, http.StatusBadRequest, pool.ErrGroupNotFound.Error())
+			return
+		}
+		leave := body.Action == "leave_group"
+		do = func(uid string) (string, error) {
+			if found, err := p.cfg.Pool.JoinGroup(uid, body.Group, leave); err != nil || !found {
+				return "", cmp.Or(err, errAccountNotFound)
+			}
+			return "", nil
+		}
+		body.Action += " " + body.Group
+	case body.Action == "priority":
+		if body.Priority == nil || *body.Priority < 0 || *body.Priority > pool.MaxPriority {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("优先级要在 0～%d 之间", pool.MaxPriority))
+			return
+		}
+		n := *body.Priority
+		do = func(uid string) (string, error) {
+			if !p.cfg.Pool.SetPriority(uid, n) {
+				return "", errAccountNotFound
+			}
+			return "", nil
+		}
+		body.Action += " " + strconv.Itoa(n)
 	case !accountActions[body.Action]:
 		writeErr(w, http.StatusBadRequest, "不认识的批量动作："+body.Action)
 		return

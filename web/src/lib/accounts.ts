@@ -210,10 +210,14 @@ export function relabel(label: string, notes: Map<string, string>): string {
   return hits.length === 1 ? hits[0][1] + '(' + uid8 + ')' : label
 }
 
-export function filterAccounts(list: Account[], fetchedAt: number, status: StatusFilter, q: string): Account[] {
+/** 按分组筛选时「没分组的号」这一项；'' 是全部，其余是分组 id */
+export const NO_GROUP = '-'
+
+export function filterAccounts(list: Account[], fetchedAt: number, status: StatusFilter, q: string, group = ''): Account[] {
   const kw = q.trim().toLowerCase()
   return list.filter((a) => {
     if (!matchStatus(accountHealth(a, fetchedAt).state, status)) return false
+    if (group && !(group === NO_GROUP ? !a.groups?.length : a.groups?.includes(group))) return false
     return !kw || [a.uid, a.nickname, a.note].some((s) => (s || '').toLowerCase().includes(kw))
   })
 }
@@ -249,16 +253,33 @@ export function livenessModels(models: Model[], a: Pick<Account, 'realm' | 'ente
   return models.filter((m) => m.id.startsWith(prefix) && (!m.enterprise_only || a.enterprise)).map((m) => m.id.slice(prefix.length))
 }
 
-/** 账号表多选后的批量操作（POST /panel/api/accounts/batch），菜单按这个顺序列 */
-export type BatchAction = 'liveness' | 'pause' | 'resume' | 'block_models' | 'unblock_models' | 'revive' | 'disable' | 'remove'
+/** 号的分组和优先级一行（卡片、账号表）：「分组 主力、备用 · 优先级 3」；没分组、优先级是 0 时为空。nameOf 查不到的分组不列 */
+export function groupLine(a: Pick<Account, 'groups' | 'priority'>, nameOf: (id: string) => string | undefined): string {
+  const names = (a.groups || []).map(nameOf).filter(Boolean)
+  return [names.length ? '分组 ' + names.join('、') : '', a.priority ? '优先级 ' + a.priority : ''].filter(Boolean).join(' · ')
+}
 
-/** 要先填模型名的批量操作（加、删不接的模型） */
-export const MODEL_BATCH_ACTIONS: BatchAction[] = ['block_models', 'unblock_models']
+/** 优先级的上限（pool.MaxPriority），下限 0 */
+export const MAX_PRIORITY = 99
+
+/** 账号表多选后的批量操作（POST /panel/api/accounts/batch），菜单按这个顺序列 */
+export type BatchAction =
+  | 'liveness' | 'pause' | 'resume' | 'join_group' | 'leave_group' | 'priority' | 'block_models' | 'unblock_models' | 'revive' | 'disable' | 'remove'
+
+/** 要先填参数的批量操作：模型名（加、删不接的模型）、分组（加进、退出）、优先级 */
+export function batchParam(action: BatchAction): 'models' | 'group' | 'priority' | null {
+  if (action === 'block_models' || action === 'unblock_models') return 'models'
+  if (action === 'join_group' || action === 'leave_group') return 'group'
+  return action === 'priority' ? 'priority' : null
+}
 
 export const BATCH_ACTIONS: { id: BatchAction; label: string }[] = [
   { id: 'liveness', label: '测活' },
   { id: 'pause', label: '暂停选号' },
   { id: 'resume', label: '恢复选号' },
+  { id: 'join_group', label: '加进分组' },
+  { id: 'leave_group', label: '退出分组' },
+  { id: 'priority', label: '设优先级' },
   { id: 'block_models', label: '加不接的模型' },
   { id: 'unblock_models', label: '删不接的模型' },
   { id: 'revive', label: '解冻' },

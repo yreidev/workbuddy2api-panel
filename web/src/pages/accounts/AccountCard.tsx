@@ -9,7 +9,7 @@ import { accountName, activeRateLimits, type Health } from '../../lib/accounts'
 import { ago } from '../../lib/format'
 import type { Account, ProxyAccount } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
-import { AccountName, CreditsCell, HealthChip, LivenessLine, ProxyLine, RateLimitList, UsageChips } from './AccountCells'
+import { AccountName, CreditsCell, GroupLine, HealthChip, LivenessLine, ProxyLine, RateLimitList, UsageChips } from './AccountCells'
 import { SelectionCheckbox } from './ExportBar'
 import type { AccountAction } from './useAccountActions'
 
@@ -74,6 +74,7 @@ export function AccountCard({ a, health, proxy, now, poolMax, selected, onSelect
       </div>
 
       <UsageChips a={a} />
+      <GroupLine a={a} />
       <ProxyLine v={proxy} />
       <LivenessLine a={a} now={now} />
 

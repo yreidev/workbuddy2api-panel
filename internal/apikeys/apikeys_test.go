@@ -524,3 +524,25 @@ func TestStartStop(t *testing.T) {
 		t.Fatal("停机应写盘")
 	}
 }
+
+// TestKeyGroups 限定的分组去空白、去重，返回副本；UsingGroup 按创建顺序列出限定了某个分组的密钥名。
+func TestKeyGroups(t *testing.T) {
+	s, _ := newStore(t)
+	a := mustCreate(t, s, Input{Name: "甲", Enabled: true, Groups: []string{" g1 ", "", "g1", "g2"}})
+	if strings.Join(a.Groups, ",") != "g1,g2" {
+		t.Fatalf("groups = %v", a.Groups)
+	}
+	mustCreate(t, s, Input{Name: "乙", Enabled: true, Groups: []string{"g2"}})
+	mustCreate(t, s, Input{Name: "丙", Enabled: true})
+	if got := strings.Join(s.UsingGroup("g2"), ","); got != "甲,乙" {
+		t.Fatalf("UsingGroup(g2) = %s", got)
+	}
+	if got := s.UsingGroup("g3"); len(got) != 0 {
+		t.Fatalf("UsingGroup(g3) = %v", got)
+	}
+	got, _ := s.Lookup(a.Secret)
+	got.Groups[0] = "改坏"
+	if again, _ := s.Lookup(a.Secret); again.Groups[0] != "g1" {
+		t.Fatalf("库里的分组被调用方改了: %v", again.Groups)
+	}
+}

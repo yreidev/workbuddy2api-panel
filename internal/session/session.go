@@ -66,13 +66,14 @@ type Config struct {
 	// 为什么粘性需要模型维度：绑定只记 uid，而同一个会话可能换模型。账号被 6004
 	// 模型级限额后对**其他模型**仍可用（issue #31 豁免），此时若只按账号级可用性
 	// 校验，会话会被钉在这个号上反复失败——正是"限额后换不动号"的观感来源。
-	// 域由调用方（handler）按前缀与跨域开关定好再传入，这里不再自己解析模型名。
-	AvailableForModel func(model, realm string) []string
+	// 域由调用方（handler）按前缀与跨域开关定好再传入，这里不再自己解析模型名。skip 里的号不算
+	// （客户端密钥绑了分组时，组外的号）；只返回优先级最高的那一层（见 pool.servableEntriesLocked）。
+	AvailableForModel func(model, realm string, skip map[string]bool) []string
 	// AssignableForModel 新会话（或绑定失效后重新分配）挑号的候选，在 AvailableForModel 之上
 	// 再按成本分层只留最便宜那一层（pool.CheapestWeightedUIDsForModelRealm）。只用于分配，
 	// 已绑定会话的续用仍按 AvailableForModel 校验，免得免费号一出现就把会话全挪走。
 	// nil 时分配也用 AvailableForModel。
-	AssignableForModel func(model, realm string) []string
+	AssignableForModel func(model, realm string, skip map[string]bool) []string
 }
 
 // Router 会话粘性路由器。
@@ -176,19 +177,19 @@ func (r *Router) LoadFromStore() {
 // Resolve 返回会话 key 应绑定的账号 uid，ok=false 表示当前无可用账号。
 // 无模型、无域维度（等价于 ResolveForModel(key, "", "")），保留给不关心模型的调用方。
 func (r *Router) Resolve(key string) (string, bool) {
-	return r.ResolveForModel(key, "", "")
+	return r.ResolveForModel(key, "", "", nil)
 }
 
-// ResolveForModel 返回会话 key 在该模型（裸名）与域上应绑定的账号 uid；realm 为 "" 即两域合池。
-// 命中且账号在该模型可用 → 滚动 lastActive 并直接返回；否则（绑定号已冷却/占满/
-// 被该模型限流）走重新分配。
+// ResolveForModel 返回会话 key 在该模型（裸名）与域上应绑定的账号 uid；realm 为 "" 即两域合池，skip 里的号
+// 不用（客户端密钥绑了分组时，组外的号）。命中且账号在该模型可用 → 滚动 lastActive 并直接返回；否则（绑定号已冷却/
+// 占满/被该模型限流/不在此刻最高的优先级层）走重新分配。
 //
 // 为什么必须带模型：绑定只记 uid，同一个会话可能换模型；账号被 6004 模型级限额后
 // 对其他模型仍可用（见 pool.healthyForModel 的 softRateModel 豁免）。若只按账号级
 // 可用性校验，会话会被钉在一个"对当前模型不可用"的号上反复失败。
-func (r *Router) ResolveForModel(key, model, realm string) (string, bool) {
+func (r *Router) ResolveForModel(key, model, realm string, skip map[string]bool) (string, bool) {
 	now := time.Now()
-	available := r.availableSet(model, realm)
+	available := r.availableSet(model, realm, skip)
 
 	// ── Fast path: RLock 快查 ──────────────────────────────
 	r.mu.RLock()
@@ -223,7 +224,7 @@ func (r *Router) ResolveForModel(key, model, realm string) (string, bool) {
 		return uid, true
 	}
 
-	uids := r.assignableSlice(model, realm)
+	uids := r.assignableSlice(model, realm, skip)
 	if len(uids) == 0 {
 		return "", false
 	}
@@ -458,9 +459,9 @@ func (r *Router) restoreWarm(recs []warmSnap) int {
 	return n
 }
 
-// availableSet 把 AvailableForModel(model, realm) 的有序列表转集合（快路径命中校验用）。
-func (r *Router) availableSet(model, realm string) map[string]bool {
-	uids := r.availableSlice(model, realm)
+// availableSet 把 AvailableForModel(model, realm, skip) 的有序列表转集合（快路径命中校验用）。
+func (r *Router) availableSet(model, realm string, skip map[string]bool) map[string]bool {
+	uids := r.availableSlice(model, realm, skip)
 	set := make(map[string]bool, len(uids))
 	for _, u := range uids {
 		set[u] = true
@@ -469,17 +470,17 @@ func (r *Router) availableSet(model, realm string) map[string]bool {
 }
 
 // assignableSlice 分配新绑定用的候选：注入了 AssignableForModel 就用它，否则同 availableSlice。
-func (r *Router) assignableSlice(model, realm string) []string {
+func (r *Router) assignableSlice(model, realm string, skip map[string]bool) []string {
 	if r.cfg.AssignableForModel != nil {
-		return r.cfg.AssignableForModel(model, realm)
+		return r.cfg.AssignableForModel(model, realm, skip)
 	}
-	return r.availableSlice(model, realm)
+	return r.availableSlice(model, realm, skip)
 }
 
-// availableSlice 安全调用 AvailableForModel；未注入时回落 Available（nil 视空池）。
-func (r *Router) availableSlice(model, realm string) []string {
+// availableSlice 安全调用 AvailableForModel；未注入时回落 Available（nil 视空池，不看 skip：只有测试不注入）。
+func (r *Router) availableSlice(model, realm string, skip map[string]bool) []string {
 	if r.cfg.AvailableForModel != nil {
-		return r.cfg.AvailableForModel(model, realm)
+		return r.cfg.AvailableForModel(model, realm, skip)
 	}
 	if r.cfg.Available == nil {
 		return nil

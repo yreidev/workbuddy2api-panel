@@ -80,7 +80,9 @@ type Key struct {
 	TotalLimit Limits    `json:"total_limit"`
 	// Models 模型白名单（只认 * 通配，不区分大小写），按经模型路由改写后实际发往上游的模型名匹配，
 	// 不带 cn: / global: 前缀。空 = 不限。
-	Models     []string  `json:"models,omitempty"`
+	Models []string `json:"models,omitempty"`
+	// Groups 只用这些账号分组里的号（pool.Group 的 id）。空 = 不限。分组存不存在由面板在保存时查。
+	Groups     []string  `json:"groups,omitempty"`
 	LastUsedAt time.Time `json:"last_used_at,omitzero"`
 	Used       Usage     `json:"used"`          // 累计
 	Today      Usage     `json:"today"`         // Day 那天的用量
@@ -114,6 +116,7 @@ type Input struct {
 	DailyLimit Limits    `json:"daily_limit"`
 	TotalLimit Limits    `json:"total_limit"`
 	Models     []string  `json:"models"`
+	Groups     []string  `json:"groups"`
 }
 
 // Denied 密钥这次不能用：停用、过期、删了，或者用量到了上限。
@@ -526,6 +529,13 @@ func normalize(in Input) (Input, error) {
 		return in, fmt.Errorf("模型白名单最多 %d 项", maxModels)
 	}
 	in.Models = models
+	var groups []string
+	for _, g := range in.Groups {
+		if g = strings.TrimSpace(g); g != "" && !slices.Contains(groups, g) {
+			groups = append(groups, g)
+		}
+	}
+	in.Groups = groups
 	return in, nil
 }
 
@@ -534,6 +544,7 @@ func apply(k *Key, in Input) {
 	k.ExpiresAt = in.ExpiresAt
 	k.DailyLimit, k.TotalLimit = in.DailyLimit, in.TotalLimit
 	k.Models = in.Models
+	k.Groups = in.Groups
 }
 
 // saveLocked 写盘（原子替换）。成功后清掉 dirty；失败只记日志并返回错误，计数留到下次再写。
@@ -593,7 +604,21 @@ func nextCSTMidnight(t time.Time) time.Time {
 func cloneKey(k *Key) Key {
 	c := *k
 	c.Models = slices.Clone(k.Models)
+	c.Groups = slices.Clone(k.Groups)
 	return c
+}
+
+// UsingGroup 限定了这个账号分组的密钥的名字，删分组前查。
+func (s *Store) UsingGroup(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var names []string
+	for _, k := range s.keys {
+		if slices.Contains(k.Groups, id) {
+			names = append(names, k.Name)
+		}
+	}
+	return names
 }
 
 // newSecret sk- 开头的 32 字节随机串，和首次运行生成的管理员密钥同一格式。

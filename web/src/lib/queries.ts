@@ -13,7 +13,7 @@ import { logArchiveQuery, type LevelFilter, type LogChannel } from './logs'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
 import { SEEN_VERSION_KEY, readStored, updateBusy } from './update'
 import type {
-  CompensationResp, ConfigResp, CreditLogResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, ProxiesResp, QueueState,
+  CompensationResp, ConfigResp, CreditLogResp, GroupsResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, ProxiesResp, QueueState,
   RequestEvent, RequestMetrics, Task, UsageResp, VersionResp, VoucherAccount,
 } from './types'
 
@@ -41,6 +41,7 @@ export const qk = {
   probes: ['model_probes'] as const,
   usage: (range: TimeRange, key: string) => ['usage', rangeKey(range), key] as const,
   keys: ['keys'] as const,
+  groups: ['groups'] as const,
   proxies: ['proxies'] as const,
   packages: ['packages'] as const,
   config: ['config'] as const,
@@ -198,6 +199,15 @@ export function useKeys(intervalMs: number | false = false) {
     queryKey: qk.keys,
     queryFn: () => api<KeysResp>('keys'),
     refetchInterval: intervalMs,
+  })
+}
+
+/** 账号分组（带号数和限定了它的密钥）：账号池、密钥编辑器用；增删改、号进出分组后作废重查 */
+export function useGroups() {
+  return useQuery({
+    queryKey: qk.groups,
+    queryFn: () => api<GroupsResp>('groups'),
+    select: (d) => d.groups,
   })
 }
 

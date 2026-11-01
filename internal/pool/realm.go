@@ -7,6 +7,7 @@ package pool
 
 import (
 	"log"
+	"slices"
 	"sort"
 	"time"
 )
@@ -79,11 +80,11 @@ func (p *Pool) AvailableUIDsForRealm(realm string) []string {
 //
 // 该方法是现有 AvailableUIDsForModelRealm 的增量入口，不改变旧方法语义，也不
 // 修改配置、状态或 Redis schema。prefer_expiring=false 时退化为逐账号一次。
-func (p *Pool) WeightedAvailableUIDsForModelRealm(model, realm string) []string {
+func (p *Pool) WeightedAvailableUIDsForModelRealm(model, realm string, skip map[string]bool) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := time.Now()
-	return p.weightedUIDsLocked(p.servableEntriesLocked(model, realm, now), now)
+	return p.weightedUIDsLocked(p.servableEntriesLocked(model, realm, skip, now), now)
 }
 
 // CheapestWeightedUIDsForModelRealm 新会话分配用：同 WeightedAvailableUIDsForModelRealm，
@@ -92,11 +93,11 @@ func (p *Pool) WeightedAvailableUIDsForModelRealm(model, realm string) []string 
 // 已绑定会话的续用校验仍走 WeightedAvailableUIDsForModelRealm（不分层），免得免费号
 // 一出现就把绑在收费号上的会话全部挪走、丢掉上游前缀缓存。
 // 取写锁：条件探索会写探索计时器。
-func (p *Pool) CheapestWeightedUIDsForModelRealm(model, realm string) []string {
+func (p *Pool) CheapestWeightedUIDsForModelRealm(model, realm string, skip map[string]bool) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
-	cands := p.servableEntriesLocked(model, realm, now)
+	cands := p.servableEntriesLocked(model, realm, skip, now)
 	if model != "" && len(cands) > 0 {
 		best, explored := p.effectiveCostTierLocked(cands, model, realm, now)
 		kept := cands[:0]
@@ -113,12 +114,13 @@ func (p *Pool) CheapestWeightedUIDsForModelRealm(model, realm string) []string {
 	return p.weightedUIDsLocked(cands, now)
 }
 
-// servableEntriesLocked 在该模型与域上可接请求（servableFor 且在途未满）的账号，按 UID 排序。
-// 调用方持 p.mu（读锁即可）。
-func (p *Pool) servableEntriesLocked(model, realm string, now time.Time) []*entry {
+// servableEntriesLocked 在该模型与域上可接请求（servableFor 且在途未满）的账号里优先级最高的那一层，按 UID 排序；
+// skip 里的号不算（客户端密钥绑了分组时，组外的号）。会话粘性按它续用和分配，所以绑在低优先级号上的会话，
+// 等高优先级的号又能接了，下一次请求就回到高优先级那层。调用方持 p.mu（读锁即可）。
+func (p *Pool) servableEntriesLocked(model, realm string, skip map[string]bool, now time.Time) []*entry {
 	out := make([]*entry, 0, len(p.byUID))
-	for _, e := range p.byUID {
-		if realm != "" && e.a.Realm() != realm {
+	for uid, e := range p.byUID {
+		if skip[uid] || (realm != "" && e.a.Realm() != realm) {
 			continue
 		}
 		if !p.servableFor(e, now, model) {
@@ -129,8 +131,17 @@ func (p *Pool) servableEntriesLocked(model, realm string, now time.Time) []*entr
 		}
 		out = append(out, e)
 	}
+	out = p.topPriorityLocked(out, model, realm, now)
 	sort.Slice(out, func(i, j int) bool { return out[i].a.UID < out[j].a.UID })
 	return out
+}
+
+// InTopTier 号此刻在不在这个请求能用的最高优先级那一层里（同会话粘性的候选，skip 里的号不算）。换号时先回
+// 这段对话用过的号，也只回这一层的。
+func (p *Pool) InTopTier(uid, model, realm string, skip map[string]bool) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return slices.ContainsFunc(p.servableEntriesLocked(model, realm, skip, time.Now()), func(e *entry) bool { return e.a.UID == uid })
 }
 
 // weightedUIDsLocked 把账号展开成带虚拟实例权重的 UID 列表（快过期账号出现

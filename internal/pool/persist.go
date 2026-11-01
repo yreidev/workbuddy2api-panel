@@ -131,6 +131,7 @@ func (p *Pool) load() {
 	if json.Unmarshal(raw, &sf) != nil {
 		return
 	}
+	p.groups = sf.Groups
 	p.applyAccountsLocked(sf.Accounts)
 }
 
@@ -157,6 +158,8 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			note:                     s.Note,
 			liveness:                 s.Liveness,
 			blockedModels:            s.BlockedModels,
+			groups:                   s.Groups,
+			priority:                 s.Priority,
 			reason:                   s.Reason,
 			until:                    s.Until,
 			coolKind:                 s.CoolKind,
@@ -241,6 +244,7 @@ func (p *Pool) adoptSnapshot(s snapshot) {
 }
 func (p *Pool) applySnapshotLocked(s snapshot) {
 	p.byUID = map[string]*entry{}
+	p.groups = s.Groups
 	p.applyAccountsLocked(s.Accounts)
 }
 func (p *Pool) saveLocked() {
@@ -296,7 +300,7 @@ func (p *Pool) notePersistFail(err error) {
 // stateOverviewLocked 收集当前内存状态为 stateFile（供落盘 + 快照镜像复用）。调用方必须已持 p.mu。
 func (p *Pool) stateOverviewLocked() stateFile {
 	now := time.Now()
-	sf := stateFile{Accounts: map[string]stateAccount{}}
+	sf := stateFile{Accounts: map[string]stateAccount{}, Groups: p.groups}
 	for uid, e := range p.byUID {
 		s := stateAccount{
 			Credits:                  e.credits,
@@ -306,6 +310,8 @@ func (p *Pool) stateOverviewLocked() stateFile {
 			Note:                     e.note,
 			Liveness:                 e.liveness,
 			BlockedModels:            e.blockedModels,
+			Groups:                   e.groups,
+			Priority:                 e.priority,
 			Reason:                   e.reason,
 			Until:                    e.until,
 			CoolKind:                 e.coolKind,

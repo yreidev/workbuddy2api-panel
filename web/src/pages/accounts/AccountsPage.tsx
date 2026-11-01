@@ -2,30 +2,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 代理提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证、绑定代理、批量操作）
-// + 批量任务（含全部测活）+ 模型锁池。
+// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 代理提醒 + 搜索、按分组筛选 + 账号卡片或账号表（可排序，可多选导出凭证、
+// 绑定代理、批量操作）+ 批量任务（含全部测活）+ 账号分组 + 模型锁池。
 // 宽屏默认卡片网格，可切换成表格（记在本浏览器）；窄屏只有卡片。
 import { useMemo, useState } from 'react'
 import {
   Button, Card, Checkbox, Label, ListBox, SearchField, Select, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type Selection, type SortDescriptor,
 } from '@heroui/react'
 import {
-  accountHealth, accountName, CARD_SORT_OPTIONS, cardSortKey, filterAccounts, parseCardSort, poolCredits, sortAccounts, type AccountSortKey, type StatusFilter,
+  accountHealth, accountName, CARD_SORT_OPTIONS, cardSortKey, filterAccounts, NO_GROUP, parseCardSort, poolCredits, sortAccounts, type AccountSortKey, type StatusFilter,
 } from '../../lib/accounts'
 import { post } from '../../lib/api'
 import { ago } from '../../lib/format'
 import { toastError, useNow, useStartedToast, useStoredChoice } from '../../lib/hooks'
-import { useOverview } from '../../lib/queries'
-import type { Account, Overview, ProxyAccount } from '../../lib/types'
+import { useGroups, useOverview } from '../../lib/queries'
+import type { Account, Group, Overview, ProxyAccount } from '../../lib/types'
 import { Empty, Loaded } from '../../components/Feedback'
 import { Panel, Stat } from '../../components/Panel'
 import { AccountButtons } from './AccountButtons'
 import { AccountCard } from './AccountCard'
-import { AccountName, CreditsCell, StatusCell, UsageChips } from './AccountCells'
+import { AccountName, CreditsCell, GroupLine, StatusCell, UsageChips } from './AccountCells'
 import { AccountDrawer } from './AccountDrawer'
 import { BindProxyModal } from './BindProxyModal'
 import { ExpiryReminder } from './ExpiryReminder'
 import { ExportActions, SelectionCheckbox } from './ExportBar'
+import { GroupsPanel } from './GroupsPanel'
 import { LivenessModal } from './LivenessModal'
 import { ModelLocks } from './ModelLocks'
 import { ProxyReminder } from './ProxyReminder'
@@ -56,6 +57,10 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const isDesktop = useMediaQuery('(min-width: 1024px)')
   const [status, setStatus] = useState<StatusFilter>('all')
   const [q, setQ] = useState('')
+  const groups = useGroups().data ?? []
+  const [groupPick, setGroup] = useState('')
+  // 筛着的分组被删了就回到全部
+  const group = groupPick === NO_GROUP || groups.some((g) => g.id === groupPick) ? groupPick : ''
   const [sort, setSort] = useState<SortDescriptor | undefined>()
   const [view, setView] = useStoredChoice('wb2api.accountsView', VIEWS, 'cards')
   // 表格最小宽 1140px，窄屏放不下，只给卡片
@@ -75,8 +80,8 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   const pool = useMemo(() => poolCredits(accounts), [accounts])
   const poolMax = pool.max
   const rows = useMemo(
-    () => sortAccounts(filterAccounts(accounts, fetchedAt, status, q), (sort?.column as AccountSortKey) ?? null, sort?.direction === 'descending'),
-    [accounts, fetchedAt, status, q, sort],
+    () => sortAccounts(filterAccounts(accounts, fetchedAt, status, q, group), (sort?.column as AccountSortKey) ?? null, sort?.direction === 'descending'),
+    [accounts, fetchedAt, status, q, group, sort],
   )
   // 多选只算当前筛选结果里的号：表头全选（'all'）= 当前筛选和搜索出来的全部；筛掉的号即使勾过也不导出
   const [selection, setSelection] = useState<Selection>(new Set())
@@ -147,13 +152,16 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         contentClassName="flex flex-col gap-3"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <SearchField aria-label="搜索账号" value={q} onChange={setQ} className="w-full sm:w-72">
-            <SearchField.Group>
-              <SearchField.SearchIcon />
-              <SearchField.Input placeholder="搜索昵称或 UID" />
-              <SearchField.ClearButton />
-            </SearchField.Group>
-          </SearchField>
+          <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+            <SearchField aria-label="搜索账号" value={q} onChange={setQ} className="w-full sm:w-72">
+              <SearchField.Group>
+                <SearchField.SearchIcon />
+                <SearchField.Input placeholder="搜索昵称或 UID" />
+                <SearchField.ClearButton />
+              </SearchField.Group>
+            </SearchField>
+            {groups.length > 0 && <GroupFilter groups={groups} value={group} onChange={setGroup} />}
+          </div>
           <div className="flex flex-wrap items-center gap-3">
             {isDesktop && selected.length > 0 && <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} nameOf={nameOf} />}
             {/* 卡片没有表头复选框和可点的表头，在这里给「全选」和排序 */}
@@ -196,7 +204,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         {accounts.length === 0 ? (
           <Empty title="账号池是空的">点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号。</Empty>
         ) : rows.length === 0 ? (
-          <Empty title="没有符合条件的账号" action={<Button size="sm" variant="secondary" onPress={() => { setQ(''); setStatus('all') }}>清除筛选</Button>} />
+          <Empty title="没有符合条件的账号" action={<Button size="sm" variant="secondary" onPress={() => { setQ(''); setStatus('all'); setGroup('') }}>清除筛选</Button>} />
         ) : !cards ? (
           <AccountTable
             rows={rows} fetchedAt={fetchedAt} now={now} poolMax={poolMax} sort={sort} onSort={setSort} selection={selection} onSelect={setSelection}
@@ -230,6 +238,8 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
         )}
       </Panel>
 
+      <GroupsPanel groups={groups} onFilter={(id) => setGroup(id)} />
+
       <ModelLocks rows={data.model_locks || []} now={now} />
 
       <AccountDrawer
@@ -247,6 +257,23 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
       <BindProxyModal uids={bindUids} onClose={() => setBindUids(null)} />
       {confirmEl}
     </>
+  )
+}
+
+/** 按分组筛选：全部、没分组的号、各个分组 */
+function GroupFilter({ groups, value, onChange }: { groups: Group[]; value: string; onChange: (id: string) => void }) {
+  return (
+    <Select aria-label="按分组筛选" value={value || 'all'} onChange={(k) => onChange(k == null || k === 'all' ? '' : String(k))} className="w-40">
+      <Label className="sr-only">按分组筛选</Label>
+      <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+      <Select.Popover>
+        <ListBox>
+          <ListBox.Item id="all" textValue="全部分组">全部分组<ListBox.ItemIndicator /></ListBox.Item>
+          <ListBox.Item id={NO_GROUP} textValue="没分组的号">没分组的号<ListBox.ItemIndicator /></ListBox.Item>
+          {groups.map((g) => <ListBox.Item key={g.id} id={g.id} textValue={g.name}>{g.name}<ListBox.ItemIndicator /></ListBox.Item>)}
+        </ListBox>
+      </Select.Popover>
+    </Select>
   )
 }
 
@@ -310,7 +337,7 @@ function AccountTable({ rows, fetchedAt, now, poolMax, sort, onSort, selection, 
               return (
                 <Table.Row key={a.uid} id={a.uid} className="cursor-pointer">
                   <Table.Cell className="pe-0"><SelectBox label={'选择 ' + accountName(a)} /></Table.Cell>
-                  <Table.Cell><div className="max-w-40"><AccountName a={a} /></div></Table.Cell>
+                  <Table.Cell><div className="flex max-w-40 flex-col"><AccountName a={a} /><GroupLine a={a} /></div></Table.Cell>
                   <Table.Cell><StatusCell a={a} health={health} now={now} proxy={proxyOf(a.uid)} /></Table.Cell>
                   <Table.Cell><CreditsCell a={a} poolMax={poolMax} now={now} /></Table.Cell>
                   <Table.Cell className="whitespace-nowrap">

@@ -3,7 +3,7 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 密钥：给别人用的客户端密钥，只能调 /v1/*，登不了面板。每个密钥可以设到期时间、每天和总量的用量上限、
-// 模型白名单，列表里看今天和累计用量。管理员密钥是配置页的 api_key，不受这些限制。
+// 模型白名单、只用哪些账号分组的号，列表里看今天和累计用量。管理员密钥是配置页的 api_key，不受这些限制。
 // 网关把密钥存在 data/api_keys.json（0600，含原文），面板只认管理员密钥，所以这里能随时复制原文。
 import { useState } from 'react'
 import { ArrowsRotateRight, Copy, Ellipsis, Eye, EyeSlash, Pencil, Plus, TrashBin } from '@gravity-ui/icons'
@@ -15,7 +15,7 @@ import { copyText } from '../../lib/clipboard'
 import { ago, fmtCredit, fmtLocalDateTime, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
 import { KEY_STATUS, fmtLimit, keyFormFrom, keyInput, keyStatus, limitRows, maskSecret } from '../../lib/keys'
-import { qk, useKeys } from '../../lib/queries'
+import { qk, useGroups, useKeys } from '../../lib/queries'
 import type { ApiKey, KeyLimits, KeysResp, KeyUsage } from '../../lib/types'
 import { Empty, Loaded } from '../../components/Feedback'
 import { InfoTip, Panel } from '../../components/Panel'
@@ -37,7 +37,8 @@ export function KeysPage() {
               {'客户端密钥只能调 /v1/*（OpenAI、Claude Code、Codex 三个入口和模型列表），登不了面板。\n' +
                 '建了客户端密钥以后，/v1/* 必须带有效密钥，管理员密钥为空也一样。\n' +
                 '用量上限按北京时间每天 00:00 重置。请求次数只算成功的请求（没号可用、上游报错的不算）；token 和积分在上游回复后计，并发请求可能略超上限。\n' +
-                '模型白名单按经模型路由改写后、实际发给上游的模型名匹配，只认 * 通配。'}
+                '模型白名单按经模型路由改写后、实际发给上游的模型名匹配，只认 * 通配。\n' +
+                '限定了账号分组的密钥只用组里的号，组里的号都接不了时回 503，不借别的号。'}
             </InfoTip>
           </span>
         }
@@ -100,6 +101,8 @@ function KeyRow({ k, onEdit, onShowGuide }: { k: ApiKey; onEdit: () => void; onS
   const [confirmEl, ask] = useConfirm()
   const [reveal, setReveal] = useState(false)
   const status = KEY_STATUS[keyStatus(k)]
+  const groups = useGroups().data
+  const groupName = (id: string) => groups?.find((g) => g.id === id)?.name ?? id
 
   const run = async (path: string, body: unknown, done: string) => {
     try {
@@ -109,6 +112,7 @@ function KeyRow({ k, onEdit, onShowGuide }: { k: ApiKey; onEdit: () => void; onS
       toastError(e)
     } finally {
       void qc.invalidateQueries({ queryKey: qk.keys })
+      if (k.groups?.length) void qc.invalidateQueries({ queryKey: qk.groups })
     }
   }
   const base = 'keys/' + encodeURIComponent(k.id)
@@ -192,6 +196,14 @@ function KeyRow({ k, onEdit, onShowGuide }: { k: ApiKey; onEdit: () => void; onS
               {k.models!.map((m) => <Chip key={m} size="sm" variant="secondary" className="font-mono">{m}</Chip>)}
             </div>
           ) : <span className="text-muted">不限</span>}
+          {(k.groups || []).length > 0 && (
+            <>
+              <span className="mt-1 text-xs text-muted">只用这些分组的号</span>
+              <div className="flex flex-wrap gap-1">
+                {k.groups!.map((id) => <Chip key={id} size="sm" variant="secondary">{groupName(id)}</Chip>)}
+              </div>
+            </>
+          )}
         </div>
       </div>
       {confirmEl}

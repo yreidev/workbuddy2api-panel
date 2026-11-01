@@ -4,8 +4,9 @@
 
 // 账号的各个展示单元（名称、状态、积分、用量），账号表、账号卡片、详情抽屉共用。
 import { Chip, ProgressBar } from '@heroui/react'
-import { activeRateLimits, creditPercent, isUnlimited, livenessSummary, rateLimitInfo, type Health } from '../../lib/accounts'
+import { activeRateLimits, creditPercent, groupLine, isUnlimited, livenessSummary, rateLimitInfo, type Health } from '../../lib/accounts'
 import { ago, dateTime, dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
+import { useGroups } from '../../lib/queries'
 import type { Account, ProxyAccount } from '../../lib/types'
 import { Hint } from '../../components/Hint'
 
@@ -52,6 +53,13 @@ export function HealthChip({ health, now }: { health: Health; now: number }) {
     )
   }
   return cooling || <Chip size="sm" variant="soft" color="success">可用</Chip>
+}
+
+/** 号的分组和优先级：「分组 主力、备用 · 优先级 3」；没分组、优先级是 0 时不显示 */
+export function GroupLine({ a, className = '' }: { a: Account; className?: string }) {
+  const groups = useGroups().data
+  const text = groupLine(a, (id) => groups?.find((g) => g.id === id)?.name)
+  return text ? <span className={`truncate text-xs text-muted ${className}`}>{text}</span> : null
 }
 
 /**

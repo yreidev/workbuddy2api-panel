@@ -685,6 +685,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 改写 realm 为目录里有这个模型的域；两域都有时合池为 ""，下方选号即在两域合池里挑；国内版优先时
 	// 先定成此刻该用的域，选号循环每次再按国内版有没有能接的号重定（cnFirstRealm）。
 	// models.hidden 里只藏了一个域的，当那个域没有这个模型。
+	// tried 这次请求不再选的号：试过的号；客户端密钥绑了分组时，组外的号从一开始就算在里面（选号、排队、
+	// 国内版优先选域、会话粘性都跳过它们）。
+	tried, keyGroups := h.keyScope(r.Context())
 	crossRouted, cnFirst := false, false
 	if mode := h.loadLive().CrossRealm; pinned == "" && bareModel == peek.Model && bareModel != "" && h.cfg.GlobalEnabled && h.cfg.Upstream != nil && crossRealmOn(mode) {
 		realm = crossRealmFor(bareModel, func(r, m string) bool {
@@ -693,7 +696,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		})
 		crossRouted = true
 		if realm == "" && mode == livecfg.CrossRealmCNFirst {
-			realm, cnFirst = h.cnFirstRealm(nil, bareModel), true
+			realm, cnFirst = h.cnFirstRealm(tried, bareModel), true
 		}
 	}
 	modelRate := ""
@@ -741,7 +744,6 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	tried := map[string]bool{}
 	var lastErr error
 	// wafExit 最近一次回 WAF 403 的号所在的出口：末端文案看这个出口是不是整个被拦了。
 	wafExit := ""
@@ -765,7 +767,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
 		// 域用上面已定好的 realm（跨域合池时为 ""，国内版优先时为此刻该用的域）：粘性候选若自己按模型名再判一次，
 		// 不带前缀的名字一律算国内版，合池时会话永远只绑国内版号，国际版号轮不到。
-		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, bareModel, realm); ok {
+		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, bareModel, realm, tried); ok {
 			stickyUID = uid
 		}
 	}
@@ -1495,6 +1497,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if slot.timedOut && lastErr == nil {
 		// 号都在、只是都忙（在途满或每分钟请求数到上限）：说清楚是忙，不是号坏了（见 waitSlot）。
 		msg, hint = h.busyError(&slot)
+	} else if keyGroups != nil && lastErr == nil {
+		// 客户端密钥绑了分组：说清楚是这个密钥能用的号里没有能接的，别让人以为整个池子都挂了。
+		msg = "no account in this API key's groups can take this request right now"
+		hint = "key_groups: this API key only uses accounts in its groups; add accounts to them, or check the accounts there in the panel"
 	}
 	// upstreamMsgPassed 记录 error.message 是否已被上游原文占据：模型级阻塞分支
 	// 据此决定要不要覆盖 msg（上游原文优先，含 requestId）。
@@ -1645,15 +1651,24 @@ func (h *Handler) busyError(sw *slotWait) (msg, hint string) {
 		"in_flight_full: raise pool.max_in_flight / pool.max_in_flight_global, add accounts, or retry later"
 }
 
+// keyScope 这次请求一开始就不选的号和客户端密钥限定的分组：密钥绑了分组时是组外的号和那些分组，
+// 否则是空 map 和 nil。
+func (h *Handler) keyScope(ctx context.Context) (map[string]bool, []string) {
+	if k := principalFrom(ctx).key; k != nil && len(k.Groups) > 0 {
+		return h.cfg.Pool.UIDsOutsideGroups(k.Groups), k.Groups
+	}
+	return map[string]bool{}, nil
+}
+
 // pickWarm 换号时先回到这段对话最近成功用过、这次还没试过的号（见 session.Router.WarmUIDs），
-// 校验同粘性号（PickByUIDForModel：该模型可用、在途未满、积分保底）。粘性关闭、没有会话键或
-// 这些号都用不了时返回 nil。
+// 校验同粘性号（PickByUIDForModel：该模型可用、在途未满、积分保底），也只回此刻最高的优先级层里的号。
+// 粘性关闭、没有会话键或这些号都用不了时返回 nil。
 func (h *Handler) pickWarm(sessKey, model, realm string, tried map[string]bool) *auth.Auth {
 	if h.cfg.Session == nil || sessKey == "" {
 		return nil
 	}
 	for _, uid := range h.cfg.Session.WarmUIDs(sessKey) {
-		if tried[uid] {
+		if tried[uid] || !h.cfg.Pool.InTopTier(uid, model, realm, tried) {
 			continue
 		}
 		if a := h.cfg.Pool.PickByUIDForModel(uid, model); a != nil && (realm == "" || a.Realm() == realm) {

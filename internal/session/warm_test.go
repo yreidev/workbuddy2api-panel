@@ -15,8 +15,8 @@ import (
 func warmRouter(avail *[]string, cheapest ...string) *Router {
 	return New(Config{
 		TTL:                time.Minute,
-		AvailableForModel:  func(string, string) []string { return *avail },
-		AssignableForModel: func(string, string) []string { return cheapest },
+		AvailableForModel:  func(string, string, map[string]bool) []string { return *avail },
+		AssignableForModel: func(string, string, map[string]bool) []string { return cheapest },
 	})
 }
 
@@ -28,20 +28,20 @@ func TestRouterReturnsToWarmAccount(t *testing.T) {
 	r.Bind("k", "u3")
 	r.Bind("k", "u2")
 	r.Unbind("k")
-	if uid, ok := r.ResolveForModel("k", "m", ""); !ok || uid != "u2" {
+	if uid, ok := r.ResolveForModel("k", "m", "", nil); !ok || uid != "u2" {
 		t.Fatalf("应回到最近用过的 u2，got %q", uid)
 	}
 	r.Unbind("k")
 	avail = []string{"u1", "u3"}
-	if uid, _ := r.ResolveForModel("k", "m", ""); uid != "u3" {
+	if uid, _ := r.ResolveForModel("k", "m", "", nil); uid != "u3" {
 		t.Fatalf("u2 用不了时回到更早用过的 u3，got %q", uid)
 	}
 	r.Unbind("k")
 	avail = []string{"u1"}
-	if uid, _ := r.ResolveForModel("k", "m", ""); uid != "u1" {
+	if uid, _ := r.ResolveForModel("k", "m", "", nil); uid != "u1" {
 		t.Fatalf("用过的号都用不了时按分配规则挑，got %q", uid)
 	}
-	if uid, _ := r.ResolveForModel("new", "m", ""); uid != "u1" {
+	if uid, _ := r.ResolveForModel("new", "m", "", nil); uid != "u1" {
 		t.Fatalf("新对话照旧按成本分层分配，got %q", uid)
 	}
 
@@ -51,7 +51,7 @@ func TestRouterReturnsToWarmAccount(t *testing.T) {
 	r.mu.Lock()
 	r.entries["idle"] = entry{uid: "u3", lastActive: time.Now().Add(-2 * time.Minute)}
 	r.mu.Unlock()
-	if uid, _ := r.ResolveForModel("idle", "m", ""); uid != "u3" {
+	if uid, _ := r.ResolveForModel("idle", "m", "", nil); uid != "u3" {
 		t.Fatalf("绑定过期后应回到用过的 u3，got %q", uid)
 	}
 }

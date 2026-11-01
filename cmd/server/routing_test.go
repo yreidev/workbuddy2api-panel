@@ -183,7 +183,7 @@ func TestSessionConfigRealmAware(t *testing.T) {
 		t.Fatalf("配置没带全: %+v", cfg)
 	}
 	for realm, want := range map[string][]string{"cn": {"cn1"}, "global": {"g1"}, "": {"cn1", "g1"}} {
-		got := cfg.AvailableForModel("m", realm)
+		got := cfg.AvailableForModel("m", realm, nil)
 		sort.Strings(got)
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("realm=%q: got %v want %v", realm, got, want)
@@ -192,11 +192,11 @@ func TestSessionConfigRealmAware(t *testing.T) {
 	// 新会话分配按成本分层：cn1 对 m 实测免费，合池时新会话只分给它（关掉条件探索，免得这一次切去无观测的号）。
 	p.SetCostExploreInterval(0)
 	p.NoteModelCost("cn1", "m", 0, 1000)
-	if got := cfg.AssignableForModel("m", ""); !reflect.DeepEqual(got, []string{"cn1"}) {
+	if got := cfg.AssignableForModel("m", "", nil); !reflect.DeepEqual(got, []string{"cn1"}) {
 		t.Errorf("新会话分配应只留免费号，got %v", got)
 	}
 	r := session.New(cfg)
-	if uid, ok := r.ResolveForModel("k-global", "m", "global"); !ok || uid != "g1" {
+	if uid, ok := r.ResolveForModel("k-global", "m", "global", nil); !ok || uid != "g1" {
 		t.Errorf("指定国际版时会话应绑国际版号，got %q %v", uid, ok)
 	}
 }

@@ -82,7 +82,7 @@ func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
 	now := time.Now()
 	p.SetCreditsDetailed("cn2", 100, 100, 100, now.Add(time.Hour), 100)
 
-	got := p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
+	got := p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn", nil)
 	want := []string{"cn1", "cn2", "cn2", "cn2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("weighted cn candidates=%v want %v", got, want)
@@ -93,7 +93,7 @@ func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
 	if !p.Acquire("cn2") {
 		t.Fatal("failed to acquire cn2")
 	}
-	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
+	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn", nil)
 	want = []string{"cn1"}
 	p.Release("cn2")
 	if !reflect.DeepEqual(got, want) {
@@ -102,7 +102,7 @@ func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
 
 	// 关闭总开关后逐账号只出现一次，旧行为完全恢复。
 	p.SetPreferExpiring(false)
-	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
+	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn", nil)
 	want = []string{"cn1", "cn2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("disabled weighted cn candidates=%v want %v", got, want)
@@ -175,7 +175,7 @@ func TestModelServesFilter(t *testing.T) {
 	if a := p.PickExcludingForRealm(map[string]bool{"a-ent": true}, "claude-x", "cn"); a != nil {
 		t.Fatalf("企业号试过后不应退到个人号，got %s", a.UID)
 	}
-	if got := p.WeightedAvailableUIDsForModelRealm("claude-x", "cn"); !reflect.DeepEqual(got, []string{"a-ent"}) {
+	if got := p.WeightedAvailableUIDsForModelRealm("claude-x", "cn", nil); !reflect.DeepEqual(got, []string{"a-ent"}) {
 		t.Errorf("粘性候选=%v want [a-ent]", got)
 	}
 	if got := p.AvailableUIDsForModel("claude-x"); !reflect.DeepEqual(got, []string{"a-ent"}) {
@@ -184,7 +184,7 @@ func TestModelServesFilter(t *testing.T) {
 	if a := p.PickByUIDForModel("b-per", "claude-x"); a != nil {
 		t.Error("绑在个人号上的会话请求企业专属模型时，粘性号应判为不可用")
 	}
-	if got := p.WeightedAvailableUIDsForModelRealm("shared", "cn"); !reflect.DeepEqual(got, []string{"a-ent", "b-per"}) {
+	if got := p.WeightedAvailableUIDsForModelRealm("shared", "cn", nil); !reflect.DeepEqual(got, []string{"a-ent", "b-per"}) {
 		t.Errorf("普通模型两个号都可选，got %v", got)
 	}
 
@@ -237,35 +237,35 @@ func TestCheapestWeightedUIDsForModelRealm(t *testing.T) {
 	p.SetCostExploreInterval(0)
 	p.NoteModelCost("cn1", "glm-5.2", 0, 1000) // 免费
 	p.NoteModelCost("cn2", "glm-5.2", 5, 1000) // 收费
-	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "cn"); !reflect.DeepEqual(got, []string{"cn1"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "cn", nil); !reflect.DeepEqual(got, []string{"cn1"}) {
 		t.Fatalf("有免费号时只留免费号，got %v", got)
 	}
 	// 续用校验不分层：收费号仍算可用，绑在它上面的会话不会被挪走。
-	if got := p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn"); !reflect.DeepEqual(got, []string{"cn1", "cn2"}) {
+	if got := p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn", nil); !reflect.DeepEqual(got, []string{"cn1", "cn2"}) {
 		t.Fatalf("续用校验不该分层，got %v", got)
 	}
 	// 合池：国际版两个号都没观测，排在收费号之前、免费号之后。
-	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", ""); !reflect.DeepEqual(got, []string{"cn1"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "", nil); !reflect.DeepEqual(got, []string{"cn1"}) {
 		t.Fatalf("合池时仍只留免费号，got %v", got)
 	}
 	p.NoteModelCost("cn1", "kimi", 3, 1000)
-	if got := p.CheapestWeightedUIDsForModelRealm("kimi", ""); !reflect.DeepEqual(got, []string{"cn2", "g1", "g2"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("kimi", "", nil); !reflect.DeepEqual(got, []string{"cn2", "g1", "g2"}) {
 		t.Fatalf("没有免费号时留无观测的号，got %v", got)
 	}
-	if got := p.CheapestWeightedUIDsForModelRealm("", "cn"); !reflect.DeepEqual(got, []string{"cn1", "cn2"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("", "cn", nil); !reflect.DeepEqual(got, []string{"cn1", "cn2"}) {
 		t.Fatalf("模型为空不分层，got %v", got)
 	}
 	// 条件探索：免费层垄断、存在无观测的号、窗口已到 → 这一次切到无观测层。
 	p.SetCostExploreInterval(time.Hour)
-	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", ""); !reflect.DeepEqual(got, []string{"g1", "g2"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "", nil); !reflect.DeepEqual(got, []string{"g1", "g2"}) {
 		t.Fatalf("探索窗口到了应切到无观测层，got %v", got)
 	}
-	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", ""); !reflect.DeepEqual(got, []string{"cn1"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "", nil); !reflect.DeepEqual(got, []string{"cn1"}) {
 		t.Fatalf("同一窗口内不再探索，got %v", got)
 	}
 	// 快过期虚拟实例权重照常。
 	p.SetCreditsDetailed("cn1", 100, 100, 100, time.Now().Add(time.Hour), 100)
-	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "cn"); !reflect.DeepEqual(got, []string{"cn1", "cn1", "cn1"}) {
+	if got := p.CheapestWeightedUIDsForModelRealm("glm-5.2", "cn", nil); !reflect.DeepEqual(got, []string{"cn1", "cn1", "cn1"}) {
 		t.Fatalf("快过期号应出现 3 次，got %v", got)
 	}
 }

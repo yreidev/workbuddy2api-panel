@@ -607,6 +607,8 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		LastErrTime:              e.lastErr,
 		LastLiveness:             e.liveness,
 		BlockedModels:            slices.Clone(e.blockedModels),
+		Groups:                   slices.Clone(e.groups),
+		Priority:                 e.priority,
 		Until:                    e.until,
 		SoftStreak:               e.softStreak,
 		ModelCosts:               p.modelCostsStatusLocked(e, now),

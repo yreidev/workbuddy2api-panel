@@ -97,8 +97,8 @@ func searchMeta(hdr http.Header) upstream.ChatMeta {
 
 // searchRealm 在哪个域选号：model 带了域前缀（Claude Code 子请求的 model 是主对话的模型）照前缀；
 // 否则按 pool.cross_realm，同不带前缀的对话：关着只用国内版，合池两个域一起选，国内版优先时先看国内版
-// 有没有能接的号。关了国际版（global.enabled=false）只用国内版。
-func (h *Handler) searchRealm(model string) (realm string, cnFirst bool) {
+// 有没有能接的号（tried 里的号不算）。关了国际版（global.enabled=false）只用国内版。
+func (h *Handler) searchRealm(model string, tried map[string]bool) (realm string, cnFirst bool) {
 	if realm, bare := resolveModel(model); bare != model {
 		return realm, false
 	}
@@ -109,7 +109,7 @@ func (h *Handler) searchRealm(model string) (realm string, cnFirst bool) {
 	case livecfg.CrossRealmMerge:
 		return "", false
 	case livecfg.CrossRealmCNFirst:
-		return h.cnFirstRealm(nil, ""), true
+		return h.cnFirstRealm(tried, ""), true
 	}
 	return "cn", false
 }
@@ -125,8 +125,8 @@ func searchPenalized(kind upstream.ErrKind) bool {
 
 // runSearch 换着号搜一次（规则见文件头）。st 记下用了哪个号、试了几次，交给请求记录和流水行。
 func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model string, meta upstream.ChatMeta, st *chatStat) (*upstream.SearchOutcome, *searchFailure) {
-	realm, cnFirst := h.searchRealm(model)
-	tried := map[string]bool{}
+	tried, _ := h.keyScope(ctx) // 客户端密钥绑了分组时只用组里的号
+	realm, cnFirst := h.searchRealm(model, tried)
 	var lastErr error
 	var slot slotWait
 	for i := 0; i < h.cfg.MaxRotate; i++ {

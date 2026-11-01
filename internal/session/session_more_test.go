@@ -109,13 +109,13 @@ func TestLoadFromStoreEdges(t *testing.T) {
 func TestAvailableSliceFallbacks(t *testing.T) {
 	var gotModel, gotRealm string
 	r := New(Config{
-		AvailableForModel: func(model, realm string) []string {
+		AvailableForModel: func(model, realm string, _ map[string]bool) []string {
 			gotModel, gotRealm = model, realm
 			return []string{"m1"}
 		},
 		Available: func() []string { return []string{"a1"} },
 	})
-	if got := r.availableSlice("model-x", "global"); !reflect.DeepEqual(got, []string{"m1"}) {
+	if got := r.availableSlice("model-x", "global", nil); !reflect.DeepEqual(got, []string{"m1"}) {
 		t.Errorf("应优先 AvailableForModel，got %v", got)
 	}
 	if gotModel != "model-x" || gotRealm != "global" {
@@ -123,12 +123,12 @@ func TestAvailableSliceFallbacks(t *testing.T) {
 	}
 
 	r2 := New(Config{Available: func() []string { return []string{"a1"} }})
-	if got := r2.availableSlice("m", ""); !reflect.DeepEqual(got, []string{"a1"}) {
+	if got := r2.availableSlice("m", "", nil); !reflect.DeepEqual(got, []string{"a1"}) {
 		t.Errorf("应回落 Available，got %v", got)
 	}
 
 	r3 := New(Config{})
-	if got := r3.availableSlice("m", ""); got != nil {
+	if got := r3.availableSlice("m", "", nil); got != nil {
 		t.Errorf("全空应返回 nil，got %v", got)
 	}
 }
@@ -136,7 +136,7 @@ func TestAvailableSliceFallbacks(t *testing.T) {
 // TestResolveNoAvailable 无可用账号：返回 false；失效绑定被清掉。
 func TestResolveNoAvailable(t *testing.T) {
 	r := New(Config{TTL: time.Minute, Available: func() []string { return nil }})
-	if uid, ok := r.ResolveForModel("c1", "", ""); ok || uid != "" {
+	if uid, ok := r.ResolveForModel("c1", "", "", nil); ok || uid != "" {
 		t.Fatalf("无可用账号应返回 false，got %q/%v", uid, ok)
 	}
 
@@ -215,18 +215,18 @@ func TestExpiredHelper(t *testing.T) {
 func TestAssignableForModel(t *testing.T) {
 	r := New(Config{
 		TTL:                time.Minute,
-		AvailableForModel:  func(model, realm string) []string { return []string{"paid", "free"} },
-		AssignableForModel: func(model, realm string) []string { return []string{"free"} },
+		AvailableForModel:  func(model, realm string, _ map[string]bool) []string { return []string{"paid", "free"} },
+		AssignableForModel: func(model, realm string, _ map[string]bool) []string { return []string{"free"} },
 	})
-	if uid, ok := r.ResolveForModel("c1", "m", ""); !ok || uid != "free" {
+	if uid, ok := r.ResolveForModel("c1", "m", "", nil); !ok || uid != "free" {
 		t.Fatalf("新会话应从 AssignableForModel 里挑，got %q/%v", uid, ok)
 	}
 	r.Bind("c2", "paid")
-	if uid, ok := r.ResolveForModel("c2", "m", ""); !ok || uid != "paid" {
+	if uid, ok := r.ResolveForModel("c2", "m", "", nil); !ok || uid != "paid" {
 		t.Fatalf("已绑定且仍可用的会话不该换号，got %q/%v", uid, ok)
 	}
-	r2 := New(Config{TTL: time.Minute, AvailableForModel: func(model, realm string) []string { return []string{"a1"} }})
-	if got := r2.assignableSlice("m", ""); !reflect.DeepEqual(got, []string{"a1"}) {
+	r2 := New(Config{TTL: time.Minute, AvailableForModel: func(model, realm string, _ map[string]bool) []string { return []string{"a1"} }})
+	if got := r2.assignableSlice("m", "", nil); !reflect.DeepEqual(got, []string{"a1"}) {
 		t.Fatalf("没注入 AssignableForModel 时应回落 AvailableForModel，got %v", got)
 	}
 }

@@ -72,11 +72,13 @@ export interface KeyForm {
   daily: LimitForm
   total: LimitForm
   models: string[]
+  /** 限定的账号分组 id，空 = 不限 */
+  groups: string[]
 }
 
 const noLimits = (): LimitForm => ({ requests: null, tokens: null, credits: null })
 
-export const emptyKeyForm = (): KeyForm => ({ name: '', note: '', enabled: true, expires: null, daily: noLimits(), total: noLimits(), models: [] })
+export const emptyKeyForm = (): KeyForm => ({ name: '', note: '', enabled: true, expires: null, daily: noLimits(), total: noLimits(), models: [], groups: [] })
 
 function limitForm(l: KeyLimits): LimitForm {
   const f = noLimits()
@@ -93,6 +95,7 @@ export function keyFormFrom(k: ApiKey): KeyForm {
     daily: limitForm(k.daily_limit),
     total: limitForm(k.total_limit),
     models: [...(k.models || [])],
+    groups: [...(k.groups || [])],
   }
 }
 
@@ -115,6 +118,7 @@ export function keyInput(f: KeyForm): KeyInput {
     daily_limit: limitsOut(f.daily),
     total_limit: limitsOut(f.total),
     models: f.models,
+    groups: f.groups,
   }
 }
 

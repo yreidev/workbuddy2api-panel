@@ -6,7 +6,7 @@
 import { useMemo, useState } from 'react'
 import { Copy } from '@gravity-ui/icons'
 import {
-  Button, Input, Label, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
+  Button, Checkbox, CheckboxGroup, Description, Input, Label, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
 } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
@@ -16,7 +16,7 @@ import {
   LIMIT_KINDS, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, validateKeyForm,
   type KeyForm, type LimitForm,
 } from '../../lib/keys'
-import { qk, useModels } from '../../lib/queries'
+import { qk, useGroups, useModels } from '../../lib/queries'
 import type { ApiKey } from '../../lib/types'
 import { ExpiryField } from '../../components/ExpiryField'
 import { BusyButton } from '../../components/Feedback'
@@ -64,6 +64,7 @@ function EditorBody({ editing, onClose, onCreated }: { editing: ApiKey | null; o
       const path = editing ? 'keys/' + encodeURIComponent(editing.id) : 'keys'
       const r = await post<{ ok: boolean; key: ApiKey }>(path, keyInput(form))
       void qc.invalidateQueries({ queryKey: qk.keys })
+      void qc.invalidateQueries({ queryKey: qk.groups })
       if (editing) {
         toast.success(`已保存「${r.key.name}」`)
         onClose()
@@ -113,6 +114,8 @@ function EditorBody({ editing, onClose, onCreated }: { editing: ApiKey | null; o
         </fieldset>
 
         <ModelsField value={form.models} onChange={(models) => set({ models })} />
+
+        <GroupsField value={form.groups} onChange={(groups) => set({ groups })} />
       </Modal.Body>
       <Modal.Footer>
         {error && form.name.trim() !== '' && <span className="mr-auto text-sm text-danger">{error}</span>}
@@ -178,6 +181,28 @@ function ModelsField({ value, onChange }: { value: string[]; onChange: (v: strin
         </p>
       )}
     </div>
+  )
+}
+
+/** 账号分组：勾了就只用这些组里的号；还没建分组时不显示 */
+function GroupsField({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const groups = useGroups().data ?? []
+  if (groups.length === 0) return null
+  return (
+    <CheckboxGroup value={value} onChange={onChange}>
+      <Label>账号分组</Label>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {groups.map((g) => (
+          <Checkbox key={g.id} value={g.id}>
+            <Checkbox.Content>
+              <Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>
+              {g.name}<span className="text-xs text-muted">（{g.accounts} 个号）</span>
+            </Checkbox.Content>
+          </Checkbox>
+        ))}
+      </div>
+      <Description>不勾 = 不限，全部的号都能用。勾了就只用这些组里的号，组里的号都接不了时回 503，不借别的号。</Description>
+    </CheckboxGroup>
   )
 }
 

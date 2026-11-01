@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 代理页（规则见 docs/proxy.md）：统计和提醒 + 代理池（号的分组：增删改、池内重新均分）+ 代理表（批量导入先预览、
+// 代理页（规则见 docs/proxy.md）：统计和提醒 + 代理池（增删改、池内重新均分）+ 代理表（批量导入先预览、
 // 导出、全部重测、删掉不可用；每个代理看状态、出口 IP、到期、绑了哪些号，能测、改、删）+ 代理池设置。
 // 数据 5 秒一刷：健康检查、查出口 IP 都在后台跑。号绑哪个代理在账号池页多选绑定，或在账号详情里改。
 import { useMemo, useState } from 'react'
@@ -152,7 +152,7 @@ function Proxies({ data }: { data: ProxiesResp }) {
             </InfoTip>
           </span>
         }
-        desc="号的分组：号绑池，池里分代理。号绑哪个池在账号池页多选「绑定代理」，或在账号详情里改。"
+        desc="号绑池，池里分代理。号绑哪个池在账号池页多选「绑定代理」，或在账号详情里改。"
         actions={<Button size="sm" variant="secondary" onPress={() => setPoolEdit('new')}>新建池</Button>}
       >
         {v.pools.length === 0 ? (

@@ -458,8 +458,8 @@ func TestSearchRealm(t *testing.T) {
 	h := NewHandler(Config{Pool: p, GlobalEnabled: true, Live: livecfg.New(livecfg.Snapshot{})})
 	check := func(model, wantRealm string, wantFirst bool) {
 		t.Helper()
-		if realm, first := h.searchRealm(model); realm != wantRealm || first != wantFirst {
-			t.Errorf("searchRealm(%q) = %q, %v；应为 %q, %v", model, realm, first, wantRealm, wantFirst)
+		if realm, first := h.searchRealm(model, nil); realm != wantRealm || first != wantFirst {
+			t.Errorf("searchRealm(%q, nil) = %q, %v；应为 %q, %v", model, realm, first, wantRealm, wantFirst)
 		}
 	}
 	check("global:glm-5.2", "global", false)

@@ -109,7 +109,10 @@ type Status struct {
 	LastLiveness *LivenessResult `json:"last_liveness,omitempty"`
 	// BlockedModels 号不接的模型（上游拒绝后自动加的、面板手动加的）。
 	BlockedModels []BlockedModel `json:"blocked_models,omitempty"`
-	LastErrTime   time.Time      `json:"last_err,omitempty"`
+	// Groups 号所在的分组 id；Priority 优先级，越小越先用，默认 0。
+	Groups      []string  `json:"groups,omitempty"`
+	Priority    int       `json:"priority"`
+	LastErrTime time.Time `json:"last_err,omitempty"`
 	// CheckinDone 本地今日已签到（签到成功或上游"今天已签到"幂等拒绝均算）。
 	// global 域账号无签到体系，恒为 false。面板签到按钮据此显示 签到/已签。
 	CheckinDone bool       `json:"checkin_done,omitempty"`
@@ -223,7 +226,10 @@ type entry struct {
 	note         string // 面板备注（Status.Note），持久化
 	// blockedModels 号不接的模型（见 blockedmodels.go），持久化。
 	blockedModels []BlockedModel
-	reason        string
+	// groups 号所在的分组 id，priority 号的优先级（越小越先用，见 groups.go），都持久化。
+	groups   []string
+	priority int
+	reason   string
 	// liveness 最近一次测活的结果（Status.LastLiveness），持久化；nil = 没测过。
 	liveness *LivenessResult
 	lastUsed time.Time // 最近被选中时刻（防并发撞号）
@@ -459,8 +465,11 @@ type stateAccount struct {
 	Liveness *LivenessResult `json:"liveness,omitempty"`
 	// BlockedModels 号不接的模型（entry.blockedModels 同源）。
 	BlockedModels []BlockedModel `json:"blocked_models,omitempty"`
-	CoolKind      CoolKind       `json:"cool_kind"`
-	SuccessCount  int64          `json:"success_count,omitempty"`
+	// Groups / Priority 号所在的分组与优先级（entry.groups / entry.priority 同源）。
+	Groups       []string `json:"groups,omitempty"`
+	Priority     int      `json:"priority,omitempty"`
+	CoolKind     CoolKind `json:"cool_kind"`
+	SuccessCount int64    `json:"success_count,omitempty"`
 	// err_total 累计错误计数。旧版 err_count（连续错误）仍可读：加载时映射到 err_total，
 	// 仅作一次性迁移，不再回写 err_count。
 	ErrTotal    int64     `json:"err_total,omitempty"`
@@ -531,6 +540,8 @@ type stateModelCost struct {
 // stateFile 持久化格式。
 type stateFile struct {
 	Accounts map[string]stateAccount `json:"accounts"`
+	// Groups 账号分组（见 groups.go）；号在哪些组记在各号的 groups 里。
+	Groups []Group `json:"groups,omitempty"`
 }
 
 // flushInterval 后台落盘周期。

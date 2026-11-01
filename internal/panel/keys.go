@@ -105,6 +105,10 @@ func (p *Panel) keyInput(w http.ResponseWriter, r *http.Request) (apikeys.Input,
 		writeErr(w, http.StatusBadRequest, "请求格式不对："+err.Error())
 		return in, false
 	}
+	if err := p.checkGroups(in.Groups); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return in, false
+	}
 	return in, true
 }
 

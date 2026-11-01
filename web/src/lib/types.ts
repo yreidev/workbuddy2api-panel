@@ -80,11 +80,31 @@ export interface Account {
   last_liveness?: LivenessResult
   /** 这个号不接的模型（上游回 11158 自动加的、手动加的），选号时跳过；没有时没有这个字段 */
   blocked_models?: BlockedModel[]
+  /** 号所在的账号分组（Group 的 id）；没分组时没有这个字段 */
+  groups?: string[]
+  /** 优先级，0～99，越小越先用（默认 0）；选号只在最小的那一层里挑，那层都接不了才轮到下一层 */
+  priority?: number
   /**
    * 代理池拦着这个号的原因（号的代理不通或到期、在等代理、开着「只许走号的代理」却没绑），拦着的号不接请求、
    * 不跑定时任务；没拦时没有。分类见 accounts.ts 的 blockedLabel
    */
   proxy_blocked?: string
+}
+
+/** 账号分组（internal/pool/groups.go、internal/panel/groups.go）。客户端密钥可以限定只用哪些组的号 */
+export interface Group {
+  id: string
+  name: string
+  note?: string
+  created_at: string
+  /** 组里几个号 */
+  accounts: number
+  /** 限定了这个分组的密钥名字 */
+  keys: string[]
+}
+
+export interface GroupsResp {
+  groups: Group[]
 }
 
 /** 号不接的一个模型（internal/pool/blockedmodels.go） */
@@ -678,6 +698,8 @@ export interface ApiKey {
   total_limit: KeyLimits
   /** 模型白名单（* 通配，按实际发上游的模型名匹配），空 = 不限 */
   models?: string[] | null
+  /** 只用这些账号分组里的号（Group 的 id），空 = 不限 */
+  groups?: string[] | null
   last_used_at?: string
   used: KeyUsage
   /** 北京时间今天的用量 */
@@ -703,6 +725,7 @@ export interface KeyInput {
   daily_limit: KeyLimits
   total_limit: KeyLimits
   models: string[]
+  groups: string[]
 }
 
 // ---------------------------------------------------------------------------

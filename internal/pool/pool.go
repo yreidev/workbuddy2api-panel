@@ -16,8 +16,10 @@ import (
 )
 
 type Pool struct {
-	mu      sync.RWMutex
-	byUID   map[string]*entry
+	mu    sync.RWMutex
+	byUID map[string]*entry
+	// groups 账号分组（见 groups.go），随状态文件持久化。
+	groups  []Group
 	stateFp string
 	dirty   atomic.Bool // 内存有变更待落盘
 	// store 池状态快照镜像（redisstore.Store）；nil = 无需镜像（未配置 Redis / Noop 之外也可能 nil）。

@@ -463,7 +463,7 @@ func TestFull8ChatStreamWriteFailure(t *testing.T) {
 	if snap := u.Snapshot(0, nil); snap.Totals.Requests != 1 {
 		t.Fatalf("写失败仍应记录一次尝试: %+v", snap.Totals)
 	}
-	if uid, ok := sess.ResolveForModel("conv-1", "", ""); !ok || uid != "u1" {
+	if uid, ok := sess.ResolveForModel("conv-1", "", "", nil); !ok || uid != "u1" {
 		t.Fatalf("写失败分支应保持绑定: uid=%q ok=%v", uid, ok)
 	}
 }
