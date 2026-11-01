@@ -497,8 +497,8 @@ func stubRename(t *testing.T, fn func(oldPath, newPath string) error) {
 	t.Cleanup(func() { renameConfig = old })
 }
 
-// warmModelRates 的剩余分支：CN 失败、无 CN 号、global 空/成功、ctx 在 global 前取消。
-func TestWarmModelRatesBranches(t *testing.T) {
+// catalogRefresh.once 的剩余分支：CN 失败、无 CN 号、global 空/成功、ctx 在 global 前取消。
+func TestCatalogRefreshOnceBranches(t *testing.T) {
 	cnAuth := func() *auth.Auth {
 		return &auth.Auth{UID: "cn1", AccessToken: "at", RefreshToken: "rt", Domain: "www.codebuddy.cn"}
 	}
@@ -527,7 +527,7 @@ func TestWarmModelRatesBranches(t *testing.T) {
 		p := pool.New("")
 		p.Add(cnAuth())
 		up := newClient(func(*http.Request) (int, string) { return 400, `{"code":400}` })
-		warmModelRates(context.Background(), up, p) // 不 panic 即通过
+		newCatalogRefresh().once(context.Background(), up, p, time.Now()) // 不 panic 即通过
 	})
 
 	t.Run("没有 CN 号跳过", func(t *testing.T) {
@@ -535,7 +535,7 @@ func TestWarmModelRatesBranches(t *testing.T) {
 		var calls atomic.Int32
 		up := newClient(func(*http.Request) (int, string) { calls.Add(1); return 200, `{}` })
 		up.GlobalEnabled = false
-		warmModelRates(context.Background(), up, p)
+		newCatalogRefresh().once(context.Background(), up, p, time.Now())
 		if calls.Load() != 0 {
 			t.Fatalf("空池不应发请求，实际 %d", calls.Load())
 		}
@@ -545,7 +545,7 @@ func TestWarmModelRatesBranches(t *testing.T) {
 		p := pool.New("")
 		p.Add(globalAuth(t))
 		up := newClient(func(*http.Request) (int, string) { return 400, `{"code":400}` })
-		warmModelRates(context.Background(), up, p)
+		newCatalogRefresh().once(context.Background(), up, p, time.Now())
 	})
 
 	t.Run("global 目录成功", func(t *testing.T) {
@@ -559,7 +559,7 @@ func TestWarmModelRatesBranches(t *testing.T) {
 			}
 			return 400, `{"code":400}`
 		})
-		warmModelRates(context.Background(), up, p)
+		newCatalogRefresh().once(context.Background(), up, p, time.Now())
 		if globalCalls.Load() == 0 {
 			t.Fatal("global 应被探测")
 		}
@@ -579,7 +579,7 @@ func TestWarmModelRatesBranches(t *testing.T) {
 			cancel() // CN 请求期间取消 → global 阶段应跳过
 			return 200, `{"code":0,"data":{"models":[{"id":"glm-5.2"}],"agents":[{"name":"cli","models":["glm-5.2"]}]}}`
 		})
-		warmModelRates(ctx, up, p)
+		newCatalogRefresh().once(ctx, up, p, time.Now())
 		if globalCalls.Load() != 0 {
 			t.Fatalf("ctx 取消后不应探测 global，实际 %d 次", globalCalls.Load())
 		}

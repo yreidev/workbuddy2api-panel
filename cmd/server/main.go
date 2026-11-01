@@ -474,13 +474,9 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	sch.StartLiveness(ctx, cfg.LivenessInterval)
 	pn.StartUpdateCheck(ctx)
 
-	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
-	// 填充（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，
-	// ModelRate 恒返回空串——积分保底的目录兜底在这段空窗期内形同虚设，触底号
-	// 会被当成「收费未知」放行并打穿（实测：重启后 2 分钟，97 分的账号打收费
-	// 模型归零；倍率表当时尚未建立）。
-	// 异步执行：不阻塞监听启动；失败仅记日志（下一轮懒触发或本轮重试仍可补上）。
-	go warmModelRates(ctx, up, p)
+	// 两个域的模型目录（含积分倍率表）启动先拉一遍，之后定时补拉、刷新（见 refreshModelCatalogs）。
+	// 异步执行：不阻塞监听启动。
+	go refreshModelCatalogs(ctx, up, p)
 	go refreshEnterpriseCatalogs(ctx, up, p)
 
 	srv := &http.Server{
@@ -573,44 +569,89 @@ func shutdownGrace(v string) (time.Duration, error) {
 	return d, nil
 }
 
-// warmModelRates 启动预热各域模型积分倍率表（供积分保底的目录兜底判定）。
+// 两个域的模型目录（域目录 + 积分倍率表）的刷新节奏：启动先拉一遍，之后每 catalogTick 看一次，没拉到过的域
+// （启动时没有可用的号、上游出错）接着补拉，拉到过的超过 catalogMaxAge 重拉。
 //
-// 为什么需要：倍率表只在 FetchModels（CN）/ FetchGlobalModelInfos（global）成功时
-// 填充，两者都是懒触发（被 /v1/models 或面板模型页访问才跑）。重启后到首次触发
-// 之间的空窗期里 ModelRate 恒返回空串，保底的目录兜底判不出收费，触底号会被
-// 当成「收费未知」放行并打穿（实测：重启后 2 分钟，97 分的账号打收费模型归零）。
-//
-// 失败处理：单域失败只记 WARN（不阻塞、不致命——后续懒触发仍会补上）；global 域
-// 仅在其路由开关开启时预热（逃生门关锁时按 CN 处理，无需探测）。
-func warmModelRates(ctx context.Context, up *upstream.Client, p *pool.Pool) {
-	// 预热不得拖住进程退出：ctx 取消（SIGINT/SIGTERM）时立刻放弃剩余域。
-	if ctx.Err() != nil {
-		return
+// 为什么要定时：目录只在这里和 /v1/models、面板模型页被访问时才拉，对话请求只在配了模型路由时顺带拉。
+// 启动那一次没拉到、之后又没人调 /v1/models，就一直没有目录：开着跨域负载均衡时不带前缀的模型名全落到
+// 国内版（没有国内版号就一直 503）；积分保底的目录倍率兜底也判不出收费，触底号会被当成「收费未知」放行
+// 并打穿（实测：重启后 2 分钟，97 分的账号打收费模型归零）。tick 是变量，测试调短以验证第二轮。
+var catalogTick = time.Minute
+
+const catalogMaxAge = 30 * time.Minute
+
+func refreshModelCatalogs(ctx context.Context, up *upstream.Client, p *pool.Pool) {
+	t := time.NewTicker(catalogTick)
+	defer t.Stop()
+	st := newCatalogRefresh()
+	for {
+		st.once(ctx, up, p, time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
-	// CN：有可用 CN 账号才拉（与面板 models 同口径，避免无谓上游调用）；优先用个人号。
-	if uid := p.CatalogUIDForRealm("cn"); uid != "" {
-		if a := p.AuthByUID(uid); a != nil {
-			if _, err := up.FetchModels(a); err != nil {
-				log.Printf("WARN: [upstream] warm model rates (cn): %v", err)
-			} else {
-				log.Printf("[upstream] warm model rates: cn ok")
+}
+
+// catalogRefresh 各域上次拉成功的时刻（没有 = 还没拉到过），以及上次是不是拉失败了：失败日志只在第一次
+// 失败、由好转坏时记，免得每分钟一条。
+type catalogRefresh struct {
+	last    map[string]time.Time
+	failing map[string]bool
+}
+
+func newCatalogRefresh() *catalogRefresh {
+	return &catalogRefresh{last: map[string]time.Time{}, failing: map[string]bool{}}
+}
+
+// once 拉一遍到点的域。该域此刻没有可用的号时跳过，不算失败，下一轮再看。
+func (st *catalogRefresh) once(ctx context.Context, up *upstream.Client, p *pool.Pool, now time.Time) {
+	// 不得拖住进程退出：ctx 取消（SIGINT/SIGTERM）时立刻放弃剩余域。
+	if ctx.Err() == nil && st.due("cn", now) {
+		// CN：有可用 CN 账号才拉（与面板 models 同口径，避免无谓上游调用）；优先用个人号。
+		if uid := p.CatalogUIDForRealm("cn"); uid != "" {
+			if a := p.AuthByUID(uid); a != nil {
+				_, err := up.FetchModels(a)
+				st.note("cn", now, err)
 			}
 		}
 	}
-	// global：独立目录端点（workbuddy.ai），倍率按 "global" 域键存储。
-	if up.GlobalEnabled && ctx.Err() == nil {
+	// global：独立目录端点（workbuddy.ai），倍率按 "global" 域键存储；只在国际版开着时拉。
+	if up.GlobalEnabled && ctx.Err() == nil && st.due("global", now) {
 		if uids := p.AvailableUIDsForRealm("global"); len(uids) > 0 {
 			if a := p.AuthByUID(uids[0]); a != nil {
-				// FetchGlobalModelInfos 无错误返回（内部负缓存自行节流），
-				// 仅按结果条数判断是否拿到目录。
+				// FetchGlobalModelInfos 无错误返回（内部负缓存自行节流），仅按结果条数判断是否拿到目录。
+				var err error
 				if infos := up.FetchGlobalModelInfos(a); len(infos) == 0 {
-					log.Printf("WARN: [upstream] warm model rates (global): empty model list")
-				} else {
-					log.Printf("[upstream] warm model rates: global ok (%d models)", len(infos))
+					err = errors.New("empty model list")
 				}
+				st.note("global", now, err)
 			}
 		}
 	}
+}
+
+// due 该域到没到拉的时候：没拉到过，或者上次拉到已超过 catalogMaxAge。
+func (st *catalogRefresh) due(realm string, now time.Time) bool {
+	last, ok := st.last[realm]
+	return !ok || now.Sub(last) >= catalogMaxAge
+}
+
+// note 记下这次拉的结果。失败时不动上次成功的时刻（上游那边沿用上次的目录），下一轮接着补拉。
+func (st *catalogRefresh) note(realm string, now time.Time, err error) {
+	if err != nil {
+		if !st.failing[realm] {
+			log.Printf("WARN: [upstream] model catalog (%s): %v，每 %s 重试", realm, err, catalogTick)
+		}
+		st.failing[realm] = true
+		return
+	}
+	if _, ok := st.last[realm]; !ok || st.failing[realm] {
+		log.Printf("[upstream] model catalog: %s ok", realm)
+	}
+	st.last[realm] = now
+	st.failing[realm] = false
 }
 
 // 企业号目录的刷新节奏：每 enterpriseCatalogTick 检查一次，目录缺失或超过
