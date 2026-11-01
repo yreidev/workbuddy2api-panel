@@ -221,14 +221,15 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/import", p.withAuth(p.importAccounts))
 	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuth(p.importAccounts)) // 旧路径，外部脚本可能还在用
 	p.mux.HandleFunc("POST /panel/api/accounts/export", p.withAuth(p.accountsExport))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountRevive))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountDisable))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountPause))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountResume))
+	p.mux.HandleFunc("POST /panel/api/accounts/batch", p.withAuth(p.accountsBatch))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountAction("revive")))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountAction("disable")))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountAction("pause")))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountAction("resume")))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/note", p.withAuth(p.accountNote))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuth(p.accountCheckin))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuth(p.accountBalance))
-	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountRemove))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountAction("remove")))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/liveness", p.withAuth(p.accountLiveness))
 	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks", p.withAuth(p.accountTasks))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept", p.withAuth(p.accountTaskAccept))
@@ -574,54 +575,6 @@ func (p *Panel) modelProbes(w http.ResponseWriter, r *http.Request) {
 // 账号运维
 // ---------------------------------------------------------------------------
 
-// accountRevive 手动复活：清禁用 + 冷却 + 熔断（运维口径无条件恢复）。
-func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
-	uid := r.PathValue("uid")
-	if _, ok := p.cfg.Pool.Status(uid); !ok {
-		writeErr(w, http.StatusNotFound, "account not found")
-		return
-	}
-	p.cfg.Pool.Revive(uid)
-	log.Printf("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// accountDisable 人工禁用（不再参与选号，需面板 revive 或重登恢复）。
-func (p *Panel) accountDisable(w http.ResponseWriter, r *http.Request) {
-	uid := r.PathValue("uid")
-	if _, ok := p.cfg.Pool.Status(uid); !ok {
-		writeErr(w, http.StatusNotFound, "account not found")
-		return
-	}
-	p.cfg.Pool.Disable(uid, pool.ManualDisableReason)
-	log.Printf("panel: disable uid=%s（人工禁用）", uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// accountPause 暂停选号：账号退出选号候选，但**照常参与**签到 / 活跃上报 / 保活 /
-// 余额刷新。与 disable 的区别：不写 reason、不清冷却域、不重置计数——账号是「临时
-// 让位」而非「判死」，点「恢复选号」即可立刻回到池子（无需重登或解冻）。
-func (p *Panel) accountPause(w http.ResponseWriter, r *http.Request) {
-	uid := r.PathValue("uid")
-	if !p.cfg.Pool.Pause(uid) {
-		writeErr(w, http.StatusNotFound, "account not found")
-		return
-	}
-	log.Printf("panel: pause uid=%s（暂停选号，保号任务照常）", uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// accountResume 解除暂停选号（幂等，对未暂停账号为空操作）。
-func (p *Panel) accountResume(w http.ResponseWriter, r *http.Request) {
-	uid := r.PathValue("uid")
-	if !p.cfg.Pool.Resume(uid) {
-		writeErr(w, http.StatusNotFound, "account not found")
-		return
-	}
-	log.Printf("panel: resume uid=%s（恢复参与选号）", uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
 // noteMaxRunes 账号备注最长几个字。
 const noteMaxRunes = 40
 
@@ -723,32 +676,6 @@ func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	p.cfg.Pool.SetCreditsDetailed(uid, remain, total, expiring, earliestAt, earliestRemaining)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credits": remain, "credits_total": total})
-}
-
-// accountRemove 移除账号：先出池（立即落盘 state），再删 auth 文件。
-func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
-	uid := r.PathValue("uid")
-	a := p.cfg.Pool.Remove(uid)
-	if a == nil {
-		writeErr(w, http.StatusNotFound, "account not found")
-		return
-	}
-	if p.cfg.Proxies != nil {
-		p.cfg.Proxies.Untrack(uid) // 号走了，它占的代理空出来给等代理的号
-	}
-	fileMsg := ""
-	if a.FilePath != "" {
-		if err := os.Remove(a.FilePath); err != nil && !os.IsNotExist(err) {
-			fileMsg = err.Error()
-		}
-	}
-	if fileMsg != "" {
-		log.Printf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": fileMsg})
-		return
-	}
-	log.Printf("panel: remove uid=%s（已出池并删除凭证文件）", uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---------------------------------------------------------------------------

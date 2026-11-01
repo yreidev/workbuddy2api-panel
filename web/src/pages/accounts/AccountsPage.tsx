@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 代理提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证、绑定代理）
+// 账号池：统计（点一下按状态筛选）+ 积分到期提醒 + 代理提醒 + 搜索 + 账号卡片或账号表（可排序，可多选导出凭证、绑定代理、批量操作）
 // + 批量任务（含全部测活）+ 模型锁池。
 // 宽屏默认卡片网格，可切换成表格（记在本浏览器）；窄屏只有卡片。
 import { useMemo, useState } from 'react'
@@ -92,6 +92,10 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
   }
   const clearSelection = () => setSelection(new Set())
   const byUid = (uid: string | null) => accounts.find((a) => a.uid === uid) ?? null
+  const nameOf = (uid: string) => {
+    const a = byUid(uid)
+    return a ? accountName(a) : uid.slice(0, 8)
+  }
   const detailAcct = byUid(detail)
   const tasksAcct = byUid(tasksOf)
   const livenessAcct = byUid(livenessOf)
@@ -151,7 +155,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
             </SearchField.Group>
           </SearchField>
           <div className="flex flex-wrap items-center gap-3">
-            {isDesktop && selected.length > 0 && <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} />}
+            {isDesktop && selected.length > 0 && <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} nameOf={nameOf} />}
             {/* 卡片没有表头复选框和可点的表头，在这里给「全选」和排序 */}
             {cards && rows.length > 0 && (
               <SelectionCheckbox
@@ -219,7 +223,7 @@ function Accounts({ data, fetchedAt }: { data: Overview; fetchedAt: number }) {
             {/* 宽屏的导出按钮在搜索框那一行，窄屏滚动时贴在底部 */}
             {!isDesktop && selected.length > 0 && (
               <Card className="sticky bottom-3 z-30 col-span-full flex-row flex-wrap items-center gap-3 p-3 shadow-lg">
-                <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} />
+                <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} nameOf={nameOf} />
               </Card>
             )}
           </div>

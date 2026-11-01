@@ -139,6 +139,39 @@ func TestStartLivenessAll(t *testing.T) {
 	}
 }
 
+// TestStartLivenessFor 批量测活：只测选中的号，人工禁用的也测，代理池拦着的、不在池里的跳过；
+// 和全部测活共用「同时只跑一批」。
+func TestStartLivenessFor(t *testing.T) {
+	logs := captureSchedLog(t)
+	p := pool.New("")
+	for _, uid := range []string{"a", "b-manual", "c-blocked", "d-unpicked"} {
+		p.Add(&auth.Auth{UID: uid})
+	}
+	p.Disable("b-manual", pool.ManualDisableReason)
+	p.SetProxyBlocked("c-blocked", "等代理")
+	gate := make(chan struct{})
+	rec := &livenessRecorder{gate: gate}
+	s := New(Config{Pool: p})
+	s.SetLiveness(rec.fn)
+
+	n, err := s.StartLivenessFor([]string{"a", "b-manual", "c-blocked", "gone"})
+	if err != nil || n != 2 {
+		t.Fatalf("StartLivenessFor = %d, %v；应测 2 个号", n, err)
+	}
+	if _, err := s.StartLivenessAll(); !errors.Is(err, ErrLivenessBusy) {
+		t.Fatalf("批量测活在跑时全部测活应回 ErrLivenessBusy，got %v", err)
+	}
+	close(gate)
+	waitUntil(t, "批量测活结束", func() bool {
+		return strings.Contains(logs.String(), "liveness 批量测活结束：2 个通，0 个不通")
+	})
+	waitUntil(t, "批次放开", func() bool { return !s.livenessRunning.Load() })
+	want := map[livenessCall]bool{{"a", "", false}: true, {"b-manual", "", false}: true}
+	if got := rec.snapshot(); len(got) != 2 || !want[got[0]] || !want[got[1]] {
+		t.Fatalf("calls = %+v，应只测 a 和 b-manual", got)
+	}
+}
+
 // TestRunLivenessNow 定时测活只测 LivenessDue 挑出的号，scheduled=true；没有要测的号不记日志。
 func TestRunLivenessNow(t *testing.T) {
 	logs := captureSchedLog(t)

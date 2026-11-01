@@ -248,3 +248,30 @@ export function livenessModels(models: Model[], a: Pick<Account, 'realm' | 'ente
   const prefix = (a.realm === 'global' ? 'global' : 'cn') + ':'
   return models.filter((m) => m.id.startsWith(prefix) && (!m.enterprise_only || a.enterprise)).map((m) => m.id.slice(prefix.length))
 }
+
+/** 账号表多选后的批量操作（POST /panel/api/accounts/batch），菜单按这个顺序列 */
+export type BatchAction = 'liveness' | 'pause' | 'resume' | 'revive' | 'disable' | 'remove'
+
+export const BATCH_ACTIONS: { id: BatchAction; label: string }[] = [
+  { id: 'liveness', label: '测活' },
+  { id: 'pause', label: '暂停选号' },
+  { id: 'resume', label: '恢复选号' },
+  { id: 'revive', label: '解冻' },
+  { id: 'disable', label: '禁用' },
+  { id: 'remove', label: '移除' },
+]
+
+export interface BatchFailure { uid: string; error: string }
+export interface BatchResp { ok: number; failed?: BatchFailure[]; file_errors?: BatchFailure[] }
+
+/** 批量操作结果的提示：标题说几个成功几个失败；lines 逐个列出失败的号、移除了但凭证文件没删掉的号（nameOf 把 uid 换成显示名） */
+export function batchSummary(label: string, r: BatchResp, nameOf: (uid: string) => string): { title: string; lines: string[] } {
+  const failed = r.failed ?? []
+  const fileErrs = r.file_errors ?? []
+  const title = failed.length ? `${label}：${r.ok} 个成功，${failed.length} 个失败` : `${label}：${r.ok} 个已完成`
+  const lines = [
+    ...failed.map((f) => `${nameOf(f.uid)}：${f.error}`),
+    ...fileErrs.map((f) => `${nameOf(f.uid)} 已移除，但凭证文件没删掉：${f.error}`),
+  ]
+  return { title, lines }
+}

@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  accountHealth, accountName, activeRateLimits, blockedLabel, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, livenessModels, livenessSummary, namesOf, notesOf,
+  accountHealth, accountName, activeRateLimits, batchSummary, blockedLabel, cardSortKey, creditPercent, creditsText, filterAccounts, isFrozen, livenessModels, livenessSummary, namesOf, notesOf,
   parseCardSort, poolCredits, rateLimitInfo, relabel, sortAccounts,
 } from './accounts'
 import type { Account, Model } from './types'
@@ -207,5 +207,23 @@ describe('livenessModels', () => {
   })
   it('企业专属模型只给企业号', () => {
     expect(livenessModels(models, { realm: 'cn', enterprise: true })).toEqual(['glm-5.2', 'claude-x', 'deepseek-v4'])
+  })
+})
+
+describe('batchSummary', () => {
+  const nameOf = (uid: string) => ({ u1: '一号', u2: '二号' })[uid] ?? uid
+  it('全部成功：一句话，不列号', () => {
+    expect(batchSummary('禁用', { ok: 3, failed: [], file_errors: [] }, nameOf)).toEqual({ title: '禁用：3 个已完成', lines: [] })
+  })
+  it('有失败或凭证文件没删掉：逐个列出是哪个号', () => {
+    const r = batchSummary('移除', {
+      ok: 1,
+      failed: [{ uid: 'gone', error: 'account not found' }],
+      file_errors: [{ uid: 'u1', error: 'permission denied' }],
+    }, nameOf)
+    expect(r).toEqual({
+      title: '移除：1 个成功，1 个失败',
+      lines: ['gone：account not found', '一号 已移除，但凭证文件没删掉：permission denied'],
+    })
   })
 })
