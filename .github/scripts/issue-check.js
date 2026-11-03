@@ -10,6 +10,7 @@
 // - 作者在打了「待补充」的 issue 下回复：摘掉这两个标签，不再计时，等维护者看（补充的内容可能在回复里）；
 //   已经因为没补充被关掉的，顺带重新打开。
 // 「待补充」14 天没动静自动关闭由 .github/workflows/issue-stale.yml 负责。
+// 维护者用法和改规则要一起动的地方见 docs/issues.md；CHECKS 的标题要和 1-bug.yml 的 label 一字不差。
 'use strict'
 
 const NEED_INFO = '待补充'
