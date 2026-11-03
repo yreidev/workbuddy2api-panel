@@ -173,6 +173,19 @@ func TestFetchGlobalModelsMergesRoutes(t *testing.T) {
 	}
 }
 
+// TestFetchGlobalModelsOnlyNonChat 目录里只有非对话模型：按失败处理，记负缓存。
+func TestFetchGlobalModelsOnlyNonChat(t *testing.T) {
+	f := newUpFake(t)
+	f.on(http.MethodGet, gmV3Path, 200, v3ModelsJSON(`{"id":"nes-edit"}`))
+	c := upGlobalClient(f)
+	if names := c.FetchGlobalModels(globalAuth()); names != nil {
+		t.Fatalf("只有非对话模型应返回 nil，got %v", names)
+	}
+	if c.globalModels.lastFail.IsZero() {
+		t.Error("应记负缓存时间")
+	}
+}
+
 // TestFetchGlobalModelsCooldown 全部路径失败：返回 nil、记负缓存；冷却期内
 // 不再请求；冷却到期后重新探测。
 func TestFetchGlobalModelsCooldown(t *testing.T) {
@@ -210,14 +223,15 @@ func TestFetchGlobalModelsPartialFailure(t *testing.T) {
 	t.Run("v3 失败用企业端点", func(t *testing.T) {
 		f := newUpFake(t)
 		f.on(http.MethodGet, gmV3Path, 500, `{"code":500,"msg":"v3 boom"}`)
-		f.on(http.MethodGet, gmEntPath, 200, entModelsJSON(`{"id":"ent-only","maxInputTokens":333,"tags":["chat"]}`))
+		// 企业端点里同一个模型列了两次：infos 也只能有一条（issue #6）
+		f.on(http.MethodGet, gmEntPath, 200, entModelsJSON(`{"id":"ent-only","maxInputTokens":333,"tags":["chat"]},{"id":"ent-only","maxInputTokens":444,"tags":["chat"]}`))
 		c := upGlobalClient(f)
 		names := c.FetchGlobalModels(globalEntAuth())
-		if !sameStringSet(names, []string{"ent-only"}) {
+		if !reflect.DeepEqual(names, []string{"ent-only"}) {
 			t.Fatalf("names = %v，应为 [ent-only]", names)
 		}
-		if infos := c.FetchGlobalModelInfos(globalEntAuth()); len(infos) != 1 || infos[0].ID != "ent-only" {
-			t.Errorf("infos = %+v", infos)
+		if infos := c.FetchGlobalModelInfos(globalEntAuth()); len(infos) != 1 || infos[0].ID != "ent-only" || infos[0].ContextWindow != 333 {
+			t.Errorf("infos = %+v，应只有第一条 ent-only", infos)
 		}
 	})
 
@@ -408,6 +422,22 @@ func TestExtractEfforts(t *testing.T) {
 	names, out, efforts, defaults = extractEfforts(nil)
 	if len(names) != 0 || len(out) != 0 || efforts != nil || defaults != nil {
 		t.Errorf("空输入 = %v/%v/%v/%v", names, out, efforts, defaults)
+	}
+
+	// 重复 id 只留第一条（issue #6：企业端点单独兜底时原样进面板）
+	names, out, efforts, _ = extractEfforts([]ModelInfo{
+		{ID: "a", Efforts: []string{"low"}},
+		{ID: "b"},
+		{ID: "a", Efforts: []string{"high"}, Credits: "x9"},
+	})
+	if want := []string{"a", "b"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("重复 id names = %v，应为 %v", names, want)
+	}
+	if len(out) != 2 || out[0].Credits != "" {
+		t.Errorf("重复 id out = %+v，应只留第一条 a", out)
+	}
+	if !reflect.DeepEqual(efforts, map[string][]string{"a": {"low"}}) {
+		t.Errorf("重复 id efforts = %v，应取第一条", efforts)
 	}
 }
 

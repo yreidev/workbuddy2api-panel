@@ -14,6 +14,7 @@
 package upstream
 
 import (
+	"fmt"
 	"log"
 	"sort"
 	"sync"
@@ -113,6 +114,11 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 	names, infos, efforts, defaults, err := c.probeGlobalModels(a)
 	if err != nil || len(names) == 0 {
 		// 探测失败：负缓存 + 返回 nil（effort 桶不写，prepareBody 走 globalEffortMap 静态兜底）。
+		// 面板只能显示「上游未返回可用模型」，原因记在运行日志里。
+		if err == nil {
+			err = fmt.Errorf("目录是空的")
+		}
+		log.Printf("WARN: [upstream] global models: 拉国际版模型目录失败，%v 内不再重试：%v", globalModelsFailCooldown, err)
 		c.globalModels.Lock()
 		c.globalModels.lastFail = time.Now()
 		c.globalModels.names = nil
@@ -128,33 +134,23 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 	}
 	c.storeModelRates("global", infos)
 
-	// 成功：探测结果去重。names/infos 均落缓存；倍率等选号敏感字段只透出展示，
+	// 成功：names/infos 均落缓存（探测时已按 id 去重）；倍率等选号敏感字段只透出展示，
 	// 不注入 costTier。
-	seen := make(map[string]bool, len(names))
-	merged := make([]string, 0, len(names))
-	for _, id := range names {
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		merged = append(merged, id)
-	}
-
 	// 名单是多路探测的并集（比带倍率的 infos 全），跨域选号按它判断 global 有没有这个模型。
-	c.storeRealmModels("global", merged)
+	c.storeRealmModels("global", names)
 
 	c.globalModels.Lock()
-	c.globalModels.names = merged
+	c.globalModels.names = names
 	c.globalModels.infos = infos
 	c.globalModels.fetched = time.Now()
 	c.globalModels.lastFail = time.Time{}
 	c.globalModels.Unlock()
-	return merged, infos
+	return names, infos
 }
 
 // probeGlobalModels 发起一次 global 模型目录探测：/v3/config（桌面端内置 CLI 的 UA）；企业号
 // 并发再探企业模型目录（官方内置 CLI 的 ModelsProductProvider，补缺）后并集合并。返回模型名
-// 列表（已合并、未再去重——去重在 fetchGlobalModelsOnce）、全字段 ModelInfo 及
+// 列表（已合并、按 id 去重）、全字段 ModelInfo 及
 // effort 能力桶（supportedEfforts/defaultEffort，可为空）。
 //
 // 以前还并发换 IDE UA、旧 CLI UA 拉 /v3/config，并探个人号的企业端点，各路独有的模型取并集。
@@ -235,12 +231,16 @@ type probeResult struct {
 
 // extractEfforts 从条目列表抽取 effort 能力桶（supportedEfforts 数组优先；
 // 缺数组但 defaultEffort 单档非空也入 defaults 桶）并顺带返回有序 names。
+// 同一 id 只留第一条（与国内版 mergeModelInfos 同口径）：企业端点单独兜底时它的条目原样进
+// 面板和 /v1/models，重复 id 会让面板模型表少行、一筛选就卡死（issue #6）。
 func extractEfforts(infos []ModelInfo) (names []string, out []ModelInfo, efforts map[string][]string, defaults map[string]string) {
 	names = make([]string, 0, len(infos))
+	seen := make(map[string]bool, len(infos))
 	for _, mi := range infos {
-		if mi.ID == "" {
+		if mi.ID == "" || seen[mi.ID] {
 			continue
 		}
+		seen[mi.ID] = true
 		names = append(names, mi.ID)
 		out = append(out, mi)
 		if len(mi.Efforts) > 0 {
