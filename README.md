@@ -250,6 +250,10 @@ flowchart LR
 | [提交规则](docs/commits.md) | 提交信息格式、type 与 scope、CI 检查与本地钩子 |
 | [AGENTS.md](AGENTS.md) | 给 AI 编程工具看的开发说明，以及复制、借鉴本项目代码时的署名要求 |
 
+## 反馈问题
+
+在 [issue](https://github.com/yreidev/workbuddy2api-panel/issues/new/choose) 里选「问题反馈」「功能建议」或「使用求助」填表。问题反馈要填版本号、部署方式、出问题的账号类型，并贴报错原文和运行日志（文字，不要只发截图）；缺了机器人会留言提醒、打上「待补充」，14 天没补充自动关闭，之后补上信息回复一下会自动重新打开。贴出来之前先把 token、Cookie、手机号、邮箱、IP 打码。
+
 ## 致谢
 
 本项目站在这些项目和贡献者的肩膀上：

@@ -1,0 +1,31 @@
+name: issue-check
+
+# 问题反馈的信息检查（规则见 .github/scripts/issue-check.js）：
+#   - 新开或改了正文：缺版本号、部署方式、账号类型、报错原文时留言点名，打「待补充」；补齐后摘掉
+#   - 作者回复了打着「待补充」的 issue：摘掉，停止计时；已因此被关掉的重新打开
+# 只读事件里的数据、不跑 issue 里的任何内容；机器人自己的评论不会再触发（GITHUB_TOKEN 发的事件不触发 workflow）。
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-check-${{ github.event.issue.number }}
+
+jobs:
+  check:
+    if: github.repository == 'yreidev/workbuddy2api-panel' && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            await require('./.github/scripts/issue-check.js')({ github, context, core })

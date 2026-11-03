@@ -1,0 +1,30 @@
+name: issue-stale
+
+# 打了「待补充」的 issue（issue-check 自动打的，或维护者手动打的）14 天没动静就关闭：
+# 11 天没动静时打「即将关闭」并留言提醒，再过 3 天还没动静就关。期间有人回复、改动都重新计时；
+# 作者回复时 issue-check 会直接摘掉「待补充」，不再计时。别的 issue 不管。
+on:
+  schedule:
+    - cron: "17 2 * * *" # 每天 UTC 02:17
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    if: github.repository == 'yreidev/workbuddy2api-panel'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v11
+        with:
+          only-issue-labels: 待补充
+          days-before-issue-stale: 11
+          days-before-issue-close: 3
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: 即将关闭
+          remove-issue-stale-when-updated: true
+          stale-issue-message: 这个 issue 还在等补充信息，3 天内没有回复会自动关闭。
+          close-issue-message: 等了 14 天没有补充，先关了。之后补上信息直接在下面回复，会自动重新打开。
+          close-issue-reason: not_planned

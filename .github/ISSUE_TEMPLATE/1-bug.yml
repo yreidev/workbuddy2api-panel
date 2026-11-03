@@ -1,0 +1,106 @@
+name: 问题反馈
+description: 报错、结果不对、页面打不开、功能用不了
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先在 [issue](https://github.com/yreidev/workbuddy2api-panel/issues?q=is%3Aissue) 里搜一下（已关闭的也搜），再看看[常见问题](https://github.com/yreidev/workbuddy2api-panel/blob/main/docs/faq.md)。
+
+        下面的版本号、部署方式、账号类型、报错原文都是必填的：缺了查不了，机器人会留言提醒补充，14 天没补会自动关闭。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我搜过已有的 issue（含已关闭的），没有同样的问题
+          required: true
+        - label: 贴出来的内容已经把 token、Cookie、手机号、邮箱、IP 打了码
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 面板左上角标题旁显示的版本，或者 `wb2api -version` 的输出。一键更新过的以面板显示为准，镜像标签可能没变。填 latest 查不了。
+      placeholder: 1.13.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - Docker 镜像
+        - Docker Compose
+        - 单文件二进制
+        - 从源码构建
+        - 其他（写在下面的问题描述里）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: accounts
+    attributes:
+      label: 涉及的账号类型
+      description: 出问题的号是哪种，可以多选。企业号和个人号拉的模型目录、能用的模型都不一样。
+      multiple: true
+      options:
+        - 国内版个人号
+        - 国内版企业号
+        - 国际版个人号
+        - 国际版企业号
+        - 和账号无关
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 在哪（哪个页面、哪个接口、用的什么客户端）、做了什么、看到了什么、多久出一次。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开面板「模型与档位」
+        2. 点「国际版」
+        3. 页面卡住不动
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望的结果
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错原文和运行日志
+      description: |
+        把文字复制进来，不要只发截图（截图常常传不上来，也搜不到）：
+        - 页面上的报错，复制整段文字；
+        - 面板「运行日志」页按出问题的时间或关键字找到相关的几行；用 Docker 的也可以从 `docker logs` 里复制；
+        - 接口报错把响应体和响应头里的 X-Request-Id 一起贴上。
+
+        确实没有报错也没有日志，就写「没有」并说明原因。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图和其他补充
+      description: 截图、相关配置（打码后）、你已经试过的办法。
+    validations:
+      required: false

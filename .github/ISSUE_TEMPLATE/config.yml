@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 常见问题
+    url: https://github.com/yreidev/workbuddy2api-panel/blob/main/docs/faq.md
+    about: 6004、14003、503、权限、登录失败这些常见报错先在这里查。
+  - name: 文档
+    url: https://github.com/yreidev/workbuddy2api-panel#文档
+    about: 部署、配置、接入客户端、面板各页的说明。
+  - name: 想说声谢谢
+    url: https://github.com/yreidev/workbuddy2api-panel
+    about: 给仓库点个 Star 就是最大的支持，不用专门开 issue。

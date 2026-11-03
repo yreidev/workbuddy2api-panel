@@ -1,0 +1,40 @@
+name: 功能建议
+description: 想加的功能、想改的用法
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先在 [issue](https://github.com/yreidev/workbuddy2api-panel/issues?q=is%3Aissue) 里搜一下有没有人提过，提过的直接在那边补充。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我搜过已有的 issue（含已关闭的），没有人提过同样的建议
+          required: true
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 想解决什么问题
+      description: 你在什么场景下、遇到了什么不方便。说清楚场景比直接给方案更有用。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望怎么做
+      description: 希望面板上怎么操作、配置怎么写、接口怎么表现。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: 参考
+      description: 别的项目是怎么做的、官方客户端是什么表现，附链接更好。
+    validations:
+      required: false

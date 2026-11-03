@@ -1,0 +1,64 @@
+name: 使用求助
+description: 不知道怎么配置、怎么接客户端、某个现象是不是正常
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先看看[常见问题](https://github.com/yreidev/workbuddy2api-panel/blob/main/docs/faq.md)和[文档](https://github.com/yreidev/workbuddy2api-panel#文档)。确定是报错或结果不对的，请改用「问题反馈」。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我看过常见问题和相关文档，没找到答案
+          required: true
+        - label: 贴出来的内容已经把 token、Cookie、手机号、邮箱、IP 打了码
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 面板左上角标题旁显示的版本，或者 `wb2api -version` 的输出。
+      placeholder: 1.13.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - Docker 镜像
+        - Docker Compose
+        - 单文件二进制
+        - 从源码构建
+        - 其他（写在下面的问题里）
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 想做什么、卡在哪
+      description: 想达到什么效果，做到哪一步卡住了，看到的现象是什么。
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: 已经试过的办法
+    validations:
+      required: false
+
+  - type: textarea
+    id: details
+    attributes:
+      label: 相关配置或日志
+      description: 打码后贴文字。
+      render: text
+    validations:
+      required: false
