@@ -5,7 +5,7 @@
 // 对外隐藏的模型（config.json 的 models.hidden）：/v1/models 不列，点名调用回 400 model_unavailable。
 // 加一项、删一项都立即保存并热生效；归一口径与网关一致（lib/models.ts 的 hiddenModelSet）。
 import { useMemo, useState } from 'react'
-import { Button, ComboBox, Input, ListBox, Tag, TagGroup, toast } from '@heroui/react'
+import { Button, Tag, TagGroup, toast } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { toastError } from '../../lib/hooks'
@@ -13,6 +13,7 @@ import { addHiddenModel, hiddenFromConfig } from '../../lib/models'
 import { qk, useConfig, useModels } from '../../lib/queries'
 import type { SaveConfigResp } from '../../lib/types'
 import { Loaded } from '../../components/Feedback'
+import { ModelComboBox } from '../../components/ModelComboBox'
 import { InfoTip, Panel } from '../../components/Panel'
 
 export function HiddenModels() {
@@ -74,26 +75,17 @@ function HiddenForm({ saved }: { saved: string[] }) {
         </TagGroup>
       )}
       <div className="flex flex-wrap items-end gap-2">
-        <ComboBox
+        <ModelComboBox
           aria-label="添加要隐藏的模型"
-          allowsCustomValue
+          ids={ids}
           inputValue={text}
           onInputChange={setText}
+          placeholder="从目录选（带域前缀），或手填不带前缀的名字"
           value={null}
           onChange={(k) => { if (k != null) add(String(k)) }}
           isDisabled={saving}
           className="min-w-56 flex-1 sm:max-w-96"
-        >
-          <ComboBox.InputGroup>
-            <Input placeholder="从目录选（带域前缀），或手填不带前缀的名字" />
-            <ComboBox.Trigger />
-          </ComboBox.InputGroup>
-          <ComboBox.Popover>
-            <ListBox>
-              {ids.map((id) => <ListBox.Item key={id} id={id} textValue={id}>{id}<ListBox.ItemIndicator /></ListBox.Item>)}
-            </ListBox>
-          </ComboBox.Popover>
-        </ComboBox>
+        />
         <Button size="sm" variant="secondary" isDisabled={!text.trim() || saving} onPress={() => add(text)} className="mb-0.5">隐藏</Button>
       </div>
     </>

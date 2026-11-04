@@ -6,7 +6,7 @@
 // 规则存 config.json 的 model_routes，保存即热生效；匹配口径与网关一致（lib/routes.ts）。
 import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, TrashBin } from '@gravity-ui/icons'
-import { Button, ComboBox, Input, Label, ListBox, Surface, TextField, toast } from '@heroui/react'
+import { Button, Input, Label, Surface, TextField, toast } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useBlocker } from '@tanstack/react-router'
 import { post } from '../../lib/api'
@@ -17,6 +17,7 @@ import {
 } from '../../lib/routes'
 import type { SaveConfigResp } from '../../lib/types'
 import { BusyButton, Confirm, Loaded } from '../../components/Feedback'
+import { ModelComboBox } from '../../components/ModelComboBox'
 import { InfoTip, Panel } from '../../components/Panel'
 
 export function ModelRoutes() {
@@ -98,23 +99,14 @@ function RoutesForm({ saved }: { saved: ModelRoute[] }) {
                   <Input placeholder="claude-*haiku*" />
                 </TextField>
                 <span className="hidden pb-2 text-muted sm:inline" aria-hidden="true">→</span>
-                <ComboBox
-                  allowsCustomValue
+                <ModelComboBox
+                  label="目标模型"
+                  ids={ids}
                   inputValue={r.target}
                   onInputChange={(v) => setRow(i, { target: v })}
+                  placeholder="从目录选，或手填"
                   className="min-w-48 flex-1"
-                >
-                  <Label>目标模型</Label>
-                  <ComboBox.InputGroup>
-                    <Input placeholder="从目录选，或手填" />
-                    <ComboBox.Trigger />
-                  </ComboBox.InputGroup>
-                  <ComboBox.Popover>
-                    <ListBox>
-                      {ids.map((id) => <ListBox.Item key={id} id={id} textValue={id}>{id}<ListBox.ItemIndicator /></ListBox.Item>)}
-                    </ListBox>
-                  </ComboBox.Popover>
-                </ComboBox>
+                />
                 <div className="ml-auto flex shrink-0 gap-1 pb-0.5">
                   <Button isIconOnly size="sm" variant="ghost" aria-label="上移" isDisabled={i === 0} onPress={() => move(i, -1)}><ArrowUp /></Button>
                   <Button isIconOnly size="sm" variant="ghost" aria-label="下移" isDisabled={i === rows.length - 1} onPress={() => move(i, 1)}><ArrowDown /></Button>
