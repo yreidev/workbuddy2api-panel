@@ -7,6 +7,7 @@
 import {
   Navigate, createHashHistory, createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect,
 } from '@tanstack/react-router'
+import { RouteError } from './components/RouteError'
 import { Shell } from './components/Shell'
 import { isLegacyChatLink, isLogChannel, type LogChannel } from './lib/logs'
 import { AccountsPage } from './pages/accounts/AccountsPage'
@@ -62,7 +63,7 @@ const routeTree = rootRoute.addChildren([
 const legacy = /^#([a-z]+)$/.exec(location.hash)
 if (legacy) history.replaceState(null, '', '#/' + legacy[1])
 
-export const router = createRouter({ routeTree, history: createHashHistory() })
+export const router = createRouter({ routeTree, history: createHashHistory(), defaultErrorComponent: RouteError })
 
 declare module '@tanstack/react-router' {
   interface Register {
