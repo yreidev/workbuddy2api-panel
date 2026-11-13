@@ -501,6 +501,140 @@ func TestChannelFingerprintScrubbedInEveryRole(t *testing.T) {
 	}
 }
 
+// Codex / Claude Code 系 system prompt 的 workspace root 短语：system 级内容里命中后
+// 改成语序自然的 root of the workspace，语义不变，同时不再撞上游的渠道指纹。
+func TestWorkspaceRootRewritten(t *testing.T) {
+	in := "Relative paths resolve from the workspace root; absolute paths identify files."
+	want := "Relative paths resolve from the root of the workspace; absolute paths identify files."
+	if got := systemContent(t, in); got != want {
+		t.Errorf("not rewritten:\n got %q\nwant %q", got, want)
+	}
+}
+
+// systemContent 把单段内容包成 system 消息走一遍 sanitizeMessages，返回净化后的 content。
+func systemContent(t *testing.T, in string) string {
+	t.Helper()
+	msgs := []any{map[string]any{"role": "system", "content": in}}
+	sanitizeMessages(msgs)
+	got, ok := msgs[0].(map[string]any)["content"].(string)
+	if !ok {
+		t.Fatalf("content 不是字符串: %#v", msgs[0])
+	}
+	return got
+}
+
+// 大小写不敏感，空格与制表符都算分隔。
+func TestWorkspaceRootCaseAndSeparator(t *testing.T) {
+	for _, in := range []string{
+		"from the workspace root here",
+		"from the Workspace root here",
+		"from the WORKSPACE ROOT here",
+		"from the workspace\troot here",
+	} {
+		if got := systemContent(t, in); got != "from the root of the workspace here" {
+			t.Errorf("%q -> %q", in, got)
+		}
+	}
+}
+
+// 词边界：只有独立的 workspace root 才动，更长单词里的子串保持原样。
+func TestWorkspaceRootWordBoundary(t *testing.T) {
+	for _, in := range []string{
+		"a workspace rooter tool",
+		"myworkspace root probe",
+		"the workspaceroot is fine",
+	} {
+		if got := systemContent(t, in); got != in {
+			t.Errorf("should be untouched: %q -> %q", in, got)
+		}
+	}
+}
+
+// 改写结果再过一遍不再变化。
+func TestWorkspaceRootIdempotent(t *testing.T) {
+	once := systemContent(t, "from the workspace root here")
+	if twice := systemContent(t, once); twice != once {
+		t.Errorf("not idempotent: %q -> %q", once, twice)
+	}
+}
+
+// 作用域：只有 system / developer 级内容替换；user、assistant、tool、无 role
+// 以及工具调用的 arguments 一律逐字保留——那是用户的真实字面内容。
+func TestWorkspaceRootOnlySystemLevel(t *testing.T) {
+	const in = `mkdir "workspace root"`
+	const wantIn = `mkdir "root of the workspace"`
+	msgs := []any{
+		map[string]any{"role": "system", "content": in},
+		map[string]any{"role": "developer", "content": in},
+		map[string]any{"role": "user", "content": in},
+		map[string]any{"role": "assistant", "content": in},
+		map[string]any{"role": "tool", "content": in},
+		map[string]any{"content": in},
+		map[string]any{
+			"role":    "assistant",
+			"content": nil,
+			"tool_calls": []any{map[string]any{
+				"id":   "c1",
+				"type": "function",
+				"function": map[string]any{
+					"name":      "run",
+					"arguments": `{"cmd":"` + in + `"}`,
+				},
+			}},
+		},
+	}
+	sanitizeMessages(msgs)
+
+	wantSystems := map[int]string{0: wantIn, 1: wantIn}
+	for i, m := range msgs {
+		got, _ := m.(map[string]any)["content"].(string)
+		if want, ok := wantSystems[i]; ok {
+			if got != want {
+				t.Errorf("msg %d 应替换: got %q want %q", i, got, want)
+			}
+			continue
+		}
+		if i == 6 {
+			continue // content 为 nil，arguments 单独断言
+		}
+		if got != in {
+			t.Errorf("msg %d 不应改动: got %q want %q", i, got, in)
+		}
+	}
+	fn := msgs[6].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	if args := fn["arguments"].(string); args != `{"cmd":"`+in+`"}` {
+		t.Errorf("工具参数不应改动: %q", args)
+	}
+}
+
+// workspace root 不再单独把文本拖进完整净化链：review 5881990497 第四条指出，
+// 只含该短语的工具参数曾被 sanitizeKvRe 删掉 cc_version=1 而变成无效 JSON。
+func TestWorkspaceRootDoesNotTriggerKvStrip(t *testing.T) {
+	const args = `{"command":"echo workspace root; cc_version=1"}`
+	msgs := []any{map[string]any{
+		"role":    "assistant",
+		"content": nil,
+		"tool_calls": []any{map[string]any{
+			"id":   "c1",
+			"type": "function",
+			"function": map[string]any{
+				"name":      "run",
+				"arguments": args,
+			},
+		}},
+	}}
+	if sanitizeMessages(msgs) {
+		t.Fatal("不应有任何改动")
+	}
+	got := msgs[0].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)["arguments"].(string)
+	if got != args {
+		t.Fatalf("arguments 被改动: %q", got)
+	}
+	if !json.Valid([]byte(got)) {
+		t.Fatalf("arguments 已不是合法 JSON: %q", got)
+	}
+}
+
 func TestContainsFoldASCII(t *testing.T) {
 	if !containsFoldASCII("xx DeepSeek HARNESS", "harness") || containsFoldASCII("harnes", "harness") || containsFoldASCII("", "a") {
 		t.Fatal("containsFoldASCII wrong")
