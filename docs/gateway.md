@@ -162,13 +162,14 @@ Claude Code、Codex 等客户端会在系统提示词里放固定模板句，上
 
    内置提示词约 2KB（[`internal/prompt/defaultprompt.md`](../internal/prompt/defaultprompt.md)）；`prompt.file` 可替换成你自己的。
 
-2. **指纹脱敏**（`features.sanitize_blacklist_fingerprints`）清洗所有消息里的指纹串，系统提示词、用户、助手、工具消息，以及工具调用参数和推理内容都算。上游的「渠道指纹」拦截（400 + `code 11128`，`Illegal API invocation from an unapproved channel`）按大小写不敏感的连续子串匹配，网关处理这几类：
+2. **指纹脱敏**（`features.sanitize_blacklist_fingerprints`）清洗消息里的指纹串。除下面单独说明的 `workspace root` 规则外，清洗范围包括系统提示词、用户、助手、工具消息，以及工具调用参数和推理内容。上游的「渠道指纹」拦截（400 + `code 11128`，`Illegal API invocation from an unapproved channel`）按大小写不敏感的连续子串匹配，网关处理这几类：
    - Claude Code、Codex 的固定模板句和 `x-anthropic-billing-header` 这类键值，改一个词或整段删掉；
    - 「You are … powered by / built on / created by …」这类自我介绍句，整句换成 `You are a helpful AI assistant.`；
    - DeepSeek Harness 的提示词：「… DeepSeek Harness Web GUI whose URL the runtime context names.」改个语序，正文里的 `DeepSeek Harness` 缩成 `DeepSeek`；
-   - OhMyOpenCode 插件的 `Sisyphus-Junior - Focused executor from OhMyOpenCode`。
+   - OhMyOpenCode 插件的 `Sisyphus-Junior - Focused executor from OhMyOpenCode`；
+   - system / developer 消息内容里的独立短语 `workspace root` 改为 `root of the workspace`，忽略大小写，允许空格或制表符分隔；较长单词中的子串不改。其他角色、工具调用参数及推理内容中的该短语保留原文。
 
-   后三类规则参考了 workbuddy2api-hub、workbuddy-manager、cpa-multi-plugins 等项目的实测（见 README 致谢）。
+   自我介绍句、DeepSeek Harness 和 OhMyOpenCode 三类规则参考了 workbuddy2api-hub、workbuddy-manager、cpa-multi-plugins 等项目的实测（见 README 致谢）。`workspace root` 规则依据 [PR #8](https://github.com/yreidev/workbuddy2api-panel/pull/8) 作者的 DSH 请求对照实测；本仓库维护者未独立复测真实上游。
 
 **降级重试**：请求被内容审核拦下时，网关判定为系统提示词误报，**在同一请求内**换成中性提示词重试一次；第二次仍被拦，说明是用户内容本身触发审核，如实返回给客户端。触发降级后到次日 00:00（北京时间）前，后续请求直接用中性提示词，不再先撞一次 400。降级状态只在内存里，重启清零。内容拦截不罚账号。
 

@@ -563,6 +563,11 @@ func TestWorkspaceRootIdempotent(t *testing.T) {
 func TestWorkspaceRootOnlySystemLevel(t *testing.T) {
 	const in = `mkdir "workspace root"`
 	const wantIn = `mkdir "root of the workspace"`
+	argsJSON, err := json.Marshal(map[string]string{"cmd": in})
+	if err != nil {
+		t.Fatalf("构造工具参数失败: %v", err)
+	}
+	wantArgs := string(argsJSON)
 	msgs := []any{
 		map[string]any{"role": "system", "content": in},
 		map[string]any{"role": "developer", "content": in},
@@ -578,7 +583,7 @@ func TestWorkspaceRootOnlySystemLevel(t *testing.T) {
 				"type": "function",
 				"function": map[string]any{
 					"name":      "run",
-					"arguments": `{"cmd":"` + in + `"}`,
+					"arguments": wantArgs,
 				},
 			}},
 		},
@@ -602,8 +607,12 @@ func TestWorkspaceRootOnlySystemLevel(t *testing.T) {
 		}
 	}
 	fn := msgs[6].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)
-	if args := fn["arguments"].(string); args != `{"cmd":"`+in+`"}` {
+	args := fn["arguments"].(string)
+	if args != wantArgs {
 		t.Errorf("工具参数不应改动: %q", args)
+	}
+	if !json.Valid([]byte(args)) {
+		t.Fatalf("工具参数不是合法 JSON: %q", args)
 	}
 }
 
