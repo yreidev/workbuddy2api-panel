@@ -84,11 +84,15 @@ var sanitizeRewrites = [][2]string{
 	},
 }
 
-// 以下四条是上游 11128「Illegal API invocation from an unapproved channel」的渠道指纹，
+// 以下五条是上游 11128「Illegal API invocation from an unapproved channel」的渠道指纹，
 // 取自同类项目的真号实测（workbuddy2api-hub #61/#533/#537/#570/#574，
 // ithtelab/workbuddy-manager #246/#250，mmqz/cpa-multi-plugins #46/#49）：
 // 大小写不敏感、连续子串匹配，改一个词或换语序即放行。
-// 作用域与上面的规则一致，所有角色都改：有项目实测放在 user 或 assistant 历史里同样被拦。
+//
+// 作用域：身份句、品牌句、OhMyOpenCode 三条所有角色都改——有项目实测放在 user 或
+// assistant 历史里同样被拦。workspace root 是唯一的例外，只改 system 级内容：
+// 它在工具参数和用户原文里只是普通字面串，全通道改写会让出站请求与用户原意不符
+// （review 5881990497 第二条），见 sanitizeTextForSystem。
 var (
 	// sanitizeIdentityStartRe 自我介绍句的开头到归属动词，例如
 	// "You are an AI agent powered by DeepSeek Harness."、
@@ -108,6 +112,11 @@ var (
 	// sanitizeBrandRe 散文里的 DeepSeek Harness 和 GUI 描述句连着出现时同样命中，缩成 DeepSeek。
 	// 只认空格与制表符，deepseek-harness、deepseek_harness 这类路径与标识符不动。
 	sanitizeBrandRe = regexp.MustCompile(`(?i)DeepSeek[ \t]+Harness`)
+	// sanitizeWorkspaceRootRe Codex / Claude Code 系 system prompt 的特征短语 workspace root：
+	// 上游按它做渠道指纹，命中即 400 11-128「Illegal API invocation from an unapproved channel」。
+	// 2026-11-13 实测：完整 DSH system 里只此一处命中；改成语序自然的 root of the workspace 即放行。
+	// 只作用于 system 级内容，其余角色与工具参数原样保留（见 sanitizeTextForSystem）。
+	sanitizeWorkspaceRootRe = regexp.MustCompile(`(?i)\bworkspace[ \t]+root\b`)
 	// sanitizeOmORe OhMyOpenCode 子代理的身份串，两半各自单独出现都放行，只拆开连在一起的这一段。
 	sanitizeOmORe = regexp.MustCompile(`(?i)Sisyphus-Junior - Focused executor from OhMyOpenCode`)
 )
@@ -180,14 +189,40 @@ func hasChannelFingerprint(text string) bool {
 }
 
 // sanitizeText 单段文本净化：预检不中 → 返回原串（零分配）。
+//
+// 不含 workspace root 替换——该短语的改写会变更字面内容，一旦作用于工具参数、
+// 工具结果或用户原文，出站请求里的目录名/命令就与用户原意不符（review 5881990497
+// 第二条）。它只在 system 级内容上做，见 sanitizeTextForSystem。
 func sanitizeText(text string) string {
+	return sanitizeTextOpt(text, false)
+}
+
+// sanitizeTextForSystem system / developer 级内容的净化：与 sanitizeText 同口径，
+// 额外替换 workspace root 渠道指纹。
+//
+// 替换位置跨在 hasFingerprint 判定两侧：system 里只出现 workspace root 时预检为假
+// （该短语已从 hasChannelFingerprint 摘除），走早返回分支只做这一处替换，不会连带
+// 触发 sanitizeKvRe 等剥离层——那正是 review 5881990497 第四条指出的
+// {"command":"echo workspace root; cc_version=1"} 被删成无效 JSON 的成因。
+// system 里另有其他指纹时走完整链，替换嵌在链里保持原有先后顺序。
+func sanitizeTextForSystem(text string) string {
+	return sanitizeTextOpt(text, true)
+}
+
+func sanitizeTextOpt(text string, replaceWorkspaceRoot bool) string {
 	if !hasFingerprint(text) {
+		if replaceWorkspaceRoot {
+			text = sanitizeWorkspaceRootRe.ReplaceAllString(text, "root of the workspace")
+		}
 		return text
 	}
 	text = sanitizeOmORe.ReplaceAllString(text, "Sisyphus-Junior - Focused executor")
 	text = rewriteIdentitySentences(text)
 	// GUI 描述段要认品牌全名，先于品牌缩减。
 	text = sanitizeDSHGUIRe.ReplaceAllString(text, "${1} whose URL is named in the runtime context.")
+	if replaceWorkspaceRoot {
+		text = sanitizeWorkspaceRootRe.ReplaceAllString(text, "root of the workspace")
+	}
 	text = sanitizeBrandRe.ReplaceAllString(text, "DeepSeek")
 	for _, rw := range sanitizeRewrites {
 		text = strings.ReplaceAll(text, rw[0], rw[1])
@@ -224,9 +259,22 @@ func hasFingerprint(text string) bool {
 // sanitizeContent 兼容字符串与多模态数组；只动 text part，image 等 part 不动。
 // 返回净化后的值及是否发生变化。
 func sanitizeContent(v any) (any, bool) {
+	return sanitizeContentOpt(v, false)
+}
+
+// sanitizeContentForSystem system 级消息内容的净化：额外做 workspace root 替换。
+func sanitizeContentForSystem(v any) (any, bool) {
+	return sanitizeContentOpt(v, true)
+}
+
+func sanitizeContentOpt(v any, systemLevel bool) (any, bool) {
+	fn := sanitizeText
+	if systemLevel {
+		fn = sanitizeTextForSystem
+	}
 	switch c := v.(type) {
 	case string:
-		s := sanitizeText(c)
+		s := fn(c)
 		return s, s != c
 	case []any:
 		changed := false
@@ -239,7 +287,7 @@ func sanitizeContent(v any) (any, bool) {
 			if !ok {
 				continue
 			}
-			if s := sanitizeText(text); s != text {
+			if s := fn(text); s != text {
 				m["text"] = s
 				changed = true
 			}
@@ -282,6 +330,16 @@ func sanitizeToolCalls(v any) bool {
 	return changed
 }
 
+// roleIsSystemLevel 判定 system 级角色：system 及其别名 developer。
+//
+// normalizeRoles 在 prepareBody 里已把 developer 归一为 system，所以跑到这里时
+// 通常只剩 system；此处一并认可 developer，是为了不依赖调用顺序（单测直接调
+// sanitizeMessages 时也是这个口径）。
+func roleIsSystemLevel(role string) bool {
+	r := strings.TrimSpace(role)
+	return strings.EqualFold(r, "system") || strings.EqualFold(r, "developer")
+}
+
 // sanitizeMessages 净化 messages 中的 content 与 tool_calls；任一命中返回 true。
 func sanitizeMessages(messages []any) bool {
 	changed := false
@@ -290,10 +348,22 @@ func sanitizeMessages(messages []any) bool {
 		if !ok {
 			continue
 		}
+		role, _ := m["role"].(string)
 		// content 与 tool_calls 各自独立判断：content 可以为 null（工具调用轮），
 		// 早期版本在此 continue，导致这类消息的 tool_calls 完全不被净化。
+		//
+		// workspace root 只在 system 级内容上替换：其余角色（user / assistant / tool /
+		// 无 role）里的它是一个真实的字面串——用户给的目录名、工具回显的文件内容——
+		// 改了就与用户原意不符。
 		if c, ok := m["content"]; ok {
-			if nc, ch := sanitizeContent(c); ch {
+			var nc any
+			var ch bool
+			if roleIsSystemLevel(role) {
+				nc, ch = sanitizeContentForSystem(c)
+			} else {
+				nc, ch = sanitizeContent(c)
+			}
+			if ch {
 				m["content"] = nc
 				changed = true
 			}
