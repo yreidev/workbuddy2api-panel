@@ -28,6 +28,18 @@ type chatAttempt struct {
 	started time.Time
 }
 
+var errDispatchDenied = errors.New("密钥已无权使用该账号或模型")
+
+// 每次实际提交对话时重查密钥，包含刷新凭证和容量排队之后的派发。
+func (h *Handler) dispatchWorkBuddy(ctx context.Context, acct *auth.Auth, body []byte, clientIP string, meta upstream.ChatMeta, model string) chatAttempt {
+	started := time.Now()
+	if !h.workbuddyAccountAllowed(ctx, acct.UID, model) {
+		return chatAttempt{err: errDispatchDenied, started: started}
+	}
+	rc, status, respBody, err := h.cfg.Upstream.ChatStreamContext(ctx, acct, body, clientIP, meta)
+	return chatAttempt{rc: rc, status: status, body: respBody, err: err, started: started}
+}
+
 // queuePollInterval 两次排队查询之间等多久（按排位，见 upstream.QueuePollInterval）；测试换成很短的间隔。
 var queuePollInterval = upstream.QueuePollInterval
 
@@ -99,10 +111,11 @@ func (h *Handler) capacityQueue(ctx context.Context, acct *auth.Auth, body []byt
 			}
 		}
 		log.Printf("INFO: [server] capacity queue: model=%s acct=%s 排了 %.1fs 到号，原样重发", model, label, time.Since(since).Seconds())
-		started := time.Now()
-		rc, status, respBody, err := h.cfg.Upstream.ChatStreamContext(ctx, acct, body, clientIP, meta)
-		last = chatAttempt{rc: rc, status: status, body: respBody, err: err, started: started}
-		if !isQueueWaiting(err) {
+		last = h.dispatchWorkBuddy(ctx, acct, body, clientIP, meta, model)
+		if errors.Is(last.err, errDispatchDenied) {
+			return cancelQueue("密钥权限已变更")
+		}
+		if !isQueueWaiting(last.err) {
 			return last
 		}
 	}

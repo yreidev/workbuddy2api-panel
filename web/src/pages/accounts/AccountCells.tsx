@@ -93,7 +93,7 @@ export function StatusCell({ a, health, now, proxy }: { a: Account; health: Heal
 }
 
 /** 上次测活：「测活 3 分钟前 · 通 · 首字 1.2s · 共 2.3s」，不通标红；悬停看模型、时间和完整原因。没测过不显示 */
-export function LivenessLine({ a, now, className = '' }: { a: Account; now: number; className?: string }) {
+export function LivenessLine({ a, now, className = '' }: { a: Pick<Account, 'last_liveness'>; now: number; className?: string }) {
   const r = a.last_liveness
   const at = timeMs(r?.at)
   if (!r || at == null) return null

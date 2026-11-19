@@ -211,6 +211,16 @@ func TestDecodeErrors(t *testing.T) {
 	if _, err := io.ReadAll(bad.Body); err == nil {
 		t.Fatal("坏数据应报错")
 	}
+	if err := bad.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	shortHeader := decodeResponse(encResp(200, "gzip", []byte{0x1f, 0x8b, 0x08}))
+	if _, err := io.ReadAll(shortHeader.Body); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("不完整的 gzip 头应报告 unexpected EOF，实际 %v", err)
+	}
+	if err := shortHeader.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	badZstd := decodeResponse(encResp(200, "zstd", []byte("not zstd at all")))
 	if _, err := io.ReadAll(badZstd.Body); err == nil {
 		t.Fatal("坏的 zstd 应报错")
@@ -288,6 +298,49 @@ func TestDecodeStreamingLazy(t *testing.T) {
 	rest, err := io.ReadAll(resp.Body)
 	if err != nil || string(rest) != "data: 2\n\n" {
 		t.Fatalf("其余 = %q err=%v", rest, err)
+	}
+}
+
+func TestDecodeBodyCloseWhileReading(t *testing.T) {
+	data := encZstd(t, encPlain)
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	body, _ := DecodeBody("zstd", pr)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := pw.Write(data)
+		writeDone <- err
+	}()
+
+	first := make([]byte, len(encPlain))
+	if _, err := io.ReadFull(body, first); err != nil || string(first) != encPlain {
+		t.Fatalf("解压首段 = %q，错误 %v", first, err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, body)
+		readDone <- err
+	}()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- body.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Errorf("关闭解压正文: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("上游未结束时，关闭解压正文卡住")
+	}
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Error("被关闭打断的读取应返回错误")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("关闭解压正文未解除挂起的读取")
 	}
 }
 

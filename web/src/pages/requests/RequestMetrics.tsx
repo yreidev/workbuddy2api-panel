@@ -52,7 +52,7 @@ function Tokens({ e }: { e: RequestEvent }) {
   const cache = cacheRateText(e.cache_hit_tokens, e.cache_miss_tokens)
   return (
     <span className="inline-flex flex-col items-end">
-      {fmtTok(requestTokens(e))}
+      {requestTokens(e) == null ? '未知' : fmtTok(requestTokens(e))}
       {cache !== '—' && <span className="whitespace-nowrap text-xs text-muted">命中 {cache}</span>}
     </span>
   )
@@ -71,7 +71,8 @@ export function RequestMetrics() {
   const d = query.data
   const m = d?.metrics ?? null
   const all = useMemo(() => d?.recent ?? [], [d])
-  const shown = useMemo(() => all.filter((e) => matchRequest(e, { q, outcome }, e.account && names.label(e.account))), [all, q, outcome, names])
+  const accountName = (e: RequestEvent) => e.account_id ? names.name(e.account_id) : e.account ? names.label(e.account) : '—'
+  const shown = all.filter((e) => matchRequest(e, { q, outcome }, accountName(e)))
   // 归档里早于「调用来源」功能的条目没有来源字段：提示一句，免得以为筛选坏了
   const hasSource = all.some((e) => e.client_ip || e.user_agent)
   const count = !all.length ? '' : (shown.length !== all.length ? `命中 ${shown.length} / ${all.length} 条` : `${all.length} 条`) + (hasSource ? '' : ' · 来源未记录')
@@ -155,7 +156,7 @@ export function RequestMetrics() {
                       </Table.Cell>
                       <Table.Cell className="whitespace-nowrap font-mono">{e.model || '—'}</Table.Cell>
                       <Table.Cell className="whitespace-nowrap">
-                        {e.account ? names.label(e.account) : '—'}
+                        {accountName(e)}
                         {e.proxy && <div className="text-xs text-muted">代理 {e.proxy}</div>}
                       </Table.Cell>
                       <Table.Cell className="whitespace-nowrap">{e.api_key || dash}</Table.Cell>
@@ -184,13 +185,13 @@ export function RequestMetrics() {
                 {e.error && <p className="wrap-anywhere text-xs text-danger">{e.error}</p>}
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5">
                   <span className="font-mono">{e.model || '—'}</span>
-                  <span className="text-muted">{e.account ? names.label(e.account) : '—'}</span>
+                  <span className="text-muted">{accountName(e)}</span>
                   {e.proxy && <span className="text-muted">代理 {e.proxy}</span>}
                   {e.api_key && <span className="text-muted">密钥 {e.api_key}</span>}
                 </div>
                 <div className="flex flex-wrap gap-x-3 text-xs text-muted tabular-nums">
                   <span>{fmtMs(e.duration_ms)}</span>
-                  <span>{fmtTok(requestTokens(e))} tok</span>
+                  <span>{requestTokens(e) == null ? 'token 未知' : fmtTok(requestTokens(e)) + ' tok'}</span>
                   {cacheRateText(e.cache_hit_tokens, e.cache_miss_tokens) !== '—' && <span>命中 {cacheRateText(e.cache_hit_tokens, e.cache_miss_tokens)}</span>}
                   <span>{requestCredit(e)}</span>
                 </div>

@@ -138,7 +138,7 @@ function BlockedModelsEditor({ a }: { a: Account }) {
           </TagGroup.List>
         </TagGroup>
       )}
-      <ModelPatternInput value={names} onChange={(next) => save.mutate(next)} isDisabled={save.isPending} />
+      <ModelPatternInput workbuddyOnly value={names} onChange={(next) => save.mutate(next)} isDisabled={save.isPending} />
     </div>
   )
 }

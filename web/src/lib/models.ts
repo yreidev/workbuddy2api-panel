@@ -5,6 +5,7 @@
 // 模型列表的筛选、排序与实测上限关联（纯函数，见 models.test.ts）。
 // 模型目录一次拉全（几十条），筛选排序都在前端做：改条件零延迟，也不会每调一次筛选就打一次上游。
 import type { Model, ModelLockRow, Probe, RequestEvent } from './types'
+import { parseModelTarget, targetName } from './targets'
 
 export type RealmFilter = 'all' | 'cn' | 'global'
 export type Capability = 'tools' | 'vision' | 'reasoning' | 'default'
@@ -18,6 +19,7 @@ export interface ModelFilter {
   /** 搜 ID / 名称 / 厂商 / 描述 / 标签，空格分词后逐个 AND（如「cn 视觉」） */
   q: string
   realm: RealmFilter
+  product?: string
   /** 多选，全部满足才算 */
   caps: Capability[]
   effort: EffortFilter
@@ -27,7 +29,7 @@ export interface ModelFilter {
 export const EMPTY_MODEL_FILTER: ModelFilter = { q: '', realm: 'all', caps: [], effort: '', promo: '' }
 
 /** 模型 id 带域前缀（cn:glm-5.2 / global:gpt-5），就是调用时要填的完整 model 值 */
-export const modelRealm = (id: string) => (id.startsWith('global:') ? 'global' : id.startsWith('cn:') ? 'cn' : '')
+export const modelRealm = (id: string) => parseModelTarget(id).region
 
 export function hasCapability(m: Model, c: Capability): boolean {
   if (c === 'tools') return !!m.supports_tool_call
@@ -37,11 +39,12 @@ export function hasCapability(m: Model, c: Capability): boolean {
 }
 
 function searchText(m: Model): string {
-  return [m.id, m.name, m.vendor, m.description, (m.tags || []).join(' '), m.enterprise_only ? '企业专属' : ''].filter(Boolean).join(' ').toLowerCase()
+  return [m.id, targetName(parseModelTarget(m.id).target), m.name, m.vendor, m.description, (m.tags || []).join(' '), m.enterprise_only ? '企业专属' : ''].filter(Boolean).join(' ').toLowerCase()
 }
 
 export function matchModel(m: Model, f: ModelFilter): boolean {
   if (f.realm !== 'all' && modelRealm(m.id) !== f.realm) return false
+  if (f.product && parseModelTarget(m.id).product !== f.product) return false
   if (f.caps.some((c) => !hasCapability(m, c))) return false
   const efforts = m.supported_efforts || []
   if (f.effort === 'any' && !efforts.length) return false
@@ -99,10 +102,9 @@ export function hiddenModelSet(hidden: string[]): Set<string> {
   for (const raw of hidden) {
     const m = raw.trim()
     if (!m) continue
-    const i = m.indexOf(':')
-    const prefix = i < 0 ? '' : m.slice(0, i)
-    if (prefix === 'cn' || prefix === 'global') {
-      out.add(m)
+    const parsed = parseModelTarget(m)
+    if (parsed.target) {
+      out.add(parsed.product === 'workbuddy' ? parsed.region + ':' + parsed.native : parsed.target + ':' + parsed.native)
     } else {
       out.add('cn:' + m)
       out.add('global:' + m)
@@ -132,11 +134,9 @@ export interface ModelAvailability {
 export function modelAvailability(
   id: string, locks: ModelLockRow[], recent: RequestEvent[], fmtTime: (iso: string) => string,
 ): ModelAvailability | null {
-  const i = id.indexOf(':')
-  const realm = i < 0 ? '' : id.slice(0, i)
-  if (realm !== 'cn' && realm !== 'global') return null
-  const bare = id.slice(i + 1)
-  const lock = locks.find((r) => r.realm === realm && r.model === bare)
+  const parsed = parseModelTarget(id)
+  if (!parsed.target) return null
+  const lock = parsed.product === 'workbuddy' ? locks.find((r) => r.realm === parsed.region && r.model === parsed.native) : undefined
   if (lock) {
     const reason = (lock.reason || '').trim()
     const why = reason ? '；上游：' + reason : ''
@@ -159,7 +159,7 @@ export function modelAvailability(
   if (!ev) return { label: '待验证', color: 'default', tip: '没有模型锁，最近的请求里也没用过它；目录里有不代表号能用' }
   const when = ev.time ? ' · ' + fmtTime(ev.time) : ''
   const err = ev.error ? '：' + ev.error : ''
-  if (ev.outcome === 'success' || (ev.status >= 200 && ev.status < 300)) {
+  if (ev.outcome === 'success' || (!ev.outcome && ev.status >= 200 && ev.status < 300)) {
     return { label: '可用', color: 'success', tip: '最近一次真实请求成功' + when }
   }
   if (ev.status === 429) return { label: '限流', color: 'warning', tip: '最近一次请求被限流' + when + err }

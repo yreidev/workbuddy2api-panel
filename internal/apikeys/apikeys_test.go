@@ -74,7 +74,7 @@ func TestCreate(t *testing.T) {
 	if err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("文件应已写入且为 0600: %v %v", st, err)
 	}
-	if f := readFile(t, path); f.Version != fileVersion || len(f.Keys) != 1 || f.Keys[0].Secret != k.Secret {
+	if f := readFile(t, path); string(f.Version) != fileVersion || len(f.Keys) != 1 || f.Keys[0].Secret != k.Secret {
 		t.Fatalf("file = %+v", f)
 	}
 	got, ok := s.Lookup(k.Secret)

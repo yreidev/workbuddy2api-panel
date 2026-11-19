@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -50,16 +51,17 @@ func captureClientHello(t *testing.T, dial func(ctx context.Context, network, ad
 		}
 		defer conn.Close()
 		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		buf := make([]byte, 0, 8192)
-		tmp := make([]byte, 4096)
-		for {
-			n, rerr := conn.Read(tmp)
-			buf = append(buf, tmp[:n]...)
-			if rerr != nil || n == 0 || len(buf) > 4096 {
-				break
-			}
+		header := make([]byte, 5)
+		if _, err := io.ReadFull(conn, header); err != nil {
+			got <- nil
+			return
 		}
-		got <- buf
+		payload := make([]byte, int(binary.BigEndian.Uint16(header[3:5])))
+		if _, err := io.ReadFull(conn, payload); err != nil {
+			got <- nil
+			return
+		}
+		got <- append(header, payload...)
 	}()
 	// 用主机名 localhost（而非监听器的 127.0.0.1）当 dial 目标：ServerName 是 IP 时 TLS 规范下
 	// SNI 扩展会被省略，JA3 会少扩展 0；生产里出站 addr 永远是域名，这里照此用主机名。
@@ -82,8 +84,6 @@ func captureClientHello(t *testing.T, dial func(ctx context.Context, network, ad
 		return nil
 	}
 }
-
-func isGREASEValue(v uint16) bool { return v&0x0f0f == 0x0a0a && v>>8 == v&0xff }
 
 // computeJA3 从 ClientHello 记录算 JA3 字符串（版本,密码,扩展,曲线,点格式；去 GREASE）。
 func computeJA3(rec []byte) string {
@@ -161,7 +161,7 @@ func ja4ALPNCode(v string) string {
 // computeJA4 从 ClientHello 记录算 JA4（TLS client）指纹，照 FoxIO 官方 spec：
 // a 段 t + TLS 版本 + 有无 SNI + 密码数 + 扩展数（含 SNI/ALPN）+ ALPN 首尾；
 // b 段密码套件去 GREASE、升序排序后 sha256 取前 12；
-// c 段扩展去 GREASE 且去 SNI(0)/ALPN(16)、升序排序，拼签名算法（原序、不排序）后 sha256 取前 12。
+// c 段扩展去 GREASE 且去 SNI(0)/ALPN(16)、升序排序，拼签名算法（去 GREASE、原序）后 sha256 取前 12。
 // 比 JA3 多钉签名算法扩展的内容。
 func computeJA4(rec []byte) string {
 	b := rec[9:]
@@ -204,7 +204,10 @@ func computeJA4(rec []byte) string {
 			if len(body) >= 2 {
 				n := int(binary.BigEndian.Uint16(body[0:2]))
 				for i := 0; i+2 <= n && 2+i+2 <= len(body); i += 2 {
-					sigAlgs = append(sigAlgs, binary.BigEndian.Uint16(body[2+i:2+i+2]))
+					sig := binary.BigEndian.Uint16(body[2+i : 2+i+2])
+					if !isGREASEValue(sig) {
+						sigAlgs = append(sigAlgs, sig)
+					}
 				}
 			}
 		case 43: // supported_versions：list len(1) + 一串 2 字节，取最高（去 GREASE）

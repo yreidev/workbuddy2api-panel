@@ -4,6 +4,8 @@
 
 // 模型路由规则（config.json 的 model_routes）：匹配口径与网关 internal/server/model_route.go、internal/glob 一致。
 
+import { parseModelTarget } from './targets'
+
 export interface ModelRoute {
   match: string
   target: string
@@ -64,7 +66,7 @@ export type RouteVerdict =
 export function explainRoute(rs: ModelRoute[], name: string, catalog: string[]): RouteVerdict {
   const n = name.trim()
   if (!n) return { kind: 'empty' }
-  if (n.startsWith('cn:') || n.startsWith('global:')) return { kind: 'prefixed' }
+  if (parseModelTarget(n).target) return { kind: 'prefixed' }
   if (catalog.some((id) => id.replace(/^(cn|global):/, '') === n)) return { kind: 'catalog' }
   const rules = cleanRoutes(rs)
   const index = rules.findIndex((r) => r.match && globMatch(r.match, n))

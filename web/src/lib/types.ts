@@ -91,6 +91,76 @@ export interface Account {
   proxy_blocked?: string
 }
 
+/** Trae、Qoder 账号的面板视图，不包含凭证。 */
+export interface ProviderAccount {
+  manual_disabled?: boolean
+  paused?: boolean
+  blocked_models?: string[]
+  liveness_model?: string
+  account_id: string
+  name: string
+  targets: string[]
+  groups: string[]
+  priority: number
+  disabled: boolean
+  proxy_id?: string
+  in_flight: number
+  cool_until?: string
+  error?: string
+  models: { id: string; name: string; tools: boolean }[]
+  last_liveness?: LivenessResult
+  quota?: ProviderQuotaStatus
+}
+
+export interface ProviderQuotaSnapshot {
+  fetched_at: string
+  unit?: string
+  balance: number | null
+  used: number | null
+  total: number | null
+  exceeded?: boolean
+  expires_at?: string
+  refresh_at?: string
+  packages?: {
+    name: string
+    unit: string
+    total: number | null
+    used: number | null
+    unlimited?: boolean
+    hidden?: boolean
+    starts_at?: string
+    ends_at?: string
+    expires_at?: string
+    refresh_at?: string
+  }[]
+}
+
+export interface ProviderQuotaStatus {
+  snapshot?: ProviderQuotaSnapshot
+  checked_at: string
+  error?: string
+}
+
+export interface ProviderUsage {
+  key_id?: string
+  target: string
+  account_id: string
+  model: string
+  requests: number
+  failed: number
+  prompt_tokens: number
+  completion_tokens: number
+  tokens_known: number
+  charge_known: number
+  charge: number
+  unit?: string
+}
+
+export interface ProvidersResp {
+  accounts: ProviderAccount[]
+  usage: ProviderUsage[]
+}
+
 /** 账号分组（internal/pool/groups.go、internal/panel/groups.go）。客户端密钥可以限定只用哪些组的号 */
 export interface Group {
   id: string
@@ -130,10 +200,16 @@ export interface LivenessResult {
   ttfb_ms?: number
   duration_ms?: number
   credit?: number
+  credit_known?: boolean
+  credit_unit?: string
   /** 定时测活发起的；面板上点的没有这个字段 */
   scheduled?: boolean
   /** 测通后解除了冷却、熔断或网关自动加的禁用 */
   recovered?: boolean
+  /** 新平台用量未知时明确返回 false，不折算为 WorkBuddy 积分。 */
+  tokens_known?: boolean
+  prompt_tokens?: number
+  completion_tokens?: number
 }
 
 /** 单号测活接口的返回：结果和上游回复的文字 */
@@ -235,6 +311,9 @@ export interface ProbesResp {
 }
 
 export interface UsageAgg {
+  credit_unit?: string
+  credit_by_unit?: CreditUsage[] | null
+  unknown_tokens?: number
   requests: number
   errors: number
   prompt_tokens: number
@@ -256,6 +335,7 @@ export interface UsageAgg {
 
 /** 积分扣除按账号 / 按模型（模型行带请求时生效的积分倍率）聚合的一行 */
 export interface CreditUsage {
+  unit?: string
   key: string
   realm?: string
   nickname?: string
@@ -272,6 +352,7 @@ export interface CreditUsage {
 export interface KeyedUsage extends UsageAgg {
   key: string
   realm?: string
+  realms?: string[]
   /** 按账号的行里放昵称 */
   extra?: string
 }
@@ -470,6 +551,9 @@ export interface ImportResp {
 
 /** 一次请求的元数据（不含提示词、响应正文与凭证） */
 export interface RequestEvent {
+  target?: string
+  account_id?: string
+  tokens_known?: boolean
   time: string
   request_id: string
   path: string
@@ -478,7 +562,7 @@ export interface RequestEvent {
   model?: string
   status: number
   ok: boolean
-  /** success / http_error / stream_error / interrupted */
+  /** success / http_error / stream_error / interrupted / ledger_pending */
   outcome: string
   duration_ms: number
   ttfb_ms?: number
@@ -488,6 +572,7 @@ export interface RequestEvent {
   total_tokens?: number
   credit?: number
   credit_known: boolean
+  credit_unit?: string
   cache_hit_tokens?: number
   cache_miss_tokens?: number
   /** 调用来源（logging.request_client_info 关闭时为空） */
@@ -686,6 +771,8 @@ export interface KeyUsage {
 
 /** 面板里建的客户端密钥（面板只认管理员密钥，所以列表里带原文） */
 export interface ApiKey {
+ allowed_targets?: string[]
+ default_target?: string
   id: string
   name: string
   note?: string
@@ -718,6 +805,8 @@ export interface KeysResp {
 
 /** 新建、修改密钥时提交的字段（修改也要整份提交） */
 export interface KeyInput {
+ allowed_targets: string[]
+ default_target: string
   name: string
   note: string
   enabled: boolean
@@ -791,6 +880,7 @@ export interface ProxyPool {
 }
 
 export interface ProxyItem {
+  platform_accounts?: string[]
   id: string
   name: string
   /** 打码后的地址 */

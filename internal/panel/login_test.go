@@ -205,7 +205,7 @@ func TestLoginStart(t *testing.T) {
 			h.Get("X-Custom-Channel-Id") != "unknown" || h.Get("X-Domain") != loginCNHost {
 			t.Fatalf("发起授权的头不对: %v", h)
 		}
-		if ua := h.Get("User-Agent"); !strings.Contains(ua, "WorkBuddy/5.9.3") || !strings.Contains(ua, "CLI/") {
+		if ua := h.Get("User-Agent"); !strings.Contains(ua, "WorkBuddy/5.11.3") || !strings.Contains(ua, "CLI/") {
 			t.Fatalf("国内版后台服务 UA 不对: %q", ua)
 		}
 		if id := h.Get("X-Request-ID"); len(id) != 32 {

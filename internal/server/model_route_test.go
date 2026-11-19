@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yreidev/workbuddy2api-panel/internal/apikeys"
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
 	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
+	"github.com/yreidev/workbuddy2api-panel/internal/pool"
+	"github.com/yreidev/workbuddy2api-panel/internal/providers"
 )
 
 // routeRig 国内版目录 glm-5.2、国际版目录 gpt-5.5，开跨域合池（目录外的名字走国内版），带一组路由规则。
@@ -36,6 +39,26 @@ var testRoutes = []livecfg.ModelRoute{
 	{Match: "gpt-*", Target: "glm-5.2"}, // 目录里有的 gpt-5.5 不该被它改
 	{Match: "codex-mini*", Target: "typo-model"},
 	{Match: "typo*", Target: "glm-5.2"}, // 入口路由过的名字不再路由第二遍
+}
+
+func TestRouteToProviderWithoutWorkBuddyAccounts(t *testing.T) {
+	h, _ := routeRig(t, false, livecfg.ModelRoute{Match: "claude-*", Target: "qoder:cn:model"})
+	h.cfg.Pool = pool.New("")
+	m, err := providers.Open("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Import(context.Background(), providers.AccountInput{Target: "qoder:cn", Credential: providers.Credential{UID: "fixture", AccessToken: "fixture", UserType: "teams"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.Providers = m
+	got, changed := h.routeModel(context.Background(), "claude-sonnet")
+	if !changed || got != "qoder:cn:model" {
+		t.Fatal("只有新平台账号时路由失效", got, changed)
+	}
+	if got, changed := h.routeModel(context.Background(), "qoder:global:claude-sonnet"); changed || got != "qoder:global:claude-sonnet" {
+		t.Fatal("明确指定的产品地区被改写")
+	}
 }
 
 // TestRouteChat /v1/chat/completions：目录外的名字按第一条匹配的规则改写，目录里有的、带前缀的不动。
@@ -129,5 +152,40 @@ func TestRouteCatalogUnavailable(t *testing.T) {
 	})
 	if got, ok := h.routeModel(context.Background(), "claude-x"); ok || got != "claude-x" {
 		t.Errorf("目录拉不到：%s %v", got, ok)
+	}
+	m, err := providers.Open("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := m.Import(t.Context(), providers.AccountInput{Target: "qoder:cn", Credential: providers.Credential{UID: "fixture", AccessToken: "fixture", UserType: "teams"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.Providers = m
+	h.cfg.Pool.Add(&auth.Auth{UID: "fixture-cn", AccessToken: "fixture", ExpiresAt: 9999999999})
+	for _, disabled := range []bool{false, true} {
+		if err := m.Update(id, providers.AccountInput{Disabled: disabled}, false); err != nil {
+			t.Fatal(err)
+		}
+		if got, changed := h.routeModel(t.Context(), "claude-x"); changed || got != "claude-x" {
+			t.Fatalf("混合部署目录未知时被兜底规则改写: %s", got)
+		}
+	}
+
+}
+
+func TestClaudeCodeSearchResolvesUnsupportedAlias(t *testing.T) {
+	for _, target := range []string{"traecode:cn:model", "qoder:global:model"} {
+		h, _ := routeRig(t, false, livecfg.ModelRoute{Match: "alias-*", Target: target})
+		keys, err := apikeys.Open("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.cfg.Keys = keys
+		key := createKey(t, keys, apikeys.Input{Name: "搜索测试", Enabled: true, AllowedTargets: []string{"workbuddy:cn", strings.TrimSuffix(target, ":model")}})
+		resp := post(h, "/v1/messages", strings.Replace(claudeCodeSearchBody, "glm-5.2", "alias-search", 1), "Authorization", "Bearer "+key.Secret)
+		if resp.Code != 400 || !strings.Contains(resp.Body.String(), "该上游不提供网关联网搜索") {
+			t.Fatalf("模型别名错误转入搜索: %d %s", resp.Code, resp.Body.String())
+		}
 	}
 }

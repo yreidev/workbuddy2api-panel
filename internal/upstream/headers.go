@@ -15,17 +15,16 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/session"
 )
 
-// 官方取值依据：WorkBuddy 桌面端安装包（国内版 WorkBuddy-darwin-arm64-5.9.3、国际版 5.9.4，都内置 CLI
-// @tencent-ai/codebuddy-code 2.165.0）。对话、刷新令牌、模型目录由内置
+// 官方取值依据：WorkBuddy 桌面端安装包（国内版 5.11.3 / CLI 2.176.0、国际版 5.9.4 / CLI 2.165.0）。对话、刷新令牌、模型目录由内置
 // CLI 发；积分、签到、成长任务、旅行、上报由桌面端后台服务发。两者用同一套请求框架，UA 段序不同。
 const (
 	// defaultClientVersionCN / defaultClientVersionGlobal 两域桌面端版本（UA 与 X-IDE-Version）。
 	// config upstream.client_version 可覆盖（两域共用一个值，空 = 内置默认）。
-	defaultClientVersionCN     = "5.9.3"
+	defaultClientVersionCN     = "5.11.3"
 	defaultClientVersionGlobal = "5.9.4"
 	// defaultCliVersionCN / defaultCliVersionGlobal 两域桌面端内置 CLI 的版本（UA 的 `CLI/<ver>` 段）。
 	// config upstream.cli_version 可覆盖（两域共用一个值，空 = 内置默认）。
-	defaultCliVersionCN     = "2.165.0"
+	defaultCliVersionCN     = "2.176.0"
 	defaultCliVersionGlobal = "2.165.0"
 	// deploymentType 两域 product.json 的 deploymentType。官方请求框架的 ProductEndpointHttpInterceptor
 	// 把它作为 X-Product 加到经过框架的每个请求上（对话、刷新令牌、模型目录、积分等都在内）。
@@ -41,7 +40,7 @@ const (
 	stainlessTimeout        = "1200"
 	stainlessRetryCount     = "0"
 	// nodeRuntimeVersionCN / nodeRuntimeVersionGlobal 两域桌面端 Electron 内置的 Node 版本
-	// （X-Stainless-Runtime-Version = process.version）。国内版 5.9.3、国际版 5.9.4 都是 Electron 37.10.3
+	// （X-Stainless-Runtime-Version = process.version）。国内版 5.11.3、国际版 5.9.4 都是 Electron 37.10.3
 	// 内置 v22.21.1（2026-10-28、10-31 读 Electron Framework 实测，与 5.8.x 相同）。
 	nodeRuntimeVersionCN     = "v22.21.1"
 	nodeRuntimeVersionGlobal = "v22.21.1"
@@ -80,7 +79,7 @@ func applicationNameFor(a *auth.Auth) string {
 
 // defaultCLIUA 内置 CLI 的 UA（UserAgentHttpInterceptor）：
 // `<platform>/<ver> <applicationName>/<ver> CLI/<cli>`，platform 由桌面端固定传 "WorkBuddy"。
-// 国内版 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，国际版 `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。
+// 国内版 `WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0`，国际版 `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。
 func (c *Client) defaultCLIUA(a *auth.Auth) string {
 	v := c.clientVersion(a)
 	return "WorkBuddy/" + v + " " + applicationNameFor(a) + "/" + v + " CLI/" + c.cliVersion(a)
@@ -90,7 +89,7 @@ func (c *Client) defaultCLIUA(a *auth.Auth) string {
 // `<applicationName>/<ver> <platform>/<ver> CLI/<cli>`。后台服务的 platform 取产品配置的
 // applicationName（WorkbuddyClientInfoProvider.initClientInfo）：桌面端只给内置 CLI 的进程设
 // CLIENT_INFO_PLATFORM=WorkBuddy，后台服务的子进程环境里没有（buildDaemonProcessEnv），所以两段都是
-// 应用名。国内版 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，和 CLI 的 UA 一样；国际版
+// 应用名。国内版 `WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0`，和 CLI 的 UA 一样；国际版
 // `workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。2026-10-31 读 5.8.3、5.9.4 安装包核对，同类项目
 // misakano7545/workbuddy2api-panel 的真机抓包也是这样；1.8.0 及以前国际版第二段发的是 WorkBuddy。
 func (c *Client) defaultDaemonUA(a *auth.Auth) string {
@@ -229,7 +228,7 @@ type ChatMeta struct {
 	Protected             bool   // X-Moderation-Type: ["protected"]：云端 / 付费专家的对话才发（见 MarketExpert.Protected）
 }
 
-// ChatHeaders 设置 chat 出站请求头。形状对齐桌面端内置 CLI 的对话请求（两域都是 2.165.0，见文件头），
+// ChatHeaders 设置 chat 出站请求头。形状对齐桌面端内置 CLI 的对话请求（当前两域版本见文件头），
 // 10-19 生产用国内版、国际版个人号逐项实测均 200（当时两域都是 2.161.0）：
 //   - 官方对话请求不带 Origin / Referer / Accept-Language / X-CodeBuddy-Request / X-Machine-ID /
 //     X-Session-ID，也不带 X-No-*（那几个只在登录前的 auth/state、auth/token 上发）。

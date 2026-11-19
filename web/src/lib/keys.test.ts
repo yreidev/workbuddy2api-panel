@@ -50,7 +50,7 @@ describe('表单与提交', () => {
     const f = keyFormFrom(k)
     expect(f.daily).toEqual({ requests: null, tokens: null, credits: 10 })
     expect(keyInput(f)).toEqual({
-      name: '张三', note: '朋友', enabled: true, expires_at: '2026-11-01T00:00:00.000Z',
+      allowed_targets: ['workbuddy:cn', 'workbuddy:global'], default_target: '', name: '张三', note: '朋友', enabled: true, expires_at: '2026-11-01T00:00:00.000Z',
       daily_limit: { credits: 10 }, total_limit: { requests: 100, tokens: 5000 }, models: ['glm-*'], groups: ['g1'],
     })
   })
@@ -91,10 +91,24 @@ describe('模型白名单', () => {
     expect(addModelPattern([], 'x'.repeat(129))).toMatch(/最长 128/)
     expect(addModelPattern([], 'glm 5')).toMatch(/不能有空格/)
   })
+  it('按完整 ID 检查所选上游及白名单，再折叠 WorkBuddy 显示名', () => {
+    const ids = ['cn:shared', 'global:shared', 'global:international', 'qoder:cn:shared', 'qoder:global:shared']
+    const targets = ['workbuddy:cn', 'qoder:global']
+    expect(allowedModels(['*'], ids, targets)).toEqual(['shared'])
+    expect(allowedModels(['qoder:global:*'], ids, targets)).toEqual(['qoder:global:shared'])
+    expect(allowedModels([], ids, targets)).toEqual(['qoder:global:shared', 'shared'])
+    expect(allowedModels(['*'], ids, ['workbuddy:cn', 'workbuddy:global'])).toEqual(['international', 'shared'])
+  })
   it('目录候选与放行范围', () => {
     const bare = bareModelIds(['cn:glm-5.2', 'glm-5.2', 'global:gpt-5.5', 'deepseek-v4.1-flash'])
     expect(bare).toEqual(['deepseek-v4.1-flash', 'glm-5.2', 'gpt-5.5'])
-    expect(allowedModels([], bare)).toEqual(bare)
-    expect(allowedModels(['GLM-*', 'gpt-5.5'], bare)).toEqual(['glm-5.2', 'gpt-5.5'])
+    expect(allowedModels([], bare, ['workbuddy:cn'])).toEqual(bare)
+    expect(allowedModels(['GLM-*', 'gpt-5.5'], bare, ['workbuddy:cn'])).toEqual(['glm-5.2', 'gpt-5.5'])
   })
+})
+
+ describe('上游权限', () => {
+ it('编辑旧密钥不会扩大到新平台', () => { expect(keyInput(keyFormFrom(key())).allowed_targets).toEqual(['workbuddy:cn','workbuddy:global']) })
+ it('保留平台范围与默认上游并校验交集', () => { const f = keyFormFrom(key({ allowed_targets: ['qoder:global'], default_target: 'qoder:global' })); expect(keyInput(f).default_target).toBe('qoder:global'); f.allowedTargets = ['traecode:cn']; expect(validateKeyForm(f)).toMatch(/默认上游/) })
+ it('允许完整新平台模型白名单', () => { expect(addModelPattern([], 'qoder:global:claude-*')).toEqual(['qoder:global:claude-*']) })
 })

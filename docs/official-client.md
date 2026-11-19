@@ -1,13 +1,13 @@
 # 官方客户端对照
 
-网关的出站请求按官方 WorkBuddy 桌面端的取值发送。这里记下依据从哪里来、对齐到了哪一步，以及官方升级后怎么重新核对。
+WorkBuddy 的出站请求按官方桌面端发送；TraeWork、Trae Code、Trae 授权和 Qoder 分别使用对应运行时的传输配置。这里记录依据、对齐范围和官方升级后的复核方法；多平台采样见[分平台传输与身份基准](#分平台传输与身份基准)。
 
 ## 依据
 
 | 项 | 国内版 | 国际版 |
 |---|---|---|
-| 桌面端安装包 | WorkBuddy 5.9.3（macOS arm64） | WorkBuddy AI 5.9.4（macOS arm64） |
-| 内置 CLI（`@tencent-ai/codebuddy-code`） | 2.165.0 | 2.165.0 |
+| 桌面端安装包 | WorkBuddy 5.11.3.43806934（macOS arm64） | WorkBuddy AI 5.9.4（macOS arm64） |
+| 内置 CLI（`@tencent-ai/codebuddy-code`） | 2.176.0 | 2.165.0 |
 | `applicationName`（product.json） | `WorkBuddy` | `workbuddy-ai` |
 
 2026-10-20 从官网下载两个安装包（当时国内版是 5.8.3、国际版是 5.8.4），只解包阅读，没有运行；国内版 5.9.3（2026-10-28）、国际版 5.9.4（2026-10-31）出来后照同样的做法重新对过，见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)和[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。要看的文件有三处：
@@ -19,6 +19,14 @@
 成长中心、积分补偿、新手礼包、试用只在官网网页上，同日读了 `www.workbuddy.cn` 成长中心页的前端代码。
 
 npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：用户实际跑的是安装包里的 CLI，网关在 UA 里报的也是它的版本号。npm 上的 CLI 几乎每天发一版，和桌面端不同步；只把 UA 里的 `CLI/<版本>` 换成 npm 的新版本，会凑出官方不存在的组合（5.8.3 的桌面端不会带 2.174.0 的 CLI），新版 CLI 多发或改发的头也对不上。
+
+### 与国内版桌面端 5.11.3 的对照
+
+2026-11-16 查询官方更新清单并解开[国内 macOS arm64 稳定包](https://download.codebuddy.cn/workbuddy/saas/darwin-arm64/WorkBuddy-darwin-arm64-5.11.3.43806934-ecace0f7.zip)，确认桌面端为 `5.11.3.43806934`、内置 CLI 为 `2.176.0`。国际清单仍为 `5.9.4.42593613`／`2.165.0`，不随国内版改号。
+
+- 国内 UA、`X-IDE-Version` 和上报版本同步到 `5.11.3`／`2.176.0`；上报 `commit` 是 `ecace0f7028166695994300182295329b8b95449`，`releaseDate` 是 `1794501984587`（台湾时间 2026-11-13 00:46:24.587）。
+- 包内 Electron Framework 仍为 `37.10.3`，SDK 仍为 OpenAI `6.25.0`，公共 UA 模板和 1200 秒 SDK 超时未变。用同版官方 Electron Linux runtime 的 Node `22.21.1`／BoringSSL 向本机回环发 `fetch`，新 ClientHello 的 JA3、JA4 与原基准一致；测试同时比对新旧样本。这是同版运行时的回环验证，没有直接执行 macOS 应用。
+- 本次核对版本、UA、运行时、SDK 和传输配置，不代表重新逐项验收全部任务、积分或新增业务功能。下文保留各次读包的历史依据与尚未确认的差异。
 
 ### 与 npm 2.174.0 的对照
 
@@ -515,12 +523,12 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - 设备信息是挑的一台常见 Mac 配置，不是哪台真机，见[设备与平台](#设备与平台)。
 - 小程序事件（开学季、小程序任务）里的会话 id、轮次 id 按桌面端的形状生成，小程序没有源码可对照，没确认。
 - 部门全名（`X-Department-Info`、上报的 `enterprise`）：照官方接上了，池里没有带部门的企业号，上游返回的值什么样、刷新时会不会变都没实测。
-- 传输层：网关出站一律 HTTP/1.1（有意禁了 HTTP/2，见 `transport.go`）。TLS 握手 2026-10-28 起照官方桌面端伪装（`tlsmimic.go`，默认开，此前是 Go 标准库握手）：
+- WorkBuddy 传输层：这条桌面链路使用 HTTP/1.1（见 `transport.go`）；新平台按下文独立配置，不共用这项限制。TLS 握手 2026-10-28 起照官方桌面端伪装（`tlsmimic.go`，默认开，此前是 Go 标准库握手）：
   - 桌面端请求官方走 HTTP/1.1，TLS 握手由 Electron 37.10.3 里的 Node `v22.21.1`（BoringSSL）发。它的 ClientHello——密码套件顺序、扩展顺序、不带 GREASE、ALPN 只 `http/1.1`——既不同于 Go 标准库，也不同于任何浏览器预设，服务端能据此分出客户端类型，所以只能照抓到的真实握手复刻。
   - 用 [uTLS](https://github.com/refraction-networking/utls) v1.8.2（BSD，许可相容）：`tlsmimic.go` 里 embed 一份本机实测抓到的官方 ClientHello 原始字节（`clientHelloHex`），每次拨号用 uTLS 的 `Fingerprinter` 现解析出一份独立的 `ClientHelloSpec`（避免扩展对象跨连接共享），再用 `HelloCustom` + `ApplyPreset` 按它握手。SNI、随机数、`key_share` 等每连接的值由 uTLS 现生成，embed 里抓包时的具体值（含当时 SNI）不会泄漏到实际连接；证书校验与 SNI 仍按请求域名，钉 IP 时也如此。
-  - 抓取办法：2026-10-28 用桌面端内置 Node（`ELECTRON_RUN_AS_NODE` 跑 Electron 的 node）向本机回环发一次握手、抓下 ClientHello。JA3 只看 BoringSSL 与 Node 的 TLS 配置，与宿主系统无关，所以在 Linux 本机抓到的即是官方 Mac 桌面端的指纹。目标 `JA3 = 771,4865-4866-4867-49199-49195-49200-49196-49191-52393-52392-49161-49171-49162-49172-156-157-47-53,0-23-65281-10-11-35-16-13-51-45-43-21,29-23-24,0`，`JA3 MD5 = 1a3153f314dc13e133dc71d113a81b16`，`JA4 = t13d1812h1_5d04281c6031_ef7df7f74e48`（JA4 比 JA3 还多算进签名算法扩展的内容）；uTLS 复刻已逐字节核对一致，单元测试 `tlsmimic_test.go` 把 JA3、JA4 都照同一份握手锁死，指纹一漂移就红。桌面端升级后重抓替换 `clientHelloHex` 即可。
+  - 抓取办法：2026-10-28 用桌面端内置 Node（`ELECTRON_RUN_AS_NODE` 跑 Electron 的 node）向本机回环发一次握手、抓下 ClientHello。该样本来自 Linux 的同版 Electron Node 与对应网络配置；没有直接抓取 macOS 应用线上流量。目标 `JA3 = 771,4865-4866-4867-49199-49195-49200-49196-49191-52393-52392-49161-49171-49162-49172-156-157-47-53,0-23-65281-10-11-35-16-13-51-45-43-21,29-23-24,0`，`JA3 MD5 = 1a3153f314dc13e133dc71d113a81b16`，`JA4 = t13d1812h1_5d04281c6031_ef7df7f74e48`（JA4 比 JA3 还多算进签名算法扩展的内容）；uTLS 发出的密码套件、扩展、JA3 与 JA4 已核对，随机数和密钥等动态值不比较；单元测试 `tlsmimic_test.go` 把 JA3、JA4 都照同一份握手锁死，指纹一漂移就红。桌面端升级后重抓替换 `clientHelloHex` 即可。
   - 开关：配置 `upstream.tls_fingerprint`（默认开，改后重启生效），关掉回落 Go 标准库握手（旧行为）。
-  - 仍没对齐（有意）：官网网页在浏览器里走 HTTP/2 和 Chrome 的 TLS 握手，HTTP/2 才有的 `priority` 头网关也没有；网关伪装的是桌面端（HTTP/1.1），不是浏览器，所以不去对齐网页那套指纹。
+  - WorkBuddy 桌面链路未采用官网网页的浏览器配置：网页走 HTTP/2 和 Chrome 的 TLS 握手，HTTP/2 才有的 `priority` 头网关也没有；网关伪装的是桌面端（HTTP/1.1），不是浏览器，所以不去对齐网页那套指纹。
   - 未实测：本地抓包复刻与单元测试已过，生产上线后的流式对话还没回归（上线后看日志）。
 - 企业号：模型目录、积分、请求头里的企业身份都照官方改了，池里没有企业号，都没有实测；国际版企业号同样。
 - 签到、领奖、接受任务、兑换、补签卡、新手礼包领取、试用：只用必然失败的参数试过，真正成功的那一次要上线后看日志；上报没有实测。
@@ -582,3 +590,793 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 5. 官网网页的接口变化要另看 `www.workbuddy.cn` 成长中心页的前端代码，对应 `internal/upstream/web.go` 和用它的几个文件。
 
 不想等新版本发布时，可以用 `upstream.client_version`、`upstream.cli_version` 先改版本号，见[配置](configuration.md)。
+
+## 新增平台的协议依据与验收边界
+
+2026-11-16 的 TraeWork、Trae Code 与 Qoder 为实验实现。下表分别注明固定提交的第三方协议分析、官方静态源码、本地假上游和真实账号回归；下方另列 2026-11-16 的官方运行时／网页网络采样。**静态源码、回环采样和真实账号调用各有边界，不互相替代**。真实授权、目录、推理、刷新和扣费须逐项记录，当前进度见[多平台验收记录](multi-platform.md#本地验收记录)。
+
+| 平台／操作 | 本仓库请求与处理 | 固定依据 |
+|---|---|---|
+| Trae 国内授权 | PKCE `/authorization`，回调为 `http://127.0.0.1:1024/authorize`，读取 `authCodeInfo.AuthCode`，向 `api.trae.com.cn` 发 `POST /trae/api/v3/oauth/ExchangeToken`，保存同一机器、设备与 P-256 密钥；`GetUserInfo` 带 `ReqSource=IDE`、`IDEVersion` | [cli2api credential/client/device](https://github.com/caigee-cmd/cli2api/tree/5224c100c6412d08ce56895e68ddadd6d7979e5d/internal/providers/trae)；下方补充官方网页核对 |
+| Trae 刷新 | 有设备私钥时走 v3 `DeviceInfo`／`DeviceProof`，签名覆盖方法、路径、client ID、refresh token、Unix 秒、nonce；只有不带设备密钥的导入凭证才使用旧 cloudide 刷新形状，不在拒绝后切换接口 | 同上 `exchangeDeviceBound`、`deviceProofPayload`；旧凭证是否仍被接受未确认 |
+| Trae Code 目录／对话 | `POST /api/ide/v1/get_detail_param` 的 `chat_v3` 目录；`POST /api/agent/v3/llm_utils_chat`；工具 schema 为 JSON 字符串，历史调用使用 `function_call`；指定工具的 `tool_choice` 从 OpenAI 对象转换为工具名字符串，`none` 时移除工具定义与选择字段；解析 output、token_usage、done，并忽略合法字符串形式的 progress_notice | 同上 catalog/payload/sse。当前版本改按官方稳定包产品 `3.4.20`、构建 `2.3.103559`、AI 扩展 API version code `20260212`；2026-11-17 真实请求确认 progress_notice 可为 JSON 字符串，旧解析器会报错；指定工具对象原样转发时三协议均被上游以 HTTP 400／4001 拒绝，工具名字符串转换依据固定参考源码。回归覆盖通知后继续输出、工具、用量与完成及禁用工具，仍拒绝坏 JSON／错误正文及缺少完成事件 |
+| TraeWork 目录／对话 | `work.trae.cn/api/remote/v1/models` 只取 `solo_work_remote`；创建 `mode=work` 会话后 GET events；合并累计文本快照，不跨产品回落 | [Trae2api-cn remote client](https://github.com/autumnsentiment/Trae2api-cn/blob/5c87d6c309499974f5dc786ba2fe22d3c64db1cf/src/trae_remote_client.py)、[SSE 分析](https://github.com/autumnsentiment/Trae2api-cn/blob/5c87d6c309499974f5dc786ba2fe22d3c64db1cf/src/sse.py) |
+| TraeWork 会话创建（官方网页核对） | `initial_message.query` 是 JSON 序列化的 `[{"type":"text","data":{"content":"…"}}]`，不能发送普通文本；`custom_model` 将目录的 `name`／`config_name` 映射为 `model_name`／`config_name`，并带 `config_source`、`is_preset` 和 `use_remote_service` 等请求字段，不直接照搬目录展示对象。`__hit_shared_artifact_and_workroom`／`__hit_my_space` 在请求顶层；`common_params` 使用 `biz_session_id`、`solo_chat_mode` | 2026-11-16 读取[官方网页主脚本](https://lf-cdn.marscode.cn/obj/marscode-bucket-cn/goofy_deploy_edenx/ide/trae-web-mono/static/js/main.3b45430b.js)与[会话模块脚本](https://lf-cdn.marscode.cn/obj/marscode-bucket-cn/goofy_deploy_edenx/ide/trae-web-mono/static/js/1402.b3bc0495.js)，核对 `buildSendMessageRequest`、`createSessionAndSendMessage`、模型描述构造和公共参数。会话模块 SHA-256：`059fdb8c4681715276b9d60c1ca6dfb09110add8c74130fd5ad2ad391484bd63`。本地回归覆盖这些形状；后续真实测活与指定模型的三协议测试通过，此前 HTTP 500／`995000` 未再出现，范围见多平台验收记录 |
+| Qoder 设备授权／刷新 | 国内／国际 device selectAccounts、deviceToken poll、userinfo，404 作为等待状态；国内直接使用设备令牌及 deviceToken/refresh，国际使用 me/jobToken 及 jobToken/refresh；单独保存 token_kind | [Magpie Qoder 插件](https://github.com/magpie-community/plugins/tree/175dfd25552d769905bbfd57ecd57036eaa37910)；国内设备流程另核对下方官方 CLI。国内网页授权身份已通过真实目录、三协议、CLI 工具与设备刷新；国际版仍未真实验收 |
+| Qoder PAT／身份 | `POST /algo/api/v3/user/jobToken?Encode=1`；`user/status` 获取 `userType`，不硬编码个人订阅档位 | [cli2api qauth](https://github.com/caigee-cmd/cli2api/tree/5224c100c6412d08ce56895e68ddadd6d7979e5d/internal/providers/qoder/qauth) |
+| Qoder 目录／对话 | COSY 编码、签名；`/algo/api/v2/model/list?Encode=1`；`service/pro/sse/agent_chat_generation`，`session_type=qodercli`；body 对象／JSON 字符串包络解析；网关把已校验的纯文本段按顺序合并，再填入消息、`system` 与 `chat_context` | [cli2api Qoder](https://github.com/caigee-cmd/cli2api/tree/5224c100c6412d08ce56895e68ddadd6d7979e5d/internal/providers/qoder)；COSY 代码的上游 MIT 许可保存在 `internal/providers/cosy/NOTICE`；文本段归一化是本仓库的入口适配，本地假上游已验证，非新增的官方抓包结论 |
+| Qoder SSE 包络与完成标记 | 对话包络包含 `statusCodeValue` 与字符串 `body`；`body` 内的 `[DONE]` 是控制标记，不应按 JSON 正文解析。网关在业务状态成功且没有错误字段／事件时结束读取，仍要求有效的 `finish_reason`；错误状态、坏正文或提前断流继续报错 | 下方固定版本官方 CLI 的 `streamFrames` 源码显式检查 `statusCodeValue` 与 `body.trim() === "[DONE]"`。用户反馈「已有回复和用量，随后 body 报 invalid character 'D'」；本仓库用假上游包络重现并回归，后续真实三协议和 CLI 工具验收未再出现该错误。真实调用结论不替代原始上游流量抓包 |
+| Qoder 资源限制包络 | 官方响应可为 HTTP 200 的 SSE，外层 `statusCodeValue=403`，`body` 和 `message` 再包 JSON，内层为 `10605 / RESOURCE_LIMIT`，含排队和重试时间。网关只在明确业务码与 subCode 同时匹配时返回可重试的 503 和资源提示；其他 403 仍按原失败处理，不把原始 message 透传给客户端 | 2026-11-16 从 dev 服务容器取得指定模型的真实响应；旧版本号、RFC 日期及 WorkBuddy TLS 对照亦返回同一包络。假上游回归覆盖真实形状、无正文／完成事件和普通权限拒绝不误分类。此错误不等于指纹拒绝，也不能仅据它判断 credits 用完 |
+| Trae 国内账号额度 | `POST https://api.trae.cn/trae/api/v2/pay/web_user_ent_usage`，`Authorization: Cloud-IDE-JWT …`，JSON `{"require_usage":true}`；按 `is_credits_billing`／`is_dollar_usage_billing` 区分单位，保留汇总和包用量，不据此分摊单次价格 | 上述官方主脚本的 `fetchEntitlementUsage` 使用 `getAiPayHost()`；上述会话模块中的 `env.cn` 将 `WEBSITE_API_URL` 设为 `https://api.trae.cn`，国内构建使用该 host。2026-11-16 从服务容器真实读到 credits 计费和扣减方向；逐包与汇总增量未对齐，专用产品额度池与逐请求费率未确认。已接入账号池与积分构成页，按账号保存成功快照 |
+| Qoder 国内账号额度 | `GET https://openapi.qoder.com.cn/sash/api/v2/me/usage`，Bearer 设备令牌，`Cosy-ClientType: 10`、`User-Agent: Qoder`；检查 `displayMode`、`qoderUsage.userQuota` 及原始 `unit`，不领取签到或活动奖励 | 上述固定提交的 Magpie `fetchUsage` 提供查询形状；2026-11-16 从服务容器真实返回 `unit=credits`，已用增加与剩余减少的增量一致。此项为第三方源码加本轮实测依据，未独立核对官方网页实现，其他订阅未验收；已接入账号池与积分构成页；国际版的后续接入与验收见下方专项 |
+
+2026-11-16 根据授权失败反馈补充核对了两份官方静态代码：
+
+- [Trae 授权页脚本](https://lf-cdn.trae.com.cn/obj/trae-com-cn/trae_website_prod_cn/static/js/async/authorization/page.f3f2728ac7.js)在发起登录前用正则检查回调必须是 `http://127.0.0.1:<端口>/authorize`；PKCE 成功后把 `TraeGetPCAuthCode.Result` 序列化进 `authCodeInfo`，并附上 `loginTraceID`。原来的 `localhost` 地址会在官方页面被直接拒绝，顶层 `code` 也不能代替官方的 JSON 回调格式。
+- 官方 npm 包 [`@qodercn-ai/qoderclicn@1.1.89`](https://www.npmjs.com/package/@qodercn-ai/qoderclicn/v/1.1.89) 的 `bundle/qoderclicn.js`：`deviceTokenPoll` 将 404 作为等待状态，`startBrowserDeviceFlow` 直接使用轮询返回的设备令牌，刷新策略为 `device-token`，没有 `/api/v1/me/jobToken` 兑换步骤。`refreshDeviceToken` 向 `/api/v1/deviceToken/refresh` 发送 `refresh_token` 和原有 `machine_id`（可带 `machine_token`），读取 `device_token` 与 `expires_at`。tarball SHA-256 为 `946e0d21099819e9103fdf0b24af2b26e808dad24d1845c5a746c525d01f73f8`。
+
+官方网页／发布包核对、本地假上游和真实账号调用是三类证据。本地假上游覆盖请求路径和形状、PKCE state、设备刷新签名验证、令牌单飞与持久化、并行工具与回传、三协议流式／非流式、SSE 完整性和权限隔离。2026-11-16 的真实验收另覆盖国内 Work 与 Qoder 的指定模型、Qoder 的两个 CLI 工具闭环、设备刷新、重启及官方额度变化，详见[真实验收记录](multi-platform.md#真实账号验收记录)。这些结果不证明其他目标、全部模型、长期风控兼容性、专用额度池或逐请求价格已验证。
+
+
+### Qoder 10605 排队协议与调查结果
+
+2026-11-17（台湾时间）核对[官方 CLI SDK 错误文档](https://docs.qoder.com/cli/sdk/errors)：`10605` 的定义是 `Model request is queued`，官方 CLI 通常会等待并重试。登录失效、使用上限和 credits 耗尽另有错误码；不能把 SSE 包络中的外层 `403` 直接解释成登录或风控拒绝。
+
+固定版本 `@qodercn-ai/qoderclicn@1.1.89` 的官方 bundle 有以下恢复流程；这是静态源码依据，后续网关实现按此核对：
+
+- 尚未输出正文且有原 `sessionId`、`requestSetId` 时，查询 `GET /algo/api/v2/service/ask/queue/status`，query 带 `requestSetId`、`modelKey` 与可选的 `queueType`；头带原请求的 `X-Request-ID`、`X-Session-ID`，使用 COSY 签名和当前登录身份。
+- 只有 `isQueued === false` 且 `serviceAvailable !== false` 才视为就绪。未就绪时按 `retryAfterSeconds` 等待；默认与单次等待上限均为 30 秒。就绪响应明确返回 `retryAfterSeconds=0` 时立即重发，不能回落为再等 30 秒。
+- 重发保留原会话和请求集，更新 `requestId`；再次排队仍可进入恢复流程。官方默认总等待上限为一小时，最多恢复十次；这些数值是源码默认值，不是本仓库当前的超时承诺。
+- 完成或取消时调用 `POST /algo/api/v2/service/ask/finish?Encode=1`，将 `model_key`、`request_set_id`、`user_id`、`time_consumed` 放入字符串 `payload`，外层带 `encodeVersion=1`，再进行 COSY 编码和签名。`X-Request-ID` 使用请求集 ID，释放请求超时为 3 秒。
+
+本轮在实际 dev 服务容器中做了有限的真实对照：
+
+1. 同一国内账号的目录和额度查询成功，credits 剩余为正。`auto` 推理返回 `10605 / RESOURCE_LIMIT`，队列字段为 `isQueued=true`、`serviceAvailable=false`、`retryAfterSeconds=30`；没有生成正文。
+2. 保留原请求集轮询，约 30 秒后返回 `isQueued=false`、`serviceAvailable=true`、`retryAfterSeconds=0`。`queueType` 从 `p2` 变为 `p4`；这些内部标签的业务含义未确认。`queueCount=0` 与资源暂不可用可以同时出现，不能据此推断全站故障。
+3. 就绪后立即使用同一请求集重发，仍返回 `10605`；再等待、轮询和重发一次，结果相同。排队状态可恢复已验证，生成恢复未通过。首次诊断脚本曾把就绪后的 0 秒误处理成 30 秒，并等待 SSE 连接 EOF；该次结果不作为生成恢复的依据，以上结论来自修正后的补测。
+4. 有记录的测试请求集发送了 finish，返回 HTTP 200；原始流与私有请求保存在仓库外。诊断只读当前授权，前后全部账号的完整凭证摘要一致，没有刷新或回退 token。
+
+首轮可确定的是：上游明确报告模型资源排队，当时网关缺少官方的轮询、原请求集恢复和释放流程，遇到 `10605` 就返回可重试错误并触发账号冷却。上述首轮只调查和记录，没有修改网关处理逻辑。
+
+后续对照与实现（2026-11-17，台湾时间）：
+
+- 在实际 dev 容器运行官方国内原生 CLI 1.1.89，隔离配置和空工作目录，使用同一 MachineID 和当前设备令牌，禁止工具，不提供刷新令牌。客户端确实进入 `model_queue_status`，持续报告 `service_available=false`；达到本轮设定的 70 秒排队预算后以执行失败结束，没有有效模型正文。这独立确认了官方客户端也在等待资源，不能再仅凭网关失败判断为模拟传输被拒；该有限窗口仍不能证明平台长期故障。
+- 同条件运行官方国际原生 CLI 的 `--list-models`，客户端提示 `Warning: no models available for your account.`。网关空目录与当前官方客户端结果一致，账号是否应有模型、订阅／权限与资源供应的具体原因仍未确认。官方实际查询 `api2.qoder.sh`，当时网关固定 `api1.qoder.sh`；此缺口已在下方国际端点专项中补齐，不能用两侧空目录证明固定端点设计正确。
+- `qoder_queue.go` 已实现同一账号和请求集轮询、只更新请求 ID 的重发、有界等待、完成／取消释放。累计队列等待最多一小时、最多恢复十次，请求自身更短的期限和取消优先；未返回正文前才恢复，发出任何业务帧后不重试。排队期间仍占用当前账号的在途槽位。查询单次最多 30 秒，连续三次查询错误或 HTTP 404 终止；就绪后的明确 0 秒立即重发。
+- 释放请求保留原线路上下文，以独立的 3 秒期限执行；释放失败记录操作、目标和模型，不把已完成的生成改判失败。普通权限拒绝仍按错误处理，不触发排队恢复。
+- 本地假上游覆盖恢复后正文与结束、原请求集／会话／业务正文和设备身份保持、0 秒立即重发、反复排队上限、取消／期限到达释放、线路上下文、不重放已输出内容、非法排队响应和直接 HTTP `10605`。官方诊断前后全部账号完整凭证摘要一致，诊断二进制及临时目录已清理。
+- 队列实现已保数据重建至 dev，并从实际服务容器验收：真实请求等待时持有当前账号的在途槽位；诊断客户端在约 45 秒超时取消后，槽位归零。该次没有正文或正常结束帧，因此只判定等待与取消释放通过，生成恢复仍未通过。升级及验收前后，全部账号身份、设备字段、当前 access／refresh token、账号设置、配置和原有 auth 文件摘要一致，没有从旧备份恢复令牌。
+- 本轮相关 Qoder 回归、providers race、离线 Go 全量测试、`go build ./...`、`go vet ./...`、golangci-lint、gofmt 与 diff 检查通过；没有前端源码变更，复用此前已验证的产物。
+
+### Qoder 国际端点与额度
+
+2026-11-17（台湾时间）继续核对官方 [`@qoder-ai/qodercli@1.1.89`](https://www.npmjs.com/package/@qoder-ai/qodercli/v/1.1.89) 的 endpoint resolver、`syncEndpointAsync`、`getRegionEndpointsV3/V5`、`getUsagePresentation` 与 `fetchUsagePresentation`，并与此前原生 CLI 回环请求交叉检查：
+
+- 国际生产环境的默认推理地址为 `https://api2.qoder.sh`，显式区域 `us/sg/jp` 分别对应 `api1/api2/api3`。网关已纠正默认地址；目前没有新增显式区域配置。
+- 自动模式从中心服务 `https://center.qoder.sh/algo/api/v3/service/region/endpoints` 读取端点。V3 使用 `Date`、`Signature`、`Appcode` 的匿名签名和原设备字段，不发送账号 Bearer；有设备令牌与 UID 时可用 V5 Bearer 和 `x-gw-user-id`，只有 HTTP 401／403 才回落 V3。既有国际 job token 不能冒充原设备令牌，当前按 V3 发现。
+- 从 dev 容器对公开 V3 接口实测返回 HTTP 200 的 COSY 编码文本，解码后包含 `centerNodes/inferNodes/openapiNodes/fastMode` 等字段。网关同时支持编码文本、JSON 及现有 JSON 包络；公开记录不保存服务返回的备用 IP。
+- 发现结果保留仍在候选中的当前端点，否则取第一个可用的公共节点；只接受官方 `*.qoder.sh` 的 HTTPS 地址，跳过官方默认关闭的企业专用节点。推理、OpenAPI 和系统 `fast` 模型分别选对应字段；国内继续使用国内网关，不接受国际节点。
+- 官方 CLI 1.1.89 的 `reportFailure` 从当前端点候选中移除失败节点，端点中间件仅对可回放请求继续选路，幂等读取的 HTTP 502／503／504 可切换。网关已将这部分用于国际模型目录：保留发现返回的推理候选，连接错误或上述状态码最多尝试三个不同节点，目录读取总预算十秒。成功读取后遇到业务错误、全部停用或格式错误直接返回。原账号身份与线路随请求上下文保留，失败节点按账号和线路隔离，已开始的生成和队列操作仍持有原选路。后台探测及其他操作的故障切换继续待验。
+- 发现操作复用账号线路，新鲜期沿用官方 CLI 的 30 秒；账号、MachineID／MachineToken、令牌类型、当前访问令牌与代理线路的摘要隔离缓存，并发发现合并。网关发现期限为两秒。此前沿用一秒，但在 dev 容器使用标准 TLS 客户端三次新建直连，从 DNS 到响应头约需 1.1–1.3 秒，主要耗时在 TLS 握手和等待上游响应。端点过新鲜期后仍可回退，过期满五分钟且未再刷新时清理。发现失败会记录操作和原因，并在保留期限内继续使用此前选定的节点，无旧记录时使用 `api2`。调用方取消会恢复旧缓存的原过期时间，后续请求可立即重新发现。一次生成开始后固定端点，排队、重发与 finish 不因缓存过期重新选路。缓存不落盘，不修改凭证或账号地区。
+- 国际额度支持 `GET https://openapi.qoder.sh/sash/api/v2/me/usage`，Bearer 使用当前账号令牌；官方 CLI 同时存在个人账号的 `/api/v2/quota/usage` 路径。本轮从 dev 容器只读查询两条路径，均成功返回 credits 与已知的总额、已用、剩余；网关复用已确认的 `displayMode=qoder` 解析与快照展示。未知／企业响应仍明确报未支持，不补零、不推导单价。按官方 `fetchUsagePresentation → qEi` 调用，国际额度使用 `Cosy-ClientType: 5`、CLI 版本／OS、`Bun/1.4.2` UA 和 `traceparent`；不套用 OAuth 的 `qoder/1.1.89` UA。这两条额度路径的完整原生请求字节尚未独立采样。
+- 实际账号返回的到期／重置日期可为公元 9999 年的毫秒时间。原来的 `1e14` 上限会错误拒绝这类有效日期，已改为校验可持久化的 RFC3339 年份范围，并统一保存 UTC，避免时区转换后跨至公元 10000 年而无法序列化；仍拒绝负数、小数和越界日期。保留官方日期，不把它解释成永久或自行计算周期。
+
+本地假上游覆盖编码响应、默认与下发端点、匿名签名、设备 V5 认证回落、国际额度、非法地址拒绝、同号并发合并、账号／令牌／代理缓存隔离、发现取消，以及缓存过期时 fast 排队请求保持端点。新增回归先在旧实现复现固定 `api1` 与国际额度拒绝，再验证修正。后台健康探测、网络失败后的完整域名切换、HTTPDNS 和所有专用业务节点仍未对齐，不能据此称为完整官方选路实现。
+
+同日保数据更新 dev 后，国际额度经管理员接口查询成功，余额、已用、总额和单位与实际服务容器查询的官方值一致；重启后快照原样恢复，全部账号凭证、设备字段、设置、配置和原有 auth 文件摘要保持一致。服务内端点发现两次触及一秒超时预算，实际按默认 `api2` 回落，尚不能将下发节点的应用记为真实通过；国际目录仍为空。本轮浏览器连接不可用，页面未复验；没有发起模型推理。最新 providers race、离线 Go 全量测试、build、vet、golangci-lint、gofmt 和 diff 检查通过，前端复用此前已验证的产物。
+
+2026-11-18 09:55（台湾时间）保数据更新 dev。新增回环回归确认，跨账号查询与取消刷新均不会丢掉上一节点，发现失败时继续使用它，收到排除旧节点的新列表才切换。久未刷新的旧记录会清理。专项连续十轮、providers 整包 race 通过。全量 Go 测试复现已记录的 Work 多流分片差异。从实际 dev 强制刷新国际目录和额度时，发现再次达到一秒期限，额度刷新成功，目录仍为空。账号凭据、设置、配置、绑定及用量与重建备份一致。本轮没有新增推理实测，真实下发节点的应用仍待验收。
+
+同日 10:01（台湾时间）以两秒期限保数据更新 dev。回环延迟 1.1 秒的发现响应，旧期限走默认端点，新期限使用返回的节点；相关专项连续四轮 race 通过。实际 dev 强制刷新目录和额度，本次容器日志无端点发现失败，额度返回有效快照，目录仍为空。本轮未独立记录目录请求选定的主机，真实节点切换继续待验收。配置、账号凭据、设置、绑定和已存用量与重建备份一致。Go 全量测试仍报 Trae Code 多流上传取消场景的五秒超时，本次没有修改该传输路径。
+
+同日 10:21（台湾时间）补验目录。使用 dev 内现有账号和网关相同的目录请求，探针两次观察到中心发现返回 HTTP 200，随后目录实际请求 `api1.qoder.sh`。国际响应中 `assistant` 的 17 条模型全部停用，国内同场景 14 条均启用。官方国内／国际 CLI 1.1.89 的默认场景均为 `assistant`。网关目录现从该场景读取，保留数组包络兼容，区分空列表、全部停用、响应格式错误及业务错误。上游明确返回空列表或全部停用时清除旧目录，临时 HTTP 错误不清除。保数据更新 dev 后，由管理员接口验证国际版报告全部停用，国内返回 14 个模型。配置、凭据、账号设置、绑定及历史用量与重建备份一致。专项四轮及 providers 整包 race 通过。全量 Go 测试复现已记录的 TraeWork 多流分片差异。此次验证包含发现节点的实际使用，后台探测、故障切换、真实推理和扣费仍待验收。
+
+同日 11:16（台湾时间）保数据更新 dev，接入国际目录读取的候选切换。回环先复现 502／503／504 和连接断开均不访问备用节点，修正后覆盖三个不同节点上限、去重、后续查询沿用剩余节点、账号及线路隔离、取消不污染缓存，以及目录切换期间活动生成／轮询／释放维持原节点。相关专项三轮 race、providers 整包 race、隔离网络的 Go 全量测试、vet 和 lint 通过。真实只读探针给首次目录读取注入一次 503，两次中心发现均仅返回 `api1.qoder.sh` 一个推理节点，因此真实备用节点切换验收未通过，故障注入结果保留。更新后管理员接口确认国内目录可用、国际目录全部停用、国际额度可刷新。配置、账号凭据、绑定和已存用量与重建备份一致。
+
+### 分平台传输与身份基准
+
+2026-11-16–17（台湾时间）按请求链路采样。平台与线路分别建立连接池，Trae 的授权请求显式选 Electron 配置；直连、绑定代理、钉 IP 均继续通过现有路由检查。关闭 `upstream.tls_fingerprint` 时回落 Go TLS；HTTP 协议仍由各平台 ALPN 协商。WorkBuddy 与 Qoder 默认 HTTP/1.1，Trae 链路提供 `h2,http/1.1`，服务端只接受 HTTP/1.1 时在发送请求前回退。
+
+| 请求链路 | 官方来源与采样方式 | UA、版本与设备字段 | 传输基准 |
+|---|---|---|---|
+| WorkBuddy 国内／国际 | 上述官方安装包元数据；同版 Electron 37.10.3 的 Node 回环 `fetch` | 国内 `5.11.3`／CLI `2.176.0`，国际 `5.9.4`／CLI `2.165.0`；继续使用原有持久化设备身份 | Node 22.21.1／BoringSSL，ALPN `http/1.1`；JA3 MD5 `1a3153f314dc13e133dc71d113a81b16`，JA4 `t13d1812h1_5d04281c6031_ef7df7f74e48` |
+| Qoder 国内／国际 | 官方 [国内固定版本清单](https://static.qoder.com.cn/qoder-cli-cn/channels/1.1.89/manifest.json)与[国际固定版本清单](https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/channels/1.1.89/manifest.json)，Linux x64 原生包；按清单 SHA-256 校验，隔离网络、假凭证、回环 CONNECT/TLS 上游运行真实推理路径 | 运行时 Bun `1.4.2`；COSY 网关 `Bun/1.4.2`，OpenAPI `qoder/1.1.89`；`Cosy-Version: 1.1.89`、clienttype `5`、默认 machineos `x86_64_linux`；保留账号原 MachineID／MachineToken，支持导入原 MachineCode／MachineType／MachineOS／MachineHostname。目录压缩 `identity`，推理与 OpenAPI `gzip, deflate, br, zstd` | 两版原生推理样本一致；ALPN `http/1.1`；JA3 MD5 `1523504b38f0fae0d881d4b6554aac1b`，JA4 `t13d1713h1_5b57614c22b0_6a3d802a7139`；HTTP/1.1 应用头大小写、字典序及 Bun 尾部头序已校准。原 npm/Node 24 样本保留作历史参考，不再作为运行中的 Qoder 基准 |
+| Trae Code 国内 | [官方稳定清单](https://api.trae.cn/icube/api/v1/native/version/trae/cn/latest)与[Linux x64 包](https://lf-cdn.trae.com.cn/obj/trae-com-cn/pkg/app/releases/stable/2.3.103559/linux/TRAE_CN-linux-x64.tar.gz)；直接调用包内 `@aha-kit/net`、原生 binding 和 `libsscronet.so`，经回环代理采 TTNet ClientHello | `TraeClient/TTNet Cronet/TTNetVersion:a61b3479 2026-08-04 QuicVersion:40cc763c 2025-07-01`；产品 `3.4.20`、包 `2.3.103559`、AI 扩展 API version code `20260212`；设备类型 Linux，取不到硬件信息时发空串；不再固定写 Windows 品牌。原 MachineID、DeviceID、client ID、公私钥均保留 | ALPN `h2,http/1.1`；JA3 MD5 `cd08e31494f9531f560d64c695473da9`，JA4 `t13d1516h2_8daaf6152771_e5627efa2ab1`；HTTP/2 SETTINGS、窗口、优先级、应用头顺序、正文分帧以及 HTTP/1.1 回退已采样并校准，详见下文 |
+| Trae 国内授权／刷新／用户信息 | 同一包 `main.js` 的 `Qg.request` 使用 `electron.net.fetch`；官方 Electron 39.2.7、原包 name/version 的最小启动应用向回环 TLS 服务发相同网络调用 | `TraeCN/1.107.1 Chrome/142.0.7444.235 Electron/39.2.7` 的 Linux UA；`Sec-Fetch-Site: none`、mode `no-cors`、dest `empty`、语言 `en-US`、Priority `u=4, i`；JSON 与 `x-cloudide-token` 按官方调用设置 | JA4 `t13d1516h2_8daaf6152771_d8a2da3f94cd`；ALPN h2/h1；HTTP/2 参数见下文。这是运行时与调用形状的回环样本，不是已登录官方 UI 的线上完整抓包 |
+| TraeWork 国内网页 | 隔离 Chrome 156.0.8078.79 实际访问 [work.trae.cn](https://work.trae.cn/) 的 NetLog；取首次、不带 PSK 的 ClientHello，并核对网页 API 请求与 h2 帧 | 实际样本为 Linux `HeadlessChrome/156.0.0.0`，client hints 同 Chromium 156，语言 `zh-CN`、timezone `Asia/Taipei`、Priority `u=1, i`；不混入 IDE 的 MachineID 头；JSON 仅在有请求体时加，Origin 仅随创建会话 POST 发送 | JA4 `t13d1517h2_8daaf6152771_cb7bf5808d99`；ALPN h2/h1；Chrome 扩展顺序逐连接随机，JA3 不固定 |
+
+ClientHello 的密码套件、扩展及 ALPN 从采样解析为独立的 uTLS spec；SNI、随机数、密钥份额按连接生成，证书仍按目标域名校验。Chrome 系链路每次打乱可随机的扩展，测试比较 JA4 与非随机字段；固定顺序的 Node／Bun／TTNet 同时检查 JA3。回归还逐项比较密码、压缩方法、session ID 长度、稳定扩展内容和 key share 类型／长度，并确认随机数、key share 与 GREASE ECH 没有复用样本或上一条连接的值。仓库只保存回环／公开站点 ClientHello，原始 NetLog、机器身份及账号流量不入库。
+
+HTTP/2 使用 [`imroc/req/v3` v3.61.0](https://github.com/imroc/req/tree/v3.61.0) 的固定源码 Transport（`third_party/req`，原 MIT／Go BSD 许可保留；路径索引、服务端表大小与超大字段策略的差异见[专项记录](upstream-req-hpack-alignment.md)），uTLS 仍是现有 `refraction-networking/utls`，不自行维护连接池。不开 HTTP/3，也不跟随 Alt-Svc 另拨线路。Work 网页与 Electron 授权均实测 `SETTINGS` 顺序 `1=65536, 2=0, 4=6291456, 6=262144`，连接 `WINDOW_UPDATE=15663105`，伪头顺序 `:method,:authority,:scheme,:path`；HEADERS 独占、parent 0，实际 weight 分别 220／110（线上编码为 219／109）。这些参数及主要普通头顺序已设置；回环帧解析测试核对真实发出的 SETTINGS、窗口和 HEADERS 优先级。请求取消、首包超时、清空闲连接不截断活动流、平台与代理池隔离亦有回归。正常请求不会因 h2 协商回退而重复发送 POST。
+
+
+TTNet 在独立 mount/network namespace 内使用临时 NSS 信任库，成功完成原生 CA 校验后采到 HTTP/2：`SETTINGS 1=65536, 2=0, 3=1000, 4=6291456, 6=262144`，连接窗口 `15663105`，HEADERS 独占、parent 0、编码 weight `219`。`@aha-kit/net` 将应用头经 WHATWG Headers 按字典序变成小写，TTNet 再追加 `x-request-id`、`x-tt-trace-id`、UA 和 `accept-encoding: gzip, deflate`。POST 不发 content-length，先发不带 END_STREAM 的正文 DATA，再单发空 DATA END_STREAM。HTTP/1.1 回退使用 `Host, Connection, Transfer-Encoding` 前缀、相同应用头序、`User-Agent, Accept-Encoding` 尾部，正文为 chunked。上述已确认项目均有真实线上字节的回环测试；fixture 使用假凭证和虚构设备 ID。
+
+同一 TTNet 进程收到 GOAWAY 后的第二次 TLS 1.3 连接，官方样本恢复了会话。Trae 的传输使用每个 Transport 独立的内存会话缓存；首次不发空 PSK，恢复时将 PSK 放在末尾。后续实测将初始的 64 项／仅 SNI 实现修正为 1024 端点 LRU、主机名和端口隔离、TLS 1.3 两张单次票据，见下方缓存专项。缓存随平台、代理和钉 IP 隔离，不写入账号文件。回归覆盖首次不恢复、同线路恢复、换平台／线路不恢复。Qoder 原生 CONNECT 连续关闭重连样本未恢复会话，暂不为其启用缓存。另以同版 Electron 39.2.7 的 `electron.net.fetch` 在隔离 NSS 信任环境中补采，GOAWAY 后第二连接同样恢复了 TLS 1.3 会话；此前 Chrome Work 的 NetLog 也包含 PSK ClientHello。
+
+Qoder Linux x64 原生包 SHA-256：国内 `85ba1f24c28c1fdeace69191d03d4b5fdfb6ac9b7e41b9528d4656bd2f975f81`，国际 `431bd471ae23add46a3cd9134b3c70a2dc2e81549b18f847038648b2af998f11`。推理补齐官方样本中的 Cache-Control、Connection、模型 key/source 与 W3C traceparent 字段。COSY 日期仍为 Unix 秒；凭证交换的 Date 保持 GMT，二者不混用。UMID helper 使用独立传输：后续 x64／ARM64 双地区采样确认是发往 443 的明文 HTTP/1.0，没有 ClientHello；早先“另一套 TLS”的判断已更正，不能将其套入业务 API profile。
+
+尚未确认的边界：
+
+- TTNet 原生 `x-tt-trace-id` 的生成现已按下方专项补齐。三条 Trae profile 的路径不索引和后续动态表字节已按连续请求样本校准，Work／Auth 另覆盖初始非默认表、扩容至 1 MiB、缩表、禁用与恢复，详见[差异与修正记录](upstream-req-hpack-alignment.md)。TTNet 在这些已等待 ACK 的样本中仍沿用原 4096 表；这一字节匹配不代表小表兼容性通过。帧调度及所有业务头也不能由基础 SETTINGS 与头序相同推出完整一致。
+- Qoder 官方 `Cosy-MachineCode`、`Cosy-MachineType` 来自原生 UMID 组件，`Cosy-MachineHostname` 来自规范化的系统 hostname；网关保留导入设备身份，并为首次使用的账号接入官方组件初始化、持久化和按需刷新，不复制采样主机的身份。设备授权／PAT 等没有独立完整采样的路径仍按前文协议依据实现。
+- UMID 自动初始化当前仅支持 Linux x64／ARM64；x64 已在 Alpine 3.20 加 `gcompat`／`libstdc++` 实测，ARM64 已通过 QEMU 用户态双地区运行与网络验证，尚未在原生 ARM64 硬件验收。组件从官方固定包提取、完整 SHA-256 校验，不随源码／镜像分发，文件名摘要与官方同为 SHA-256 前 16 位。官方 helper 忽略代理变量，现经 `proxychains-ng` 和单次本机认证桥使用所选代理，失败不直连；网络受限容器中，当前源码桥的双地区真实交互通过。实际传输是 HTTP/1.0 明文到官方 443，业务 Bun TLS profile 与此分开。依赖、持久化、重试与导入边界见[Qoder 设备身份](qoder-device-identity.md)。
+- Trae Linux 的 OS 描述当前使用官方失败回落值 `Linux`，没有复制采样宿主的发行版、硬件名或设备信息；已导入凭证没有保存完整原设备系统资料。已保存 ID 与密钥不因这次校准重建。
+- 核对上述版本与运行时的首次握手，并补采下方列明的 TLS 1.2／1.3 重连、短寿命票据和缓存容量／LRU／消费行为。内存压力清理、过期条目的批量清扫、其他 0-RTT 配置、TCP/IP 内核特征、HTTP/2 并发与流控动态、所有头／业务路径及长期风控兼容性未全量验证。样本匹配不等于平台认可，也不保证未来版本继续相同。
+- 最新真实回归覆盖 Trae Code 国内 `Doubao-Seed-Code` 的三协议流式／非流式文本、三协议工具回传，以及 Claude Code／Codex 的读文件、修复和测试闭环，范围见[验收记录](multi-platform.md#trae-code-三协议与工具验收)。Qoder 国际账号已存在，但官方客户端和网关均无可用目录，推理尚未验收，不能据回环测试标为真实验收。
+
+### TLS 重连、过期与 TTNet trace 补齐（2026-11-17）
+
+再次使用同一官方 TTNet 原生库、Electron 39.2.7 及 Work 同版 Chrome 156.0.8078.79，在独立网络／mount namespace 内仅连接可信的回环 TLS 服务，使用假凭证和虚构设备字段。矩阵分别限制 TLS 1.2／1.3，收到 HTTP/2 GOAWAY 后重连；第一次完整握手、第二次恢复，服务端更换票据密钥后第三次完成完整握手，第四次使用新票据恢复。三套官方运行时均得到 `false → true → false → true`。Chrome 由本地引导页调用原生网页 fetch，未替换网络栈。网关离线回归对三条 Trae profile 验证相同行为，另覆盖服务端关闭票据时始终完整握手，并确认四次连接只发送四次业务 POST。
+
+`clienthello/trae-{code,work,auth}-tls{12,13}-resume.bin` 保留官方第二连接的 ClientHello。回归逐项比较恢复握手的稳定字段；票据密文、年龄、binder 和由 SNI／票据长度决定的 padding 不固定为采样值。TLS 1.3 的 PSK 仍由 uTLS 生成和验签，不复制票据或密钥。
+
+另用 OpenSSL 3.6.5 的独立诊断服务下发两秒寿命的票据，在同一官方进程中发送 GET、立即 GET、等待超过寿命后 GET、再 POST，响应关闭连接：
+
+| 运行时／协议 | 立即重连 | 超过两秒后 | 随后的新票据 | 0-RTT |
+|---|---|---|---|---|
+| TTNet／TLS 1.2 | 恢复 | 仍携带旧 SessionTicket，服务端拒绝后完整握手 | 恢复 | TLS 1.2 不适用 |
+| Electron 授权／TLS 1.2 | 恢复 | 同上 | 恢复 | TLS 1.2 不适用 |
+| Work Chrome／TLS 1.2 | 恢复 | 同上 | 恢复 | TLS 1.2 不适用 |
+| TTNet／TLS 1.3 | 恢复 | ClientHello 不再提供过期 PSK，完整握手 | 恢复 | 服务端允许 early data，样本未发 early_data 扩展或提前业务数据 |
+| Electron 授权／TLS 1.3 | 恢复 | 同上 | 恢复 | 同上 |
+| Work Chrome／TLS 1.3 | 恢复 | 同上 | 恢复 | 同上 |
+| WorkBuddy Electron 37.10.3 的 Node fetch／TLS 1.2、1.3 | 均未恢复 | 完整握手 | 仍未恢复 | 未发送提前业务数据 |
+
+这些结果支持当前 WorkBuddy 不开会话缓存、Trae 不启用 0-RTT 的策略，仅覆盖该版本、默认调用与上述 GET／POST 场景。Qoder 原生此前的关闭重连样本未恢复，仍不开缓存；本轮没有据此外推其所有 TLS 版本行为。Trae TLS 1.3 的本地回归使用配置时钟推进超过假上游票据寿命，验证过期票据被移除、不发 PSK、新票据可再次恢复；uTLS 配置继承标准配置的 `Time`，使证书和票据检查使用同一时钟。
+
+Work Chrome 的多连接样本还确认签名算法列表首项 GREASE 会随机变化。uTLS 1.8.2 的 `ApplyPreset` 会重写 cipher／group／key share／version 的 GREASE，却不重写 `SignatureAlgorithmsExtension` 中的 GREASE，直接解析抓包会一直沿用样本值。网关现对样本实际包含的签名 GREASE 每连接独立随机生成，不改变其他算法或位置；八次新连接回归确认没有固定在采样值。稳定字段比较对该随机项归一化；JA4 辅助函数也按 [FoxIO 官方定义](https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md) 排除签名 GREASE。因此表中的 Work JA4 从旧的 `f4f7aae15fbc` 校正为 `cb7bf5808d99`；旧值是比较辅助函数误计随机 GREASE 的结果。
+
+后续连续编码专项补齐三条 Trae profile 的路径不索引与超大字段清表，以及 Work／Auth 的服务端表大小处理，50 个官方同值请求头块均逐字节匹配，详见[HPACK 专项](upstream-req-hpack-alignment.md)。根模块全量普通测试、固定依赖全量及相关 race、providers race、build、vet、lint、gofmt 和 diff 检查通过。upstream 的既有超大响应测试在整包 race 中两次触及两秒等待上限；该用例单独 race 通过，其余 upstream 用例分开 race 通过，未改其等待时间，不能把整包一次运行记为通过。
+
+这批修正已保数据更新至 dev，实际容器内的 Work `deepseek-v4.1-flash` 与 Code `Doubao-Seed-Code` 各一次流式回复均得到正常正文和结束帧。配置、auth 文件、账号设置和原有会话绑定保持；两次新请求只新增自己的绑定。Qoder 国内的本机 UMID 缓存恰好到期，启动后的账号操作正常刷新 `machine_token/machine_code/machine_type`：旧值与旧缓存一致，新值与新缓存一致，旧缓存刷新期限早于本次更新，`machine_local` 仍为 true。其余凭证字段（含当前账号授权 token、设备 ID 与密钥）逐项一致；没有回填旧 UMID 或旧 token。这次未做面板目视验收，也未重复发起 Qoder 推理。
+
+TTNet trace 通过官方 `libsscronet.so`（SHA-256 `1ff0035645652c9b0e71412a6601730a60ad6bcb5a8089718a340f8813ea643c`）的字符串交叉引用定位到原生生成函数，再在独立诊断进程固定时间和随机输入，取得十进制设备 ID、非数字、正负号及溢出输入的样本。未修改的 `@aha-kit/net.fetch` 另以虚构数字设备 ID 采样，验证了相同的设备编码：
+
+- 格式为 `00-<32位trace>-<trace前16位>-01`。
+- trace 前八位是 Unix 毫秒对 `0xffffffff` 取余后的八位小写十六进制，不能替换为普通 uint32 截断。
+- 设备 ID 按有符号十进制 int64 解析，再以 uint64 十六进制编码，前置两位十六进制字符长度；原生解析失败时使用数值零。
+- 中间以独立随机十六进制字符填足，最后四位为 app ID 的定宽十六进制值。官方国内 `801256` 超过四位上限，原生结果为 `ffff`。
+
+网关按每次请求的 `X-Device-Id` 和新的随机值生成 trace，不使用采样设备或跨账号的进程全局身份；保留调用方已经提供的 trace。生成仅应用于 Trae Code 的 TTNet profile，HTTP/2 与 HTTP/1.1 回退都发送并保持原生尾部头序。固定输入原生向量、线上头序、不同请求生成不同 trace，以及既有同值 HPACK 字节回归共同验证这项改动。该 trace 不等于账号认证或设备证明，也不据此承诺平台长期接受全部请求。
+
+本轮离线 Go 全量测试、upstream／providers race、构建、vet、golangci-lint、gofmt 与 diff 检查通过。首次 race 的既有目录超大响应测试触及两秒等待上限，单项及完整复跑均通过，未修改该测试。保数据更新 dev 后，实际服务容器内的 Trae Code 流式请求正常返回正文与结束帧；完整账号凭据（含当前 token）、设备字段、配置、auth 文件和账号设置保持一致。原有会话绑定逐项保留，本次真实请求正常新增自己的绑定；没有从旧备份回填数据。
+
+### TLS 缓存容量、端口与票据消费（2026-11-17）
+
+沿用官方 TTNet 原生库、Work 同版 Chrome 156.0.8078.79 和 Electron 39.2.7 `net.fetch`，在只启用回环的隔离网络中连接可信 TLS 服务；没有使用真实账号。服务端只提供 HTTP/1.1，并在每次 GET 后关闭连接，确保每次都重新握手。同一 SSLContext 的监听端口共享票据密钥，排除“服务端不接受跨端口票据”对客户端缓存隔离判断的影响。
+
+| 采样 | 三套官方运行时的共同结果 | 实现修正 |
+|---|---|---|
+| 同一主机的两个端口，TLS 1.2／1.3 各访问 A、A、B、A、B | `DidResume=false,true,false,true,true`；B 首次访问不携带 A 的会话 | 从仅按 SNI 改为按原始主机名和端口缓存；默认 HTTPS 端口规范为 443，主机名转小写。地址来自请求上下文，不使用代理或钉 IP 的实际 TCP 对端作为身份 |
+| TLS 1.2／1.3 各先访问 1024 个不同端口，重访第 0 项，再插入新端点，最后访问第 1 项和第 0 项 | 第 0 项仍恢复；插入第 1025 个端点后第 1 项不恢复；第 0 项仍恢复 | 从 64 项改为 1024 项 LRU；命中会提升最近使用顺序 |
+| TLS 1.3 首次握手发两张票据，之后不再补发，连续访问五次 | `false,true,true,false,false` | 每端点保存最新两张 TLS 1.3 票据，每张只消费一次；不再重复复用同一 PSK |
+| 首次改发五张票据，其余条件不变 | 仍为 `false,true,true,false,false` | 两张上限按端点计算，丢弃更早票据；TLS 1.2 继续复用最新票据 |
+
+Chromium 的公开 [SSLClientSessionCache 定义](https://chromium.googlesource.com/chromium/src/+/main/net/ssl/ssl_client_session_cache.h)和[实现](https://chromium.googlesource.com/chromium/src/+/main/net/ssl/ssl_client_session_cache.cc)可交叉确认 1024 项默认值、HostPortPair、LRU 及两张 single-use 票据；上表结论以这里实际运行的三个版本独立采样为准，没有把当前 main 的其他行为直接套给旧运行时。
+
+uTLS 的 `NewLRUClientSessionCache` 只保存一张可重复读取的会话，且默认键为 SNI，不能表达上述策略。网关新增仅存内存的窄范围适配，使用标准库 `container/list` 维护 1024 项顺序；互斥锁保证并发连接不会消费同一张 TLS 1.3 票据。连接绑定原始请求端点，TLS 握手、密钥、PSK binder、证书和票据过期检查继续交 uTLS，既有线路和账号持久化不变。
+
+离线回归先复现旧实现在两个 TLS 版本下跨端口错误恢复，再覆盖端口隔离、LRU 边界、TLS 1.2 重用、TLS 1.3 两张上限／消费、清除及并发消费。另将实际网关传输连接到同一隔离服务，三条 profile 各六组、共 18 组对照全部得到与官方相同的完整握手结果序列，其中每组容量实验包含 1028 次真实握手，官方与网关各完成 6228 次握手。诊断程序和完整无账号流量证据保存在仓库外。
+
+本轮根模块全量普通测试、缓存／ClientHello／HPACK 专项、构建、vet、golangci-lint、gofmt 和 diff 检查通过。upstream／providers 的 race 在排除既有 `TestListingModelsDevFailuresSilent` 后通过；该测试的“超大响应”子项在整包、单独测试和单独子项的 race 中均触及两秒等待上限。本轮未修改这个无关测试，不能记作全量 race 通过。
+
+缓存修正已保数据更新至 dev，容器健康检查通过。实际服务容器内的 Work `deepseek-v4.1-flash` 与 Code `Doubao-Seed-Code` 各一次流式请求均返回正常正文和结束帧。重建前后以及真实请求后，配置、auth 文件、完整凭据和账号设置一致；重建前后的全部会话绑定逐项一致。真实请求复用的绑定仅 `expires_at` 正常续期，账号和上游会话 ID 均保持，已用停机备份逐字段核对；未删除绑定或回填旧凭据。这轮没有重复验收 Qoder 推理。
+
+本次覆盖正常内存条件下的上述行为。恢复握手阶段 EOF／handshake_failure 的后续行为已按下节补采；Chromium 的网络匿名化／隐私模式、客户端证书、内存压力触发缩容、批量过期清扫及其他握手异常后的全部失效策略尚未完整采样；目前网关也没有网页跨站上下文的匿名化键模型。不能据这组结果称为所有缓存行为完全一致。
+
+### HTTP/2 动态流控、并发与恢复早期失败（2026-11-17）
+
+沿用上述三个官方运行时、可信回环和假身份，新增以下独立采样，未访问真实账号：
+
+| 场景 | 官方行为与修正 |
+|---|---|
+| 连续消费 20 MiB HTTP/2 响应 | 三者均在消费量超过流窗口／连接窗口一半时发送 WINDOW_UPDATE。流为 6 MiB、连接为 15 MiB。原网关按 Go 的约 4 KiB 阈值频繁更新，现仅对三条 Trae profile 改为官方合并策略 |
+| 小响应在约 4.8 秒、5.2 秒后继续消费 | 三者均在超过五秒后的下一次消费归还累计额度；没有新消费时不单独启动补窗定时器。源码交叉依据为 Chromium `SpdyStream::IncreaseRecvWindowSize` 与 `SpdySession::IncreaseRecvWindowSize`，本轮运行的官方样本独立确认默认五秒 |
+| 先发 5 MiB，客户端暂不读正文 | 网关旧实现声明 6 MiB 流窗口，内部却仍按默认 4 MiB 扣额度，可拒绝合法响应。现使用实际发出的 INITIAL_WINDOW_SIZE 初始化额度；离线回归先复现失败再验证合法响应完整读完 |
+| 服务端 MAX_CONCURRENT_STREAMS=2，预热后并发八次请求 | 官方均保留一条连接、最多两个在途流，排队完成其余请求。网关开启已有的 StrictMaxConcurrentStreams，按同一连接排队；三条 profile 的实际传输对照均得到一连接、峰值两流、九条完整响应 |
+| 库的非严格模式另开 HTTP/2 连接 | 原生 uTLS 的 ConnectionState 返回类型不同，req 后续拨号强制断言接口时会 panic。网关增加保留实际握手方法与标准 TLS 状态的连接适配，初次和后续连接均使用；回归同时覆盖严格排队和非严格新建连接，后者确保没有用排队设置掩盖崩溃 |
+
+窗口更新的具体增量取决于运行时的读缓冲分片，官方独立运行也并非逐帧相同：本轮大响应增量大致为流半窗加至多一次读取量、连接半窗加一次读取量。网关校准窗口、严格大于半窗的条件与五秒消费触发，不将某次读取分片硬编码成固定包大小；不能把这个策略匹配写成所有 WINDOW_UPDATE 帧逐字节相同。
+
+另在 TLS 1.2／1.3 中，先取得票据，再在第二次 ClientHello 后由服务端直接关闭，或发送 fatal handshake_failure，随后保持原票据密钥。TLS 1.3 首次发送两张票据，此后不补发。三个官方运行时均在 HTTP 正文发送前自动重连一次：
+
+- Work／Auth 的 TLS 1.2 继续使用原票据，TLS 1.3 消费下一张未用票据。
+- TTNet 的紧接重连不提供票据，但保留尚未消费的票据；TLS 1.3 再下一次请求可以恢复。先前把它解释为清空端点缓存是不正确的。
+- 网关只在已选到缓存票据、上下文仍有效、握手返回 EOF／UnexpectedEOF 或远端 handshake_failure 时重连一次。该操作仍在 TLS 回调内，尚未发送 HTTP 请求；证书失败、其他 TLS 错误、没有缓存的首次握手或已发送的业务请求不走这条重试。
+
+网关将 uTLS 的握手期删除通知延后至握手结果已知，再区分失效与上述暂时失败；过期／失效会话仍清理，新票据仍由 uTLS 校验与保存。三条 profile、两个 TLS 版本、两个故障类型，共 12 组实际传输对照的完整事件序列与官方一致，每侧 60 次握手，每组仅四次业务 POST。
+
+继续在同样的隔离环境补采上传、取消、REFUSED_STREAM 与 GOAWAY，共三种官方运行时各四组；修正后的网关均通过对应场景：
+
+- 服务端声明 32 KiB 流窗口，固定正文上传 256 KiB；三者的单个 DATA 负载最多 16375 字节，流或连接额度归零时停止，收到 WINDOW_UPDATE 后继续。网关原先发送 16384 字节，现仅为这三条 profile 限制为 16375；缓冲池取到更大内存时也按本次限制读取。Work／Auth 本组 DATA 长度、END_STREAM 和剩余额度事件与官方逐项相同。
+- 读取未结束的响应时取消；三者均发送 RST_STREAM CANCEL（8），随后在同一连接发出下一次请求。网关对照一致。
+- Work／Auth 的 POST 被 REFUSED_STREAM（7）拒绝时，在原连接重放；GOAWAY NO_ERROR、last_stream_id=1 排除当前 stream=3 时，在新连接重放，正文保持一致。对照均通过；这只覆盖服务端明确未处理的场景，不代表可以重放已处理的业务请求。
+- TTNet 的 `@aha-kit/net/wrapper.js` 通过 `bodyProviderPair` 逐块交给原生层，没有回放源；上述两种拒绝在官方均报 `internal_code=-351`，没有再次发送该正文，后续独立请求仍能成功。网关原先保留 Go GetBody 而重发，现按该路径取消正文回放，并保留 HTTP/2 拒绝原因与无法回放错误。
+
+TTNet 的固定正文结束条件另外覆盖 2、16374、16375、16376、32750、32751、65536、262144 字节，各重复两次：首块内结束时另发空 END_STREAM；跨过首块后可在最后一个非空 DATA 上结束。网关对已知长度、可重建的固定正文保留内部长度，仅用于还原读取结束状态，线上仍不发送 Content-Length、也不允许回放。16 组完整 DATA 长度／结束标志／剩余额度事件与官方相同；未把这个结论扩展到未知长度、任意逐块生产的上传源。后续逐块上传已确认差异，见下节。
+
+离线新增上传额度与分片、结束边界、拒绝后的正文重放、后续连接恢复，以及首次握手 EOF、其他 TLS 告警、取消后不重连、连续恢复失败只重连一次、新票据不被旧失效通知误删的回归。尚未覆盖多流上传压力、任意上传源、反复 GOAWAY／拒绝和取消竞态的全部调度，也未据此称所有动态帧逐字节一致。
+
+最终代码的固定 req 全量普通测试、HTTP/2／HPACK race、根模块全量普通测试、upstream／providers race（排除前述既有 `TestListingModelsDevFailuresSilent`）、构建、vet、lint、格式与 diff 检查通过。保数据重建后的 dev 健康；在实际容器内，Work `deepseek-v4.1-flash` 与 Code `Doubao-Seed-Code` 的流式正文、结束帧及无错误检查均通过。配置、auth 文件、完整凭据和账号设置保持一致，重建前后的全部绑定一致；真实请求后两条复用绑定仅到期时间续期，账号与上游会话 ID 保持，已用停机备份逐字段核对，未回填旧凭据。本轮未重复验收 Qoder 推理。
+
+### 连续拒绝、取消与未知长度上传（2026-11-17）
+
+继续使用未修改的 Chrome 156、Electron 39.2.7 `net.fetch` 与官方 `@aha-kit/net`／TTNet，在隔离网络中连接可信回环假上游。连续拒绝同一 POST，分别采集 REFUSED_STREAM 与排除当前流的 GOAWAY；另确认两次拒绝后的第三次发送可以成功。GOAWAY 服务在关闭前排空控制帧，避免未读 ACK 触发 TCP RST；早期未排空的结果不作为重试结论依据。
+
+| 客户端 | 同一正文被连续拒绝时的官方行为 | 网关修正 |
+|---|---|---|
+| Work／Auth | 原请求加两次立即重发；第三次仍拒绝则报错，后续独立请求正常 | 原先第三次拒绝后等待约一秒再发第四次；现共享一次外层请求的两次重发预算，缓存连接与新连接不重复计数 |
+| TTNet | 只发送一次，没有可回放源，报错后独立请求正常 | 保持不可回放，不启用 Work／Auth 的预算策略 |
+
+离线回归覆盖三条 profile × 两种拒绝 × 拒绝一／二／三次 × 冷／复用连接，共 36 个场景，同时检查正文、发送次数、GetBody 调用次数、拒绝原因及独立后续请求。另在收到正文后、发出拒绝前取消上下文：必须返回取消原因，不重发旧正文，后续请求完整返回。预算耗尽与取消的检查在创建回放正文之前，避免创建未使用且未关闭的新正文。上述回归已通过 race；最终源码重新编译诊断客户端后，三种 profile × 两种拒绝的六组请求事件均与各自官方样本一致，客户端均保留拒绝错误，后续独立请求成功。比较不把执行时延当成固定指纹。
+
+未知长度上传最初完成两轮官方采样：每 25 毫秒生产 1、16374、16375、16376、32751 字节，共 81877 字节；服务端流窗口 32768、连接窗口 65535，零窗口等待 80 毫秒后补充。三种官方客户端均正确暂停与恢复，当时网关与官方仍有以下确定差异；后续修正见下一节：
+
+- Work／TTNet 在等待补窗期间积累后续块，继续读取时可合并块边界，并在最后非空的两个字节上设置 END_STREAM。网关以 `io.Pipe` 对照时仍分别读出前一生产块剩下的一个字节，最后另发空 END_STREAM。
+- Auth 在发送前收完正文，首个 DATA 为 16375 字节；当前网关仍立即发送首个一个字节。该行为有 [Electron v39.2.7 的 net-fetch.ts](https://github.com/electron/electron/blob/v39.2.7/lib/browser/api/net-fetch.ts) 与 [net-client-request.ts](https://github.com/electron/electron/blob/v39.2.7/lib/common/api/net-client-request.ts) 依据：fetch 将正文 pipeTo 默认 ClientRequest，后者使用 SlurpStream，在 finish 后才启动请求。不能为追求采样帧数而猜测增加缓冲规则。
+
+Work 的 CORS 预检单独记录；比较业务流时归一化 stream ID，不把 OPTIONS 算成额外业务请求。上述两轮结果确认了缺口，当时尚未修正，不属于“全部动态帧一致”。多流上传压力和全部取消竞态也仍未完成。
+
+本轮 Go 全量普通测试、upstream／providers 完整包 race、固定 req 全量 race、build、vet、golangci-lint、gofmt 和 diff 检查通过；完整包 race 未排除旧的超大响应测试。保数据更新 dev 后容器健康，实际服务容器中的 Work／Code 各一次流式回复、正常结束与无错误检查通过。配置、auth 文件、账号设置和全部已有绑定在重建时保持；真实请求只使两条原有绑定正常续期，账号与上游会话 ID 未变。
+
+构建前摘要与停机备份之间，Qoder 国内 UMID 恰好到期刷新，仅 machine_token／machine_code／machine_type 更新；旧字段与旧缓存一致，新字段与新缓存一致，旧刷新期限早于本次更新，更新时间处于镜像构建期间、停止服务之前。停机备份与重建后、实测后的完整凭据一致；账号授权 token、设备 ID、密钥及 machine_local 均保持，未回填旧凭据。最初严格摘要比较的失败记录保留，并以停机备份和两代缓存独立核实此变化。本轮未重复调用 Qoder 推理，所有改动仍未提交、未推送。
+
+### 未知长度正文的缓冲与完成通知（2026-11-17）
+
+在前节确定差异后，进一步核对官方实现，再修正 `profile_upload.go`：
+
+- Work：同版 Chromium `156.0.8078.79` 的 [ChunkedDataPipeUploadDataStream](https://github.com/chromium/chromium/blob/156.0.8078.79/services/network/chunked_data_pipe_upload_data_stream.cc) 从 Mojo 管道读取已经到达的数据，完成大小已知时可将 END_STREAM 放在最后一个非空 DATA。[MojoCreateDataPipeIpcz](https://github.com/chromium/chromium/blob/156.0.8078.79/mojo/core/core_ipcz.cc) 的默认容量明确为 64 KiB。网关现在将生产正文与等待 HTTP/2 窗口分开，未读队列限制为 64 KiB，读取时合并已到达的数据。
+- TTNet：官方 `@aha-kit/net-linux-x64-gnu` `0.4.0-dev.25113f695920251126182417` 的原生包 SHA-256 为 `c43a3b188d98fb9a3f5c81562051bf3bff7ba6a4ec2fda8d95d96ddc9ba0cfd4`。直接调用原生 `bodyProviderPair` 而不启动消费者，分别发送 1、16375、65536、262144 字节的块，四组均只完成前三次发送，第四次等待。`body_provider_pair_c_callback` 的反汇编同时显示容量 3，调用 Tokio 有界 mpsc。网关未知长度正文相应使用三条消息的队列，完成／读取错误也通过队列传递；正文仍不可回放。
+- Auth：按前节已核实的 Electron SlurpStream，在发送前收取未知正文，之后提供固定长度和回放源；原有已知、可回放的固定正文不额外复制。补采并解码官方 HPACK 后，未知流的 Content-Length 实际为 81877；Work 的流式上传与 TTNet 均不发送此字段，网关回归分别检查这三种结果。
+
+新网关在相同零窗口场景连续复采两轮，三种 profile 共六组完整 DATA 长度、结束标志、剩余额度与暂停／补窗事件，归一化 Work 预检流号后，均与各自官方样本一致。这里比较的是业务帧事件，不包含所有请求头字节或运行时延。已知固定正文继续使用此前的读取方式，避免改变 TTNet 首块内结束时独立发送完成通知的行为。
+
+离线回归先在旧实现复现三个 profile 的失败，再检查完整正文、Content-Length、分片、最后非空结束帧和同连接后续请求。缓冲为空／已满时取消的回归检查生产 goroutine 退出、正文恰好关闭一次和取消原因；有界队列通过阻塞后续生产验证背压。Auth 在读取失败或取消时不得开始拨号，保留原始读取错误或取消原因；Work／Code 拨号失败也必须关闭生产源。关闭正文会等待生产 goroutine 退出。相关回归通过 race；最终源码重新编译诊断客户端后，三组上传业务帧事件再次与官方一致。
+
+Go `io.Reader` 不携带任意 JS Uint8Array 的原始生产边界；适配器以每次 Read 为生产块，单次生产读取缓冲为 64 KiB。上述结果仅证明已采样的逐块时序、窗口与结束条件，不能外推为任意上传源、跨线程调度、全部取消竞态或多流压力的逐帧一致。所有未确认项继续保留。
+
+本轮最终代码 Go 全量普通测试、upstream／providers 完整包 race、build、vet、golangci-lint、gofmt 与 diff 检查通过。完整包 race 首次在既有目录超大响应测试触及两秒等待上限，保留失败日志，未修改或跳过该测试；完整复跑通过。固定 req 与前端产物沿用前轮已验证版本。
+
+上传修正已保数据更新 dev，容器健康；实际服务容器内 Work／Code 各一次流式请求返回正常正文与结束帧，无错误。重建前后和实测后，配置、auth 文件、完整最新凭据与账号设置一致；重建时全部已有绑定一致，实测只使两条复用绑定正常续期，账号与上游会话 ID 保持。原始严格摘要中的绑定变化记录保留，并另与停机备份逐字段核实。未回填旧凭据，本轮未重复 Qoder 推理，未提交、未推送。
+
+### 多流上传、零窗口取消与 TTNet 残片读取（2026-11-17）
+
+进一步使用未修改的 Work 浏览器、授权 Electron 和 TTNet 原生网络模块采样。主矩阵为三种运行时 × 固定／未知长度正文 × 单流／连接窗口归零 × 两轮，共 24 组官方样本；修正后网关以相同采样器完成 24 组。先在同一连接预热，再启动三个各 128 KiB 的上传，服务端限制最多两个并发流、初始流窗口一个字节；第三流在取消前排队。两种取消条件分别为两个活动流耗尽各自窗口，以及共享连接窗口归零。
+
+这组样本与离线回归已确认：零窗口不阻塞 RST_STREAM／CANCEL；取消一个活动流后释放并发槽位；已取消流收到迟到 WINDOW_UPDATE 后不再发送旧正文；另外两份正文及完成事件保持完整，最后一个探针继续复用同一连接，没有重放取消的正文。这里检查的是稳定的协议行为，不表示 DATA 的全部交错已一致。
+
+采样发现并修正一个确定的 TTNet 差异：未知正文每 10 毫秒生产 16 KiB，取消前累计发送 32768 字节时，官方 DATA 长度为 `[1, 16374, 16375, 18]`，旧网关却为 `[1, 16374, 9, 16375, 9]`。生产间隔改为 100 毫秒后，官方仍保持前一种结果。相同原生包的 `tokio_ttnet::body::upload_data::create_upload_data_provider::read` 及其异步 closure 显示，官方先复制当前消息的残片，用完后再接收至多一条新消息；下一消息未到达时，即使已复制部分字节也会等待。网关现在将当前消息残片与三条消息的队列分别保存，按该方式读取。Work 继续使用已有的管道方式，Auth 继续预先收完正文。
+
+离线帧回归先在旧实现复现多出的两个 9 字节 DATA，修正后通过；另覆盖残片等待期间收到下一块、EOF、读取失败和取消，分别检查正文连贯、完成通知、带操作名的原始错误，以及取消后不输出残片、生产者退出和源恰好关闭一次。官方和最终网关两轮样本中，取消前该流的分片与结束标志一致。
+
+跨流调度仍有确定缺口：固定正文额外重复采样后，Work／Auth 的两个存活流在官方六轮中的分片各自稳定，网关仍随 goroutine 调度变化。TTNet 官方自身的存活流有多种交错，不能拿其中一轮作为唯一顺序；也不能据此忽略 Work／Auth 已确认的差异。发送调度、任意生产块映射与其他取消竞态继续待修正和核对，尚未达到完全对齐。
+
+采样器修正了两个边界：预热请求可能在客户端收到初始 SETTINGS 前按原窗口发送，属于有效行为；TTNet 的独立空完成帧也需要给探针保留发送机会。未知长度上传取消时，还复现官方 `@aha-kit/net` 包装层向已关闭队列调用 `sendError`，产生未处理的 Promise rejection。官方 `out/bootstrap-fork.js` 会记录该异常而继续运行，采样宿主采用相同的记录方式，保留原始日志，未修改官方网络模块；业务 fetch 的失败仍使验收失败。这是官方包装层问题的本地记录，不表示本仓库复刻其进程异常，也没有代用户对外提交 issue。
+
+最终 Go 全量普通测试、upstream／providers 完整包 race、build、vet、golangci-lint、gofmt 与 diff 检查通过。相关上传回归通过三轮 race；新测试按 staticcheck 建议改用 switch 后，另跑多流 race 通过。完整包 race 首次仍在既有超大响应测试触及两秒等待上限，未修改或跳过，保留失败日志后完整复跑通过。前端和固定 req 本轮没有修改，沿用已有验证。
+
+已保数据更新 dev，实际服务容器内 Work／Code 流式正文、完成事件与无错误检查通过。重建时全部已有绑定和最新凭据、设备字段、配置、认证文件、账号设置保持；实测只续期仍有效的绑定，并按既有逻辑清理在实测开始前已过期的绑定。有效绑定的账号与上游会话 ID 未变。严格摘要比较的绑定变化及最初续期检查的失败报告均保留，另以停机备份、到期时间和 `internal/providers/execute.go` 的清理分支核实，未回填过期绑定或旧凭据。本轮未重复 Qoder 推理，未提交、未推送；多流发送调度缺口继续保留。
+
+### Work／Auth 连接级上传队列与采样时序（2026-11-17）
+
+上节记录的固定正文差异已在后续修正。源码依据为 Work Chromium [156.0.8078.79 的 SpdySession](https://github.com/chromium/chromium/blob/156.0.8078.79/net/spdy/spdy_session.cc)、授权 Electron 39.2.7 所用 Chromium [142.0.7444.235](https://github.com/chromium/chromium/blob/142.0.7444.235/net/spdy/spdy_session.cc)，以及各自同版本的 `spdy_stream.cc`、`spdy_write_queue.cc`、`spdy_http_stream.cc`。官方每流最多排一个 DATA，同优先级按 FIFO 写出；排帧时预留连接和流窗口，写完成后将该流下一帧放到队尾。可同步读取的内存正文在写完成回调中继续读取，异步正文等待不阻塞其他流；同步写循环排空当前队列，再处理下一次 socket 读取。
+
+固定 req 副本增加默认关闭的 `SetHTTP2ChromiumUpload`，仅 Work／Auth 开启。连接级队列代替各流独立抢写锁，保留每流最多一个已预留 DATA；写循环运行时的补窗留待当前可写队列排空后按接收顺序处理，取消和连接错误仍可中断阻塞写入。未写出的排队 DATA 取消时归还窗口，空的结束 DATA 不消耗窗口；其在零／负窗口下仍需等待，后续修正见下一节。补窗溢出会终止流或连接，并修正原有流溢出分支重复获取连接锁的问题。TTNet 继续走原有 writer，不能以 Work／Auth 的采样替代其原生调度。
+
+生产的内存 JSON 改由 `NewBufferedRequest` 建立请求，正文及回放共用已有字节，去掉原来的字节转字符串复制。它与未知正文都保留 `ReadAvailable`，只同步读取已就绪数据；req 的 `readTrackingBody` 转发该接口，并仅在真正读取时标记正文已消费，维持未读正文的重试判断。普通 Reader 仍异步读取。
+
+离线回归保留上节六轮官方的四个固定正文向量，没有放宽断言：修正前重复测试失败，修正后连续十轮通过；相关上传三轮 race 通过。固定依赖另覆盖等待正文不阻塞另一流、阻塞写入期间取消排队 DATA 并归还窗口、读取失败／长度超限、零窗口结束／trailers、补窗溢出、Clone 隔离和读取跟踪与回放判定。
+
+复采进一步发现 Work 浏览器等待并发槽位时只预取一块，下一次 `pull` 在取得槽位后才继续；网关原先已持续拉取来源。Work 现于上传层首次读取后启动有界管道生产，取消尚未开始的上传也会关闭源并退出生产 goroutine。采样器同时对齐官方第九次 `pull` 才通知 EOF 的时机，保留最初采样报告。
+
+两轮原采样条件下的修正后网关共 24 组，均通过正文、取消、槽位释放和复用检查，Work／Auth 固定正文逐流 DATA 长度及结束标志与原六轮官方基准一致。对异步正文继续检查时，发现 Python 采样服务端默认 Nagle／延迟 ACK 会造成约 40 毫秒补窗间隔，从而改变期间积压的正文。随后为采样服务端显式开启 TCP_NODELAY，官方三种运行时及网关各重采两轮、各 24 组，全部协议完整性检查通过。新官方 Auth 的一组固定正文也出现不同分片，说明原六轮稳定结果不能外推成所有 socket 时序的唯一向量。
+
+这轮只确认上述队列和读取时机修正。统一 TCP 设置后，Auth 未知正文的两种零窗口场景与两轮网关逐流匹配；Work 未知正文部分存活流及 TTNet 存活流仍有分片差异。其他异步读取完成事件与 socket 写阻塞时的调度尚未完全复刻，不通过任意 sleep 固定时序，也不把新增官方变化当作忽略剩余差异的依据。TCP/IP 栈、任意 JS 生产块映射及全平台全部网络行为仍不能宣称完全一致。
+
+本轮最终检查：根模块普通全量、upstream／providers 完整包 race、固定 req 全量 race、相关上传三轮 race、build、vet、golangci-lint、gofmt 和 diff 均通过，没有修改或跳过既有超大响应测试。台湾时间 22:08 已保数据更新 dev，实际服务容器内 Work／Code 流式正文与结束事件均通过；配置、认证文件、完整最新凭据及账号设置一致，两条已有绑定仅续期，账号及上游会话 ID 未变。严格绑定差异报告与独立续期核对均保留。前端源码未改，复用已有构建产物；未提交、未推送，其他待办保持。
+
+### 空结束 DATA 的零窗口与负窗口等待（2026-11-17）
+
+继续核对 `SpdySession::CreateDataBuffer` 时，发现上一轮对空结束 DATA 的判断不符合官方实现：HTTP/2 的零字节 DATA 虽然不消耗流控额度，该 Chromium 路径仍先检查流窗口与连接窗口，任何一个小于等于零都会排队。不能据通用协议允许的行为替代目标客户端的实际行为；旧回归中“零窗口立即发送空结束帧”的预期也随之纠正。
+
+独立样本使用未修改的 Work 浏览器和官方 TTNet 网络模块。服务端先下发 `INITIAL_WINDOW_SIZE=1`，客户端发送一个未结束的字节后，通过控制端点通知来源结束。零窗口场景此时流窗口为零；负窗口场景再下发 `INITIAL_WINDOW_SIZE=0`，等 SETTINGS ACK 后通知来源结束，此时流窗口为负一。两者在后续 150 毫秒内都没有发出 DATA；服务端分别补窗一个或两个字节、使流窗口恢复为正一后，才收到零字节 END_STREAM。Work 与 TTNet 共十份官方样本，修正后网关各两轮、共八份样本，DATA 长度、结束标志与补窗先后均一致。
+
+旧网关四个场景都复现差异：Work／TTNet 的零窗口和 TTNet 的负窗口会提前发送空结束帧；Work 的负窗口会把负额度作为切片长度，触发 `slice bounds out of range [:-1]` panic，导致采样进程退出。这里确认的是该特定路径的退出原因，不能用来解释其他未采样的退出。
+
+Work／Auth 上传队列恢复为先等两级窗口均为正，再排帧；空 DATA 取得零额度，仍不扣减窗口。TTNet 保留原 writer，但发送独立空结束 DATA 前，按已开启的 `ChromiumFlowControl` 等待正窗口；等待期间不持写锁，SETTINGS ACK、RST_STREAM 与其他流仍能前进。非空 trailers 的 HEADERS 继续不受 DATA 流控限制。默认未开启 Chromium 流控的 req 行为保持原样。
+
+新增离线帧回归覆盖 Work／TTNet 的零／负窗口、补窗完成及取消，共八个场景；三轮 race 通过。另检查连接零窗口、流零窗口、负窗口时空 DATA 的等待，以及正文耗尽窗口后非空 trailers 能结束。尚未补窗时取消仍返回原 context 错误、发出 CANCEL，并且没有发送结束 DATA。官方样本、旧网关失败与 panic、修正后样本及日志全部保留；本次修正不表示异步上传的完整事件调度已一致。
+
+本轮最终 Go 普通全量、upstream／providers 完整包 race、固定 req 全量 race、相关回归三轮 race、build、vet、golangci-lint、gofmt 和 diff 均通过，没有排除旧测试。台湾时间 22:26 已保数据更新 dev，实际服务容器内 Work／Code 流式正文、结束事件及无错误检查通过；配置、认证文件、完整最新凭据和账号设置保持，两条已有绑定只续期，账号和上游会话 ID 未变。严格差异报告保留，续期另行逐字段核对。前端源码未改，未提交、未推送。
+
+### TLS record 的大小与写缓冲（2026-11-17）
+
+继续研究 socket 写阻塞前，独立采集 TLS 记录层，发现此前只校准 ClientHello、HTTP/2 帧而遗漏了 uTLS 默认的自适应记录大小。用逐条 TLS record 喂入的服务端 MemoryBIO 解密，按实际记录边界统计明文长度，不把 TCP recv 边界当成记录边界；全部使用可信回环、假凭据与固定测试正文，不连接真实上游。
+
+| 官方运行时 | 采样路径与结果 |
+|---|---|
+| Work Chrome 156、授权 Electron 39.2.7、TTNet 原生模块 | TLS 1.2／1.3、128 KiB 固定正文的 HTTP/2 上传。首段大正文即按 16384 字节记录上限发送，短控制帧和末段保持实际长度，没有 Go 的逐记录递增 |
+| WorkBuddy Electron 37.10.3／Node 22 | TLS 1.2／1.3、128 KiB 正文的 fetch／HTTP/1.1，同样从首段大正文采用 16384 上限 |
+| Qoder 国内／国际原生 CLI | TLS 1.2／1.3、隔离配置与虚构身份，由随机固定种子提示生成超过 256 KiB 的真实推理请求体；经可信假端点完整接收，记录同样采用 16384 上限。这里只采请求，不把假响应算成真实推理成功 |
+
+旧网关在所有五套 profile 的离线回归中均复现 Go 的增长策略：TLS 1.3 最初的大正文记录明文只有 1186、2372、3558 等字节，随后逐步增大；已经发过小的 HTTP/2 前言和请求头时，增长序号也继续累积。因此 ClientHello／JA3／JA4 匹配不能推出记录层匹配。
+
+现仅在启用官方 TLS 指纹的 uTLS 配置中设置 `DynamicRecordSizingDisabled=true`，WorkBuddy 与新增平台均接线；关闭指纹时仍按标准库原路径处理。新增五 profile × TLS 1.2／1.3 共十个离线场景，验证首段 32 KiB、一个字节的短写、后续 64 KiB 的完整接收，以及加密记录的大小与尾部；旧实现先失败，再验证修正。不改 uTLS 模块缓存，不使用延时整形。三条 Trae profile 的实际 HTTP/2 复采中，网关也不再出现上述递增记录；WorkBuddy／Qoder 的 TLS 1.2／1.3 HTTP/1.1 网关复采同样确认从首段大正文使用 16 KiB 上限，正文完整接收且客户端正常退出。
+
+这项修正只校准记录的切分上限，不声称所有完整记录序列一致：请求头、预检、窗口 ACK／补窗交错，以及待写队列都会影响每次 TLS Write 的输入。完整 socket 背压与异步事件调度仍待核对。官方 Chromium 156／142 的 `SSLClientSocketImpl` 使用容量为 17 KiB 的 `SocketBIOAdapter` 写环形缓冲；底层 TCP 返回 pending 时，BIO 只要还有容量仍可同步接收，直到缓冲满才通知 SSL 等待。因此不能将原始 TCP would-block 直接当作 HTTP/2 写循环让出的边界。对应两版本源码与采样材料保留在仓库外。
+
+本轮根模块普通全量、upstream／providers 完整包 race、build、vet、golangci-lint、格式及 diff 检查通过，没有跳过旧测试；固定 req 源码与前端未改，未重复其已通过的检查。台湾时间 22:46 保数据更新 dev 并完成实际容器 Work／Code 流式复验，正文、结束事件与无错误检查均通过；配置、auth 文件、完整最新凭据与账号设置保持，两条已有绑定只正常续期，账号与上游会话 ID 未变。严格差异报告保留，并独立逐字段核对。未提交、未推送，完整异步调度与其他待办继续保留。
+
+### Socket 背压期间的补窗与正文事件（2026-11-17）
+
+此前把所有补窗推迟到 DATA 队列排空，遗漏了 Chromium 的另一条分支：`SpdySession::DoWriteLoop` 在 SSL 返回 `ERR_IO_PENDING` 时让出事件循环，期间可以处理补窗和异步正文完成。依据为上述 Chromium 156／142 的 `spdy_session.cc`、`ssl_client_socket_impl.cc`、`socket_bio_adapter.cc` 和 POSIX socket 实现。原始 TCP 短写／EAGAIN 与 TLS pending 不等价，不能用固定延时替代这条边界。
+
+独立场景先预热同一连接，再同时上传 A（8 MiB）与 B（128 KiB）。服务端初始流窗口为 32768，两流耗尽后停止读取，给 A 加窗；确认 TCP 发送队列积压约 2.5 MiB 后再给 B 加窗，随后恢复读取。全部为可信回环、隔离网络和固定假正文，不使用真实账号。
+
+| 两轮独立样本 | B 是否在 A 结束前恢复 | 完整性 |
+|---|---|---|
+| Work Chrome 156、Auth Electron 39.2.7 | 四份均是；官方 NetLog 另证实暂停读取期间处理了 B 的补窗 | 正文和结束响应完整 |
+| 修正前网关 Work／Auth | 四份均否，B 被推迟到 A 结束后 | 正文完整，但调度与官方不同 |
+| 修正后网关 Work／Auth | 四份均是 | 两份正文、结束事件与响应完整 |
+
+Work／Auth 现于 uTLS 下增加 17 KiB 有界密文环形缓冲。Unix TCP 用 Go `RawConn.Write` 探测同步写入，保留 poller 的 deadline／close 检查；正数短写继续同步，实际 EAGAIN 后才启动排空 worker。只有缓冲已满、当前 TLS Write 仍有输入时，才通知 HTTP/2 进入 pending；本次输入全部接收后恢复同步状态。缓冲排空即退出 worker，异步错误关闭底层连接以唤醒读并保留写失败原因，关闭连接等待 worker 退出。
+
+固定 req 的 Chromium 上传路径把补窗与异步正文完成合入同一 FIFO：同步写循环期间延后，TLS pending 时按到达顺序处理，避免将其他流一直压到大上传结束。零字节读取后的异步重试也经过该队列；取消后的正文事件忽略，流／连接补窗溢出保留各自错误。原固定正文的精确分片断言继续保留，没有用新样本放宽旧断言。
+
+新增真实 socket 回归等待实际 TLS pending 和已处理的补窗帧，再恢复读取，不靠 sleep 推测该时机；另覆盖缓冲绕回、部分写、异步失败、回调内关闭，以及真实背压中的 deadline／close 唤醒。固定副本覆盖 pending 恢复顺序、读取完成与补窗先后导致的不同流控结果、零字节重试事件归属。
+
+本轮接线仅识别 Unix `*net.TCPConn`，上述独立复采在 Linux x64 直连完成。非 Unix、SOCKS5 返回的包装连接、HTTPS 代理等路径的 BIO 接线及官方对照仍未完成；未通过反射解包或绕过代理协议。HEADERS／SETTINGS ACK／RST 等控制帧仍共用原写锁，完整控制帧调度、TTNet 异步调度、任意 JS 生产块映射及其他未采样网络路径也没有因此完成。ClientHello、记录大小和本场景通过，不能推出全部传输行为完全一致。
+
+本轮根模块普通全量、upstream／providers 完整包 race、固定 req 全量 race、上传队列三轮 race、build、vet、golangci-lint、gofmt 与 diff 检查通过，未修改或跳过旧测试。Linux ARM64、Darwin ARM64、Windows AMD64 的 upstream 测试包交叉编译通过；这三项仅证明可编译，没有在对应设备执行测试，也没有将 Windows 原路径算作已接入 BIO。
+
+最终源码重新编译诊断客户端后，Work／Auth 各再复采一份，均通过上述背压顺序及完整性检查。台湾时间 23:24 已保数据更新 dev，实际服务容器内 Work／Code 流式正文、结束事件与无错误检查通过；配置、auth 文件、完整最新凭据、设备字段及账号设置保持，两条已有绑定只续期，账号和上游会话 ID 不变。原始严格绑定差异报告保留，并独立逐字段确认续期。前端源码未改，复用已有产物；未提交、未推送，完整对齐仍未完成。
+
+### PING／SETTINGS 不阻塞后续补窗（2026-11-17）
+
+沿用上一节的双流背压条件，在暂停读取期间先发送一个 PING，或发送 `MAX_CONCURRENT_STREAMS=100` 的 SETTINGS，再给 B 补窗。Work Chrome 156 与 Auth Electron 39.2.7 各采两轮、两种控制帧，共八份官方样本；旧网关同样八份。官方 NetLog 均在服务端恢复读取前记录 B 的 WINDOW_UPDATE，恢复后 ACK 的下一份非空 DATA 均来自 B；旧网关八份均继续发送 A，部分样本甚至等到 A 结束才恢复 B。不能仅以“两流最终均完成”判作调度一致。
+
+源码依据仍为相同版本的 `SpdySession`／`SpdyWriteQueue`：PING 与 SETTINGS ACK 以 `HIGHEST` 优先级排入连接写队列，接收处理不等待 socket 可写。固定 req 的 Work／Auth 路径现将这两类帧纳入已有上传事件 FIFO，并使用高于待写 DATA 的控制队列；同步写循环期间延后处理，TLS pending 时按接收顺序处理。写失败关闭连接、打断等待正文并保留原始错误；未开启 `ChromiumUpload` 的路径保持原调度。
+
+SETTINGS 接收不再持有网络写锁：拥有自己的帧缓冲副本，避免下一次 Framer 读取覆盖；连接设置与 HPACK 编码／表更新均由连接锁保护。编码器按原有逻辑记录连续表大小变化，在下一个头块发出 table-size-update，不另存无限增长的更新列表，也不以空值丢弃中间缩表。两版本源码的默认 `kSpdySessionMaxQueuedCappedFrames=10000`，入队前比较 `>`；新队列按同一默认边界限制待处理的 PING／SETTINGS ACK，超限返回明确错误并由读取循环关闭连接。额外的 PING 压力采样确认本次两个官方运行时与网关均允许积压 10001 个，在第 10002 个触发上限关闭；官方 NetLog 明确记录 `Exceeded max queued capped frames`。但官方关闭前仍发出已排队的 10001 个 ACK，当时网关直接关闭、观察到 0 个 ACK；该差异于次日按下节修正。压力材料分别记录“上限边界通过”和“完整压力行为未通过”，不能混为通过；当时尚未采集 SETTINGS 与混合控制帧压力，次日补采见下节。
+
+新增真实 socket 回归在发送控制帧后等待客户端已处理 B 的补窗，再恢复读取；修正前四个场景有三个在该等待处超时，原始失败记录保留，未将偶然通过的一项删掉。修正后该组通过，另保留旧的无控制帧背压场景。固定副本的回归验证控制帧在 B 的 DATA 前发送、读取不等写锁、控制写失败唤醒等待正文、SETTINGS 帧复用及 0／64／8192 连续表变化、同步延后／TLS pending 两种队列上限。
+
+修正后网关独立复采两轮、两 profile、两种控制帧，共八份样本，ACK 后的第一份非空 DATA 全部来自 B，与上述官方顺序一致；正文、结束与响应完整。HEADERS、RST_STREAM、出站 WINDOW_UPDATE、GOAWAY 等尚未全部并入这套调度，TTNet、代理与其他平台的既有缺口也未因此完成；本节不宣称完整控制帧调度已对齐。
+
+最终源码重编译后，四份 PING／SETTINGS 网关复采再次通过同一顺序检查。根模块普通全量、upstream／providers 完整包 race、固定 req 全量 race、相关背压／HPACK／多流及固定副本三轮 race、build、vet、golangci-lint、gofmt 和 diff 均通过；Linux ARM64、Darwin ARM64、Windows AMD64 测试包交叉编译通过，未在这些设备运行。相关组合首轮的 TTNet 多流取消五秒超时记录保留，未改测试或跳过，完整复跑通过；该次超时的具体原因未确认。压力边界和关闭排空的独立结果仍按上文分别记载。
+
+台湾时间 23:52 已保数据更新 dev，实际容器内 Work／Code 流式正文、结束与无错误检查通过。配置、auth 文件、完整最新凭据、设备字段和账号设置保持；两条已有绑定仅续期，账号和上游会话 ID 不变。严格差异报告与逐字段续期核对均保留。前端未改，未提交、未推送；超限关闭前排空 ACK 在下一节继续验证，其余未完成项仍保留。
+
+### 控制队列超限后的排空关闭（2026-11-18）
+
+上一轮验证了允许积压 10001 个控制帧、第 10002 个触发关闭，却没有对齐关闭前排空 ACK：官方收到 10001 个 ACK，旧网关为 0。不能把上限匹配算作完整压力通过。
+
+源码依据为 Chromium [156.0.8078.79](https://github.com/chromium/chromium/blob/156.0.8078.79/net/spdy/spdy_session.cc) 与 [142.0.7444.235](https://github.com/chromium/chromium/blob/142.0.7444.235/net/spdy/spdy_session.cc) 的 `DoDrainSession`、`DeleteStream`、`PumpWriteLoop`：会话停止复用并终止活动流，删除尚未开始的流帧，保留在途写和会话级控制队列；在途写完成且队列为空才销毁连接。队列超限使用 `ERR_CONNECTION_CLOSED`，不另发会超限的 GOAWAY。156 使用异步发起排空，142 在调用处直接进入排空；本轮只确认下述压力场景，不将两者其他事件循环行为视为完全相同。
+
+固定 req 的 Work／Auth 现仅对控制队列超限启用排空状态。停止接收和新请求，关闭正文并通知原始超限错误，删除待写 DATA，保留正在写出的 DATA 及排队的 PING／SETTINGS ACK。流清理不额外发 RST_STREAM，删除最后一个流、空闲回收与 graceful shutdown 不抢先关 socket。排空后才完成未取消的失败请求；请求取消仍能及时返回，会话继续排空控制帧。网络写失败、写 deadline 或显式 Close 保持可中断，不将所有错误改成等待排空。
+
+离线回归先在旧实现复现丢弃 ACK，再覆盖同步写／TLS pending 下 10001 个混合 ACK 的数量与顺序、保留在途 DATA、删除待写正文、禁止复用和空闲回收，以及写失败／Close／deadline 唤醒。真实 TLS socket 回归等待实际 pending 和正文关闭，验证原始错误、取消提前返回、取消后 ACK 仍完整及没有额外 RST／GOAWAY。新 socket 测试首轮未预热连接、初始窗口未固定而超时，修正测试后通过；失败日志保留，未删旧断言。
+
+最终源码重新编译诊断客户端后，两轮独立压力复采包含 PING、SETTINGS 和交替混合三种控制帧、10001／10002 两个数量、官方 Work Chrome 156／Auth Electron 39.2.7 及修正后网关，共 48 份：10001 个均正常完成并收到全部 ACK；10002 个均触发上限，并在 EOF 关闭前按原顺序收到前 10001 个 ACK。随后四份普通 PING／SETTINGS 双流样本仍为 ACK 后先恢复 B，正文、结束和响应完整。HEADERS／RST／出站 WINDOW_UPDATE／GOAWAY 的统一调度、TTNet 完整异步调度、其他代理与系统路径仍未完成，完整对齐继续标为未完成。
+
+根模块普通全量、固定 req 全量 race、相关三轮 race、upstream／providers 完整包 race、build、vet、golangci-lint、gofmt 和 diff 检查通过；Linux ARM64、Darwin ARM64、Windows AMD64 测试包交叉编译通过，仅代表可编译。upstream race 的既有 `TestListingModelsDevFailuresSilent/超大响应` 首轮及单独复跑曾两秒超时，完整包随后未跳过测试复跑通过；失败日志保留，超时原因未确认。
+
+台湾时间 00:18 保数据更新 dev，00:19 实际容器内 Work／Code 流式文本、正常结束及无错误检查通过；配置、auth 文件、完整最新凭据、设备字段和账号设置保持。两条已有绑定只续期，账号与上游会话 ID 不变；严格差异报告和独立逐字段核对保留。前端源码未改，未提交、未推送，完整对齐仍未完成。
+
+### 响应补窗与上传背压（2026-11-18）
+
+在 Linux x64 回环连接上，先预热同一连接，再并发上传 A、B。服务端暂停读取，让 A 持续占用发送队列，五秒后对 B 发送带 255 字节尾部填充的空 DATA，随后为 B 补充发送窗口并发来 PING。Work Chrome 156 和 Auth Electron 39.2.7 的两轮 NetLog 均在服务端恢复读取前记录了两次出站补窗，并处理了 B 的入站补窗。
+
+四份官方样本在已进入 TCP 队列的 DATA 之后，依次发送连接 WINDOW_UPDATE（3）、PING ACK、B 的 WINDOW_UPDATE（1）及 B 的 DATA。连接补窗的 3 字节包含预热响应消费的 2 字节和本次 padding 长度的 1 字节。旧网关把整段填充一次归还，四份样本分别发送连接窗口 258、流窗口 256，且流补窗之后继续发送 A 的 DATA。修正后四份网关样本均匹配官方的补窗数值和帧顺序，两个上传和响应均完整。
+
+两版本 Chromium 的 `SpdySession::OnStreamPadding` 按解码回调归还连接和流窗口。`SendWindowUpdateFrame` 把连接补窗放在最高优先级，流补窗使用流优先级。Work／Auth 固定副本现分别处理长度字节和尾部 padding，并把连接补窗放进 ACK 队列、流补窗按 FIFO 排在同优先级的 DATA 中。正文消费与关闭产生的补窗也走同一队列，计入既有控制帧上限。连接关闭后仍可读取已接收的完整响应。
+
+回归覆盖暂停写入期间的接收、两级补窗数值与帧序、正文读取触发上限后的排空，以及读完已缓冲的完整响应。RST_STREAM、HEADERS、GOAWAY 的完整调度、代理路径以及跨 TLS 读取边界的 padding 分段仍待验证。
+
+全量 Go 测试、固定 req 和 upstream／providers 的 race 测试、构建、vet、golangci-lint、格式与 diff 检查通过。Linux ARM64、Darwin ARM64、Windows AMD64 通过交叉编译。台湾时间 08:07 保数据更新 dev，实际服务容器内 TraeWork／Trae Code 流式通过。重建前后的配置、auth 文件、凭据、账号设置及绑定一致，真实调用后两条绑定续期、一条已过期绑定按现有逻辑清理。
+
+### 上传背压时取消流（2026-11-18）
+
+Chromium 156／142 的 `SpdySession::ResetStreamIterator` 以原流优先级把 `RST_STREAM` 排入会话队列，再关闭流。`DeleteStream` 移除该流剩余的排队 DATA，已开始写的帧继续完成。会话队列中的取消帧在流删除后仍待发送，且计入控制帧上限。
+
+Work／Auth 改为把本地 `RST_STREAM` 放入与 DATA 同优先级的写队列，socket 写阻塞期间也能清理流并释放并发槽位。最后一条流结束后，单次连接会等已排队的帧写完。回归先在旧代码复现槽位阻塞，再验证 PING ACK 优先于取消帧、取消帧排在下一段 DATA 前，以及单次连接发出取消帧后关闭。
+
+三轮 Linux x64 回环 TLS 对照共十二份样本，覆盖官方 Work、官方 Auth 和网关的两套配置。服务端停止读取，A 上传造成约 2.5 MB TCP 积压，B 取消后服务端再发迟到补窗及 PING。恢复读取后，十二份样本均先收到 PING ACK，再收到 B 的 `RST_STREAM(CANCEL)`，随后 A 继续完成上传与响应。B 未在迟到补窗后发送 DATA。两套官方 NetLog 均记录在服务端恢复读取前已排入取消帧。
+
+首次全量回归发现，第三条流的 HEADERS 可能抢在已排队的取消帧前到达，让服务端看到超出并发上限的请求。新请求现等已排队的取消帧写出后再发送 HEADERS，满并发与迟到补窗回归连续五轮 race 通过。HEADERS 的完整队列调度、GOAWAY 及其他 RST 错误码选择仍待进一步核实。
+
+Go 全量、固定 req 和 upstream／providers 的 race、构建、静态检查及三平台交叉编译通过。根模块首轮有一次 TTNet 零连接窗口用例超时，该用例独立复跑八次通过，根模块全量复跑通过。台湾时间 08:21 保数据更新 dev，实际服务容器内 TraeWork 和 Trae Code 流式通过。配置、鉴权文件、凭据和设置保持，真实调用后两条会话绑定仅续期。
+
+### 请求头排队与流编号分配（2026-11-18）
+
+Chromium 156／142 的 `SpdyStream::SendRequestHeaders` 将头块生产器排入流队列。`SpdySession::DoWrite` 取到该头块后才开启流并分配编号，再调用 `ProduceHeadersFrame` 编码。取消等待写入的流时，`DeleteStream` 删除它的待发帧，已开始写出的帧继续完成。
+
+Work／Auth 的初始 HEADERS 与非空请求尾部字段现在进入和 DATA 同优先级的队列。编号、初始窗口和 HPACK 编码在实际发送时确定，HEADERS 与后续 CONTINUATION 连续写出。取消排队请求释放并发槽位，且不消耗编号或推进 HPACK。先前为防止 HEADERS 越过 RST_STREAM 加的等待改由同优先级 FIFO 保证。收到 GOAWAY 时，待开启流走原有重试判定，未被 GOAWAY 拒绝的流仍可发送尾部字段。
+
+离线回归覆盖写阻塞期间取消请求、后续编号无跳号、PING ACK 优先、跨帧头块解码，以及收到 GOAWAY 后保留已开启流的尾部字段。真实 socket 背压、多流取消和已有官方 HPACK 向量继续通过。完整 GOAWAY 发送调度仍待验证。
+
+补充三轮 Linux x64 回环对照共十二份样本。上传造成约 2.5 MB TCP 积压后，两个新请求在服务端暂停读取期间先后发起，其中一个取消。官方 NetLog 确认两份请求头都已提交，恢复读取后只给存活请求分配流编号。官方 Work、官方 Auth 和两套网关均观察到 PING ACK 紧接存活请求 HEADERS，流编号为 1、3、5，取消请求没有 HEADERS 或 RST_STREAM，两个存活上传和响应完整。
+
+Go 全量、固定 req 和 upstream／providers 的 race、构建、静态检查及三平台交叉编译通过。既有 `models.dev` 超大响应测试在完整 race 首轮超时，完整复跑通过，失败日志保留。最终源码的两套网关回环复采仍按 PING ACK、取消帧、存活流 DATA 的顺序发送。台湾时间 08:36 保数据更新 dev，实际容器内 TraeWork 和 Trae Code 流式通过。配置、鉴权文件、凭据及设置保持，真实调用后两条会话绑定仅续期。
+
+### 协议错误时发送 GOAWAY（2026-11-18）
+
+Chromium 156／142 的 `SpdySession::DoDrainSession` 在正常关闭时等活动流完成。遇到连接级协议错误时，停止接收新流，移除尚未开始的流帧，保留已开始写出的帧和已排队会话控制帧，再按最高优先级排入 GOAWAY。队列超限仍沿用不发送 GOAWAY 的排空路径。固定 req 的 Work／Auth 配置按同样顺序处理这些场景，并保留原连接错误。
+
+三轮 Linux x64 回环对照共十二份样本。在上传背压期间，本地服务端依次发送 PING 和客户端已禁用的 PUSH_PROMISE。恢复读取后，官方 Work、官方 Auth 和两套网关均收到先前在途 DATA、PING ACK、`GOAWAY(last_stream_id=0, PROTOCOL_ERROR, "PUSH_PROMISE received")`，随后连接关闭。官方与网关在进入错误排空前已送入 TCP 的 DATA 字节数不同，其他协议错误的调试字段未逐项对照。离线回归另验证正常关闭等待活动流且不发 GOAWAY，以及队列超限保留已排队 ACK。
+
+Go 全量、固定 req 和 upstream／providers 的 race、构建、静态检查及三平台交叉编译通过。台湾时间 08:50 保数据更新 dev，实际容器内 TraeWork 和 Trae Code 的流式请求均完整结束。重建前后配置、鉴权文件、凭据和设置一致，真实调用后两条活跃会话绑定仅续期。
+
+### 代理隧道上的写入背压（2026-11-18）
+
+Unix 上的 Work／Auth 现在可在 HTTP CONNECT、HTTPS CONNECT、SOCKS5 和 SOCKS5H 隧道内处理 TLS 写阻塞。在 SOCKS CONNECT 握手成功后使用原 TCP 连接，代理认证和目标解析仍由 `x/net/proxy` 负责。HTTPS CONNECT 在代理 TLS 下方缓冲已加密的数据，将底层写阻塞通知传给 HTTP/2。发给目标的连接仍通过外层 TLS，代理证书的校验规则不变。
+
+Linux x64 回环回归同时开启两个上传流，让第一个流填满发送缓冲，再由假上游发送 PING 和第二流的 WINDOW_UPDATE。四种代理均通过同一隧道传输，收到 PING ACK 后第二流在大上传结束前恢复。旧实现的 SOCKS5 和 HTTPS CONNECT 未通知 TLS pending，测试等到超时。官方运行时通过代理的帧序、非 Unix 写阻塞和真实代理上游仍待验收。
+
+HTTPS 代理的外层 TLS 可将一次内层写入拆成多次 socket 写入，补窗也可能在两次 pending 通知之间到达。测试等代理到达暂停点，观察补窗到达后写循环处于 pending，再恢复转发。HTTP／HTTPS CONNECT 压力回归连续通过八轮 race，四种代理与直连组合连续通过三轮 race。Go 全量、构建、vet 和 lint 通过。
+
+台湾时间 09:06 保数据更新 dev，实际容器内 TraeWork 和 Trae Code 流式请求均正常结束。重建前后配置、鉴权文件、最新凭据、账号设置、会话绑定的摘要一致。实测后两条活跃绑定续期，两条实测前已过期的绑定按现有逻辑清理。这次真实流式测试未控制代理线路。
+
+后续 SOCKS5／SOCKS5H 回环偶见大流先结束，服务端因顺序断言失败关闭连接，客户端随后收到 EOF。夹具原先只让 CONNECT 代理显式暂停，现四种代理共用上传转发暂停点，等补窗已交给 HTTP/2 处理、写循环处于 pending 后才恢复转发。ACK、单隧道、正文完整性和 B 在 A 结束前恢复的断言均保留。修正后的四种代理与直连组合通过十二轮普通测试和四轮 race，根模块普通全量通过。本轮只修夹具，未改运行时。
+
+同轮回环也重现了一次 Work 固定正文在连接窗口归零后的存活流分片差异。归档中带 TCP_NODELAY 的两份官方 Work 同场景样本仍一致。Auth 流窗口归零的两份样本则有不同分片。全量复跑通过，已出现的 Work 差异原因仍未确认，严格分片断言保留。
+
+后续定位了 Trae Code 固定正文、单流窗口归零场景中的偶发五秒超时。两次失败均在 B 的最后一个 DATA 帧耗尽连接窗口后出现，此时 C 的流窗口仍有余量，测试服务端却因为 B 已结束而跳过连接补窗。回环夹具现为已结束的 DATA 帧照常补连接窗口，只为仍在上传的流补单流窗口。修正后该子项连续 240 轮 race 通过，Go 全量测试通过。此次修正仅涉及测试夹具。Work 的固定分片差异仍待定位。
+
+2026-11-18 11:31（台湾时间）补齐官方 Auth 代理回环样本。原夹具已选中代理，但测试域名在建立隧道前返回 `ERR_NAME_NOT_RESOLVED`，加入 resolver rules 或隔离的 hosts 映射仍未取得隧道。最终使用已通过直连采样的 `localhost`，以 `<-loopback>` 显式关闭 Electron 的回环地址代理绕过，保留官方 Trae 包名／版本，调用包内 Electron 39.2.7 的 `net.fetch`。Work 浏览器及网关仍使用 `capture.trae.cn`。此处验证控制帧和 DATA 恢复顺序，未比较不同测试域名下的请求头字节及所有 TLS 记录边界。
+
+HTTP CONNECT、HTTPS CONNECT 和 SOCKS5 分别采两轮 PING 与 SETTINGS。官方 Work、官方 Auth、网关 Work、网关 Auth 共 48 份样本均只建立一条目标隧道，B 的 WINDOW_UPDATE 到达前已形成超过 1 MiB 的 TCP 积压，控制 ACK 后首个非空 DATA 来自 B，B 在 A 完成前恢复，两份正文及响应均完整。24 份官方 NetLog 还逐份确认在服务端恢复读取前收到 B 的补窗。原失败样本、原始 NetLog、结果及独立核对脚本归档在仓库外。非 Unix、真实代理到上游、TTNet 完整调度和其他异常路径继续待验收。
+
+### HEADERS 写完即启动正文（2026-11-18）
+
+Chromium 156／142 的 `SpdyStream::OnFrameWriteComplete(HEADERS)` 在同一写完成回调中调用 `SpdyHttpStream::OnHeadersSent()`，后者立即读取并发送正文。原网关只在连接写循环中通知 HEADERS 完成，再由请求 goroutine 开始正文；这使同步可用正文的首帧入队取决于另一 goroutine 的调度。
+
+固定 req 副本现于成功写完 HEADERS 后，在同一写循环内启动正文。同步可用正文立即按原窗口预留规则排入 FIFO，未就绪正文仍由后台读取，不阻塞其他流。等待 `100-continue` 时保留原等待逻辑，收到继续信号或超时后才读取；请求头编码／写入失败、已取消或已停止上传的请求不启动读取。请求 goroutine 等待同一个上传结果，保留 trailers、长度超限、原始读取错误、dump 与取消处理，不再重新启动正文。
+
+新增确定性回归在旧实现的固定正文、未知长度、trailers 和长度超限场景均复现启动过晚，修正后通过；另覆盖异步读取、`100-continue`、继续前取消和请求头错误。此前偶发分片差异的 Work／固定正文／连接零窗口子项连续 300 轮 race 通过，完整十二场景组合通过十轮 race；严格逐帧断言未放宽。
+
+同条件下重新采集官方 Chrome Work、官方 Electron Auth 及对应网关，单流／连接窗口归零各两轮，共 16 份样本。全部只使用一条连接，取消后其余正文、正常结束与后续请求完整，八组官方／网关逐流 DATA 分片全部相等。采样夹具同步修正已结束 DATA 仍须补连接窗口的判断，避免把其他流缺窗误判为客户端挂起。该边界差异已确认并修正，但尚未证明它是历史偶发向量变化的唯一根因；有限轮次通过不代表所有并发调度已完全对齐。TTNet、任意生产块映射、非 Unix 和真实代理业务路径等仍按多平台待办验收。
+
+根模块普通全量、upstream／providers 完整包 race、固定 req 全量 race、build、vet、lint 和改动文件格式检查通过，未排除旧测试。台湾时间 11:51 保数据更新 dev，实际容器内 Work／Code 流式正文与正常结束均通过。重建前后配置、auth 文件、完整凭据、账号设置和绑定摘要一致；实测后两条活跃绑定只续期，其他被清理绑定均已在对应请求开始前到期，其中一条在两次验收请求之间到期。严格差异报告保留，已用停机备份、请求日志、续期时间及清理源码独立核对，没有回填旧凭据。前端未改，未提交、未推送。
+
+### TTNet 连接队列与 Cronet 异步读取（2026-11-18）
+
+官方 Trae 原生运行日志确认 TTNet 为 `4.2.243.19-trae`，`core_ver=107.0.5273.2`。对应 Chromium 基线的 [SpdySession](https://chromium.googlesource.com/chromium/src/+/refs/tags/107.0.5273.2/net/spdy/spdy_session.cc) 使用连接写队列，SSL 默认写缓冲为 17 KiB，控制队列默认上限为 10000。此处用同版本公开源码解释基线，再用未修改的官方 TTNet 包独立采样核实；不把公开 Chromium 与 TTNet 私有改动视为完全相同。
+
+旧网关的 TTNet 仍由请求 goroutine 分别争用写锁，也没有接入 TLS pending 通知。实际压力样本确认另一项差异：积压 10002 个 PING 时，官方排空前 10001 个 ACK 后关闭，旧网关却发送全部 10002 个 ACK 并完成上传。现给 TTNet 接入已有的连接级 FIFO、17 KiB 有界密文缓冲、异步读取／补窗事件和控制队列排空，直连及 Unix 代理均按同一接线处理。TTNet 仍保留原有的表大小处理及不可回放 POST 语义，没有开启 Work／Auth 的两次重发。
+
+读取边界另有关键区别：[CronetUploadDataStream::ReadInternal](https://chromium.googlesource.com/chromium/src/+/refs/tags/107.0.5273.2/components/cronet/cronet_upload_data_stream.cc) 总是返回 `ERR_IO_PENDING`，[UploadDataSink](https://chromium.googlesource.com/chromium/src/+/refs/tags/107.0.5273.2/components/cronet/native/upload_data_sink.cc) 经 executor 调用 provider，再把读取结果投回网络线程。官方原生包的 `tokio_ttnet::client::executor::execute_fn` 也确认通过 Tokio 派发任务。因此 TTNet 即使消息已到达也经过异步完成事件，不借用 Work 的同步 `ReadAvailable` 快路径；provider 内部“残片加至多一条消息”的读取规则、三条消息背压及固定小正文的独立结束 DATA 保持。
+
+最终版本两轮独立对照共 48 份样本：16 份多流取消样本均完成正文、结束与后续同连接请求；8 份 socket 背压样本在超过 1 MiB 的 TCP 积压下均为控制 ACK 后先恢复 B，且 B 在 A 结束前恢复；24 份 PING／SETTINGS／混合压力样本均匹配 10001／10002 边界、ACK 数量及顺序和关闭行为。官方采样进程遇到请求错误后等待服务端完成信号才退出，避免宿主提前退出截断待排空 ACK。
+
+逐帧验收仍未完成：新增官方样本推翻了“TTNet 固定正文、连接零窗口只有一个稳定向量”的假设，最终八组官方／网关中仅一组逐流 DATA 长度完全相等。该假设对应本轮新加的 TTNet 单向量断言已撤回，原有 Work／Auth 严格向量未放宽；不能用此前单向量重复通过代替全部 TTNet 调度验收。剩余分片差异、任意生产块映射、其他控制帧与异常路径的官方独立对照、非 Unix 及真实代理业务仍继续核对。
+
+2026-11-19（台湾时间）补采 36 份固定正文样本。拆分或合并取消后的三个补窗帧，连接窗口归零时六对样本的逐流 DATA 长度一致，跨流发送顺序仍有差异。流窗口归零时六对样本均复现官方先发恢复流、网关先发新流。受控样本将新流首帧和存活流补窗分开，先后两种顺序各六份，两侧均按受控顺序发出第一帧，后续跨流顺序仍有差异。18 份完整官方 NetLog 的 DATA 大小和流编号均与服务端帧记录一致。网关诊断记录中，流窗口归零时新流第一次正文读取完成，随后存活流才收到可用窗口。该差异仍需定位至异步事件的交付时序。
+
+同日改用相同的 HTTP CONNECT 回环隧道，补采修复前后共 48 份固定正文，24 份官方 NetLog 与线上 DATA 逐帧相符。未控制首帧事件的 8 份官方样本中，旧流补窗先于新流读取完成的 7 份均先发送旧流，另 1 份先发送新流。网关的 8 份均先发送新流。两种出站顺序都已在官方运行时观测到，运行时何时交付这些事件仍待核对。
+
+同一回环隧道另采 32 份。TTNet 八份 NetLog 均记录先收到包含补窗的 61 字节密文，解出三个共 39 字节的 WINDOW_UPDATE 帧，应用旧流补窗后才收到新流首次正文读取完成，首帧均来自旧流。网关八份普通样本和八份诊断样本均先发送新流。诊断样本中新流正文完成均先于 socket 读调用取得这批密文并投递 `readReady`，其中七份正文在服务端发送补窗前已读完。五份诊断样本在新流写出 DATA 前已从 socket 读到密文，此时新流的正文完成任务已入队。
+
+八份受控网关样本在应用旧流补窗后才放行新流的正文完成通知，首帧均恢复为旧流。全部样本验证两条未取消流的正文、结束和同连接复用。受控条件只在诊断夹具使用。TTNet 原生正文桥何时投递读取完成仍待确认。
+
+受控场景先让两个待发流的窗口同时归零，分别按 B→C 和 C→B 顺序下发两轮单流补窗。双方都按指定顺序发送每流 1024 字节。接下来 B 发出 12293 字节并耗尽连接窗口。服务端补连接窗口后，8 组旧网关先发 C 的 14326 字节，再发 B 剩余的 2034 字节，8 组配对的官方样本均为 B 后 C。Chromium 107 和 142 都在旧流因单流补窗恢复时保留其连接等待条目，待连接补窗时按原队列扫描。[Chromium 107 流控源码](https://raw.githubusercontent.com/chromium/chromium/107.0.5273.2/net/spdy/spdy_session.cc#L3464) [Chromium 142 流控源码](https://raw.githubusercontent.com/chromium/chromium/142.0.7444.265/net/spdy/spdy_session.cc#L3048)
+
+网关现为每个流保留一个等待位置，单流补窗后再次阻塞时复用该位置。连接补窗按队列恢复，额度耗尽时尚未扫描的条目留在队首。流结束或取消时移除其条目。修复后 8 组配对样本的连接补窗帧序都与对应官方采样一致，均收齐剩余正文、完成单次取消及同连接探针。离线回归按确定的补窗事件验证出站帧序，任意 socket 调度的完整逐帧对齐继续待验。
+
+离线回归扩到 TTNet 的实际 TLS pending、直连及 HTTP／HTTPS CONNECT、SOCKS5／SOCKS5H 背压、控制超限排空与取消，并覆盖普通／同步内存两种正文来源的结束帧及已到达消息仍须异步完成。旧 pending 回归超时、旧压力行为、同步读取的失败回归与中间样本均保留在仓库外，最终相关回归通过三轮 race。
+
+根模块普通全量、providers 完整包 race、upstream 完整包 race 复跑及 build／vet／lint／格式检查通过，没有跳过测试。首轮完整 upstream race 失败，输出截断未能确定具体用例；原因仍未确认，不能将复跑通过解释为该偶发问题已解决。台湾时间 12:21 保数据更新 dev，实际容器 Work／Code 流式正文及正常结束通过，容器健康。配置、auth 文件、完整凭据、设备及账号设置保持，两条绑定只正常续期，三条已到期绑定由既有清理逻辑移除，停机备份、请求时间与源码已逐项核对；原严格差异报告保留，没有回填旧数据。前端未改，未提交、未推送。
+
+### HTTP/2 并发请求的优先级依赖（2026-11-18）
+
+官方 Work Chrome 156、授权 Electron 39.2.7 和 TTNet 在同优先级并发请求中，将新流依赖设为最近建立且仍存活的流，`exclusive=true`；Work／TTNet 权重为 220，Auth 为 110。之前只比较单请求头帧，固定副本把所有请求的父流都写成 `0`，遗漏了这个并发字段。对应三个 Chromium 基线的 `SpdySession::CreateHeaders` 均通过 `priority_dependency_state_.OnStreamCreation` 计算父流。
+
+现于初始 HEADERS 出队并分配流编号后计算父流，排除已取消及两端都已结束的流。仅远端结束、上传尚未结束的流仍参与依赖；本端 END_STREAM 的完成状态由连接写循环持锁记录，覆盖 DATA 和 trailers，避免依赖请求 goroutine 迟到的完成标志。未开启 Chromium 上传队列的路径及显式指定的非零父流继续按原参数发送。
+
+两轮独立回环共 48 份官方／网关样本，覆盖三条链路、流／连接零窗口和取消最早／最近请求。逐份检查父流、权重、exclusive、取消后回退、全部结束后回到根流及正文／同连接复用，全部匹配。新增离线回归在旧实现的第二条并发流稳定复现父流错误；另覆盖取消最近流、远端先结束、最后 DATA／trailers 完成后的回退。三平台原有多流测试增加仍在上传时的父流断言；Auth 收完整份未知正文时，其他流可能已经结束，按实际存活边界核对。原 Work／Auth 的严格 DATA 分片断言保持。
+
+TTNet 事件采样现通过临时包裹层，在首条请求前调用官方 `Cronet_Engine_StartNetLogToFile`，退出前调用 `StopNetLog`，请求参数原样传递。原生网络库二进制保持官方版本；八份新 TTNet NetLog 的父流参数与原始帧交叉核对。初次 GDB 采样未正常运行、Auth 夹具旧 driver 引用及窗口初值遗漏的失败记录均保留，已修正采样或回归夹具。这些夹具失败不归因于平台运行时。
+
+该项解决 HEADERS 依赖字段。其余 DATA 分片差异、任意生产块映射、其他异常与真实代理业务等待办仍继续核对，不能据此宣称完全对齐。
+
+固定 req 全量 race、根模块普通全量、完整 upstream／providers race、build、vet、lint 与格式检查通过；完整日志保留，没有跳过测试。新增优先级回归中的 Auth 未知正文场景曾错误假定 B 一直存活，已按先收完整正文的真实行为修正断言边界，原 DATA 严格断言保持。台湾时间 12:59 保数据更新 dev，实际容器内 Work／Code 流式正文与正常结束均通过，容器健康。配置、auth 文件、完整凭据、设备及账号设置保持；两条活跃绑定只正常续期，一条已过期绑定依既有逻辑清理，严格差异报告及停机备份／请求时间的独立核对保留，没有回填旧数据。前端未改，未提交、未推送。
+
+### 同批补窗与 PING 的读写顺序（2026-11-18）
+
+新增回环夹具在连接发送窗口归零、取消一个上传流后，将已取消流的迟到 `WINDOW_UPDATE`、连接补窗、PING 和存活流补窗合在一次 TLS 写入中发送。三轮官方 TTNet／Work Chrome 156／Electron Auth 与当前网关共 18 份样本均完整完成正文、取消及后续同连接请求，但九份官方样本全部先发送 PING ACK 再恢复非空 DATA，九份当前网关样本全部反序。由服务端原始帧记录确认物理顺序；不能仅以 NetLog 的 DATA 创建事件当作写出顺序。
+
+三版 Chromium 基线的 `SpdySession::DoReadLoop` 连续处理同步可读输入，实际读取阻塞、累计超过 32 KiB 或超过 20 毫秒时才让出；每次读取缓冲为 8 KiB。阈值亦已独立核对 [Chromium 142 头文件](https://chromium.googlesource.com/chromium/src/+/refs/tags/142.0.7444.235/net/spdy/spdy_session.h)和 [Chromium 156 头文件](https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.79/net/spdy/spdy_session.h)。旧固定 req 副本逐帧处理时即可启动写 goroutine，缺少这个读批次与写任务的交接边界。此处有官方样本和公开基线依据，但完整任务调度的等价性仍须独立验证。
+
+本轮试验过按实际 socket 读取阻塞划分批次、延后写任务及外部异步正文完成的原型。两轮六份网关新样本均恢复 ACK 在 DATA 前，另一个原采样条件下 Work／Auth 的逐流分片也与各自官方新样本相等；但原有严格多流回归的 Auth 固定正文在单流／连接零窗口两项失败。因此原型没有通过验收，已从产品源码撤回，原补丁、失败断言与采样材料保存在仓库外；没有放宽原有 Work／Auth 的严格 DATA 断言。后续仍须核对 socket／TLS 读取完成、正文完成和写任务之间的 FIFO 关系，不能将局部阻塞标志视为完整事件调度。
+
+进一步用 Go `tls.Server` 与 `golang.org/x/net/http2` 构建独立原始帧采集器，复用同一补窗、取消与连接复用流程。三轮 Work／Auth 共六份官方固定正文、单流零窗口样本均完整，其中五份与原来的唯一 DATA 向量不同，包含原型回归中出现的 `70/16305` 等切分；原始帧和官方 NetLog 交叉核对一致。因此“真实 socket 时序下 Work／Auth 只有一个稳定逐流向量”的假设同样不成立。此前六轮匹配的结论只适用于那些样本，不再用该向量判断所有读批次，也没有增加允许向量白名单。
+
+固定 req 现按每次 8 KiB 明文读取及真正的 Unix socket pending 交接读写：同步读批次期间不启动写任务，外部异步完成延后处理；已经 pending 的写入恢复后，也先等读批次让出，再执行 HEADERS／DATA 写完成回调及后续正文读取。读取阻塞、字节预算、时间预算、EOF 和读循环错误退出都释放批次。低层先释放 `RawConn.Read` 的 fd 引用，再通知 pending，回调中关闭连接不会等待自身引用。直连、HTTP／HTTPS CONNECT 和 SOCKS 隧道沿已有 BIO 接线；非 Unix 仍保留原路径，不能据此称其已对齐。
+
+确定性回归明确控制同批／分批补窗与 PING，逐字节锁定 ACK、两流 DATA、正文和结束标志；另覆盖读取预算及写完成不越过读批次。真实 TLS 回归在旧实现的三个 profile 上均复现同批 ACK 过晚，修正后通过，同时验证实际 pending 时能让出并完成后续上传。多流 socket 回归继续严格检查窗口、分片上限、完整正文、结束、取消、迟到补窗与连接复用；依赖外部读批次的唯一向量断言已由上述受控回归替代。原 TTNet 生产块读取边界断言保持。
+
+这项修正只验收有证据的读批次交接。异步正文完成与其他已投递任务的完整 FIFO、跨读取缓冲的 DATA 交付、任意生产块映射、其他异常与非 Unix 等仍须继续核对，不能宣称完整传输完全一致。
+
+最终源码独立复采 36 份：三套官方运行时与对应网关，在单流／连接零窗口下分别覆盖固定正文取消最早流、固定正文取消最近流、未知正文取消最早流。全部通过受补窗约束的存活流 ACK 顺序、完整正文、取消、结束与单连接复用检查；单流零窗口下已在途的其他流 DATA 不算该批补窗触发的上传。未按不可控跨流逐帧完全相等解释这些结果。
+
+固定 req 全量 race、根模块普通全量、完整 upstream／providers race、相关三轮 race、build、vet、lint 和格式检查通过；未跳过测试。Linux ARM64、Darwin ARM64、Windows AMD64 测试包仅交叉编译通过，不代表实机验收。台湾时间 13:52 保数据更新 dev，实际容器 Work／Code 流式正文及正常结束通过，容器健康。配置、auth 文件、完整最新凭据、设备及账号设置保持；两条绑定仅续期，账号及会话保持，无绑定新增或删除。停机备份与重建前摘要一致，原严格差异报告和续期独立核对均保留，没有回填旧数据。前端未改，未提交、未推送。
+
+### DATA 尚未收齐时交付首块（2026-11-18）
+
+官方 Chromium 107／142／156 的 `SpdySession::OnStreamFrameData` 按 decoder 已收到的片段交付正文，单次不超过 8 KiB，并按该片段降低连接接收窗口；`OnStreamPadding` 按实际到达的 padding 立即扣除再归还，`OnStreamEnd` 在当前帧结束后才通知正文 EOF。网关旧 `Framer` 先以 `io.ReadFull` 收完整个 payload，导致应用交付、接收流控和取消时机落后。
+
+独立回环在一帧中声明 12000 字节正文，先发头部和 6000 字节，再等待应用确认首块已消费，之后才发余下 payload；分别采普通 DATA 与带 padding 的 DATA。首轮三套官方／网关共十二份样本均最终完整，但六份官方都在尾部发送前交付首块，六份旧网关都未交付，直到服务端的四秒取样期限届满才恢复。此处期限只是确定性采样闸门，不是生产请求的延时策略。
+
+固定 req 现为内部 Chromium 接收路径保留物理 DATA 的剩余状态，按已收到的正文片段继续返回，每段按实际消费量记账。padding 长度字节、正文和尾部 padding 分开处理，最后一个片段才携带 `END_STREAM`；帧大小限制、流零、头块连续性和 padding 长度校验仍由解析层执行。普通无连接上下文的 `Framer` 保持每次返回完整一帧。声明长度超过当前窗口时，不预扣尚未到达的 payload；实际收到超窗片段时拒绝，未越窗的已到达正文仍可交付。
+
+回归覆盖普通／零／少量／最大 padding、空正文、截断、非法流与 padding、后续物理帧边界和逐片超窗；真实 TLS 覆盖三个 profile、普通／padded、正常完成／半帧取消。取消期间不需要等余下 payload，迟到字节正确丢弃，随后请求复用同一连接。旧实现的三个 profile 均由新回归复现首块未交付，修正后相关三轮 race 通过。测试服务同时保留取消前可能已经到达的下一请求 HEADERS，避免把 context 允许提前返回的调度误判为连接失效。
+
+完整异步任务 FIFO、其他异常路径、真实代理业务、非 Unix 及原生 ARM64 仍按多平台待办继续验证；该修正不代表所有输入分段和时序均已完成验收。
+
+最终源码两轮官方／网关共 24 份普通与 padded 样本，全部在尾部发送前交付首块，并完成正文及结束检查。固定 req 全量 race、根模块普通全量、完整 upstream／providers race、相关三轮 race、build、vet、lint 和格式检查通过，未跳过旧测试。三平台测试包仅交叉编译通过，不代表实机验证。
+
+台湾时间 14:21 保数据更新 dev，实际容器内 Work／Code 流式通过，容器健康。初始严格核对发现 Qoder 凭据对象变化，报告原样保留；与停机备份、官方 UMID 持久缓存及源码独立比对后，确认国内／国际只更新了到期的 `machine_token`、`machine_type`、`machine_code`。停机备份与重建前完整凭据摘要一致，新字段与新缓存匹配，旧缓存已到刷新期，新缓存有效期符合一小时 ± 五分钟规则；access token、refresh token、固定设备身份和其余凭据字段保持。配置、auth 文件与账号设置保持，两条会话绑定只续期，账号及会话未改变，无绑定新增或删除。没有回填旧数据，前端未改，未提交、未推送。
+
+### 已投递正文完成与写任务的先后（2026-11-18）
+
+Chromium 的 `SpdySession::MaybePostWriteLoop` 在从 idle 启动写循环时向同一网络任务序列 `PostTask`。Cronet 的上传读取完成也投递回网络序列；因此读批次中触发的写任务不能越过此前已经投递的正文完成任务。旧网关虽延后了正文事件，却会在当前可写帧全部排空后才处理它，仍与官方不同。
+
+新增官方 TTNet 受控夹具：A 只生产首个字节，B 持续上传至连接窗口归零；服务端随后在同一 TLS 写入中补连接窗口 1 与 32768。临时采样 shim 在官方网络线程已进入 socket 读取、尚未处理这批输入时暂停，通知 A 生产第二字节，确认 `Cronet_UploadDataSink_OnReadSucceeded` 已调用原官方函数、完成事件已投递后再恢复网络线程。请求正文、网络库和回调参数保持，暂停仅用于明确任务顺序；不把这种采样控制作为产品策略。
+
+三轮官方样本均先发送 B 的 1 字节，再发送 A 的 1 字节，然后发送 B 当前缓冲的 16342 字节。旧网关在相同暂停与正文完成标记下，先发送 B 的 1／16342，再发 A；新增离线回归也在旧实现复现同一差异。修正后三轮网关与官方的该场景完整 DATA 序列均相同，正文、结束和后续同连接请求完整。官方 NetLog 与服务端原始帧记录均保留，物理发送顺序以服务端为准。
+
+固定 req 现将正文读取完成、外部开始读取、初始 HEADERS／控制事件、读恢复、首次写任务及 pending 后的逻辑写完成纳入同一连接任务 FIFO。同步读批次和同步写循环各自执行至让出时，才处理下一个已投递任务；读批次内已解码的补窗与控制帧仍在当前任务中处理。同步可用的 Work／Auth 正文继续立即读取，TTNet 始终经过异步完成；没有加入 sleep 或允许向量白名单。
+
+TLS BIO 的一次写可多次 pending。网络任务所有权在第一次 pending 时让出，整个 TLS Flush 返回并释放 TLS 内部写锁后，才投递逻辑写完成；不能在低层 BIO 回调中阻塞等待任务，否则 TLS 读取自身需要写入时可能互相等待。HEADERS、DATA、ACK 的后续处理遵守相同交接。最后一条流释放、主动关闭、读失败与协议排空都等待或唤醒相应任务，避免 RST_STREAM 仍在任务队列时连接提前关闭。
+
+回归同时锁定正文完成早于／晚于写任务时的两种精确帧序，覆盖关闭唤醒读写恢复、待发 HEADERS 释放与原始错误、已取消正文事件不占窗口。既有 pending、零字节重试和流控溢出测试改为明确建立当前网络任务与让出点，保留实际帧序、错误、窗口归还及排空数量检查。这项统一只覆盖当前已接线事件；其他任务来源、异常与真实业务网络路径仍须独立核对，不能直接宣称完整传输完全一致。
+
+最终源码三轮 TTNet 受控对照共六份样本逐 DATA 序列相等，另复采三套运行时的读批次 36 份、输入 DATA 分段 24 份与控制压力 36 份，均通过各自的 ACK、窗口、正文、取消、复用和 10001／10002 排空关闭检查。后面三组只表示对应属性通过，不外推逐帧完全相等。固定 req 全量 race、根模块普通全量、完整 upstream／providers race、HTTP/2 三轮 race、build、vet、lint 和格式检查通过，未跳过测试；三平台测试包仅交叉编译。
+
+台湾时间 15:19 保数据更新 dev，实际容器 Work／Code 流式正文与正常结束通过，容器健康。停机备份与重建前完整凭据摘要一致；重建后 Qoder 国内仅到期更新三个临时 UMID 字段，已独立核对旧／新缓存、刷新时间、有效期和其他字段保持。Qoder 国际本轮未变，所有授权令牌、固定设备身份、配置、auth 文件及账号设置保持；两条绑定只续期，账号与会话保持，无绑定增删。原严格差异与独立核对保留，未回填旧数据，前端未改，未提交、未推送。
+
+### 响应小块合并与读取完成回调（2026-11-18）
+
+Chromium [107](https://chromium.googlesource.com/chromium/src/+/refs/tags/107.0.5273.2/net/spdy/spdy_http_stream.cc)／[142](https://chromium.googlesource.com/chromium/src/+/refs/tags/142.0.7444.235/net/spdy/spdy_http_stream.cc)／[156](https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.79/net/spdy/spdy_http_stream.cc) 的 `SpdyHttpStream::ReadResponseBody` 在已有缓冲时立即读取；调用时没有数据则挂起。后续 `MaybeScheduleBufferedReadCallback` 在缓冲足够填满调用方读取长度时投递零延迟回调，不足时重设一毫秒定时回调；后续片段再次重设。正常 `OnClose` 立即交付剩余正文，错误或取消结束挂起读取，不让旧回调再次访问调用方缓冲。该毫秒值来自三个官方基线源码，不是为匹配单个样本加入的等待策略。
+
+独立回环先提供一段预热正文，让三个运行时完成 fetch 与 reader 初始化，再在一条 TLS 记录中发送 600 个单字节 DATA，等待客户端首读报告后才发送结束帧。两轮共十二份官方／旧网关样本，六份官方首读均为 600，六份旧网关仅为 194～265，其余正文虽最终完整，读取合并与消费回调仍不同。夹具最初仅用 HEADERS 或一个预热字节时，Auth 的 read-ready 控制尚未触发；改为 8 KiB 预热后采样正常，初始失败保留，不将其解释为上游推理故障。
+
+固定 req 的 Chromium 响应读取现经连接任务 FIFO 开始，已有缓冲保持同步消费语义；没有数据时记录一个挂起读取。DATA 到达后按上述规则安排读取完成任务，流结束立即完成；定时任务使用版本标记，后续片段、取消、正常结束、读失败和连接关闭都使旧任务失效并停止计时。正文消费及 WINDOW_UPDATE 在同一网络任务内记账，避免另一个 goroutine 在帧处理过程中提前归还窗口。
+
+新增确定性回归覆盖同读批次合并 600 个 DATA、缓冲填满时的零延迟异步回调、已有缓冲立即读取、旧回调失效、结束／取消清理、连接关闭唤醒，以及 Content-Length 超长与提前 EOF。真实 TLS 在三套 profile 中检查明确的一条记录输入、首读、完整正文与结束；新回归在旧实现的三套 profile 均复现首读过早，修正后通过三轮 race。定时器只服务当前挂起读取，没有常驻轮询或固定全局延时。
+
+这项修正不证明任意应用读取长度、跨批次事件、异常及真实代理业务已全部一致，完整待办继续保留。
+
+最终三轮共 18 份官方／网关小块样本，首读均为 600 字节，正文、结束及结束帧前交付均通过；另复采读批次 36 份、DATA 首块 24 份和控制压力 36 份，均通过原有属性检查。固定 req 全量 race、根模块普通全量、完整 upstream／providers race、相关三轮 race、build、vet、lint 与格式检查通过；三平台测试包仅交叉编译。
+
+完整 upstream race 首两次均定位到旧 `TestListingModelsDevFailuresSilent/超大响应` 的两秒期限。独立 CPU profile 中约 78% 的样本位于 race 内存访问检查，测试夹具 `repeatReader` 逐字节生成 32 MiB 的正文。现仅将相同内容的生成改为成倍复制，保留原大小、期限及断言；三次独立 profile 检查总耗时约 5.45 秒降至 4.21 秒，随后普通全量和完整包 race 通过。原失败与 profile 保留；这次已定位的夹具开销优化不证明之前输出截断等历史偶发失败的唯一原因，也未修改生产目录读取逻辑。
+
+台湾时间 15:51 保数据更新 dev，实际容器 Work／Code 流式正文与正常结束通过，容器健康。重建前后及实测后的配置、auth 文件、完整最新凭据、固定设备身份及账号设置保持；两条已有绑定仅到期时间续期，账号与会话保持，无新增或删除。停机备份、严格差异报告及独立续期核对保留，没有回填旧数据；前端未改，未提交、未推送。
+
+### 已关闭流的正文消费与补窗（2026-11-18）
+
+Chromium [142](https://chromium.googlesource.com/chromium/src/+/refs/tags/142.0.7444.235/net/spdy/spdy_stream.cc)／[156](https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.79/net/spdy/spdy_stream.cc) 的 `SpdyStream::IncreaseRecvWindowSize` 先检查流仍在 session 的活动表内。正文缓冲的消费回调可能晚于流关闭，流级回调此时不再增加窗口；连接级缓冲消费仍归还连接窗口。远端 `END_STREAM` 只关闭一个方向，本端仍上传时流仍可能活动，不能仅据远端结束就停止所有流补窗。
+
+新增回环先消费 8 KiB 预热正文，等待超过官方五秒补窗间隔后，再发送最后一个正文字节。三套官方运行时与旧网关共六份样本中，官方在双向结束后仅发送连接级 `WINDOW_UPDATE(8193)`，旧网关另发送同量的流级补窗。另一组三份官方样本将该正文字节保持为未结束 DATA，等待消费报告后才发送结束帧，三套均同时发送连接及流补窗。差异因此由活动状态触发，连接消费总量与阈值并未改变；夹具等待仅用于跨过已确认的五秒阈值。
+
+网关现复用已有的本端结束标志、远端结束信号、活动流表与取消状态，统一判断流是否活动。双向结束、移除或取消后不再给流窗口记账；本端仍在上传的远端半关闭流继续参与。相同状态也用于并发 HEADERS 父流选择，避免两处对活动流的定义分歧。padding 归还仍按当前实际活动状态分别处理连接与流，已排队的合法补窗不会因稍后关闭而任意删除。
+
+确定性回归在旧实现复现双向结束和流移除后的多余补窗，修正后逐帧检查连接与流的 ID、增量、数量，并保留活动响应及远端半关闭两种补窗。原响应读取、定时回调、上传取消、优先级与控制排空回归继续执行；真实业务代理、其他异常和全部半关闭业务时序仍待独立验收。
+
+最终源码两轮、两种结束时机、三套官方及对应网关共 24 份样本，补窗流编号、数量、数值和完整响应均匹配；首轮六份官方 NetLog 的发送事件与服务端原始帧亦一致。固定 req 全量 race、根模块普通全量、完整 upstream／providers race、HTTP/2 三轮 race、build、vet、lint 与格式检查通过，未跳过旧测试；Linux ARM64、Darwin ARM64、Windows AMD64 测试包仅交叉编译。
+
+台湾时间 16:06 保数据更新 dev，实际容器内 Work／Code 流式正文及正常结束通过，容器健康。配置、auth 文件、完整最新凭据、固定设备身份和账号设置在重建与实测后均保持；两条绑定只续期，账号与会话未变，无绑定增删。停机备份、原严格差异及独立核对保留，没有回填旧数据。前端未改，未提交、未推送。
+
+### 接收超窗的流与连接错误范围（2026-11-18）
+
+三套 Chromium 基线的 `SpdySession::OnStreamFrameData` 先扣连接窗口，再由 `SpdyStream::DecreaseRecvWindowSize` 检查流窗口。超出连接窗口时关闭连接；仅超出流窗口时发送该流的 `RST_STREAM(FLOW_CONTROL_ERROR)`，违规片段释放时归还连接额度，其余流继续使用该连接。旧网关用一次 `takeInflows` 合并检查，误把单流超窗升级成连接级 GOAWAY，连带中止其他请求。
+
+固定 req 副本现分别检查两级窗口。单流失败标记为接收中止，通过已有清理路径发送错误码 3；违规片段不交付正文，只归还连接额度，迟到 DATA 不复活该流。真正的连接超窗仍保留连接级错误。新增离线回归在旧实现的 Work、Auth、TTNet 三条路径均复现另一流被 GOAWAY 中断，修正后检查准确的 RST 流编号与错误码、存活流完整响应及后续请求只拨号一次；固定副本另覆盖 padding、迟到片段和活动／已移除流的连接超窗。
+
+官方独立采样保留原来的 6 MiB 声明窗口，并同时打开一条存活流。首个 Work 网页夹具仅停止调用 Reader，浏览器仍预读并补窗，未真正触发超窗；该次超时及后续夹具错误保留为未完成样本。最终 Work 用同步控制请求暂停页面任务，服务端等暂停点到达后才发送正文；Auth／TTNet 使用异步控制点，存活请求先发起、错误触发后再消费，不等待该请求的正文交付。没有修改官方网络库、窗口或添加任意延时。
+
+最终两轮、三套官方与对应网关共 12 份原始帧样本，均仅重置违规流，不发送 GOAWAY；存活流与后续请求完整，并始终只建立一条连接。六份官方 NetLog 与服务端原始 RST 帧独立核对错误码及流编号。回归用较小窗口确定触发条件，不能把该设置当成官方参数。其他协议错误的调试字段、异常时序、缓存压力、非 Unix 及真实代理业务仍按多平台待办继续验收。
+
+根模块普通全量、完整 upstream／providers race、固定 req 全量 race、HTTP/2 三轮 race、构建、vet、lint 与格式检查均通过，未跳过旧测试。台湾时间 16:31 保数据更新 dev，实际容器 Work／Code 流式正文和正常结束均通过，容器健康。严格摘要发现 Qoder 国内三个临时 UMID 字段更新；停机备份确认旧缓存已于 16:22 到期，新值与持久缓存一致，属于既有按需刷新。授权令牌、固定设备身份、配置、auth 文件及账号设置保留，两条绑定仅续期，无增删。原严格差异与独立核对均保留，没有回填旧凭据。前端未改，未提交、未推送。
+
+### 异常帧与发送窗口的关闭行为（2026-11-18）
+
+继续调用未修改的官方 Chrome 156、Electron 39.2.7／Chromium 142、TTNet 4.2.243.19／Chromium 107，对照 28 类帧与设置。每次先取得响应头和 8 KiB 预热正文，再注入测试帧，避免把自动重发误当作原连接继续工作。设置被忽略时，后续 PING 必须往返且正文正常结束；连接错误必须返回相同 GOAWAY、关闭且不交付非法正文。脱敏输入与三套官方一致的预期保存在 `clienthello/trae-http2-protocol-errors.json`，测试只连接本地假服务器。
+
+实现另对照 Chromium 156 固定 DEPS 指向的 [Quiche decoder](https://quiche.googlesource.com/quiche/+/a1628192cf32ba40d21e0dd80f485d68c24ff87a/quiche/http2/core/http2_frame_decoder_adapter.cc)，以及三个 Chromium 基线的 `SpdySession`：
+
+- 接收帧大小按本端实际声明的 `SETTINGS_MAX_FRAME_SIZE` 限制，未声明时为 16384。原库默认可接受接近 16 MiB，旧网关会继续接收 16385 字节 DATA；现在仅收到非法帧头就拒绝，不等待其正文。该声明不再反向改变发送帧大小。
+- 帧的流编号、固定长度、padding、DATA flags 和 CONTINUATION 连续性使用官方 decoder 的错误分类与调试文本。CONTINUATION 的流编号为零时，先报告无效流编号，再检查其流间顺序；不把该错误覆盖为帧顺序错误。短 GOAWAY 在官方属于 `PROTOCOL_ERROR / INVALID_CONTROL_FRAME`，不能照原库发 `FRAME_SIZE_ERROR`。大 DATA 与大控制帧分别报告 `OVERSIZED_PAYLOAD` 和 `CONTROL_PAYLOAD_TOO_LARGE`。
+- 连接发送窗口加法溢出时，官方发 `PROTOCOL_ERROR`，旧网关发 `FLOW_CONTROL_ERROR`；现同时校准错误码和包含当前额度的调试文本。零增量留给 session 区分连接与活动流，已关闭流继续忽略；未请求的 PING ACK 按官方关闭连接。
+- 官方忽略超范围的 `SETTINGS_INITIAL_WINDOW_SIZE`，原网关会断连；现在保留原合法窗口并继续响应。`SETTINGS_MAX_FRAME_SIZE` 按该客户端基线不改变发送分帧。合法初始窗口变化导致活动流额度溢出时，现发连接级 `FLOW_CONTROL_ERROR`，按官方 `std::map` 的流编号顺序报告首个失败流；旧网关漏查该溢出。
+
+以上行为仅接入现有 `ChromiumUpload` 路径。普通 req 路径保留原错误和窗口策略，没有增加使用者配置项。协议错误向上保留具体调试原因，并可继续用 `errors.As` 取得连接错误码。新增矩阵回归核对准确的 GOAWAY 流编号、错误码、调试字段、关闭、非法正文隔离，以及应忽略设置后的完整正文；另有仅帧头、默认路径不变和多流窗口溢出顺序回归。两轮三套官方与对应网关共 336 份样本，并以最终源码重编译采集程序复查 84 份网关样本。原有单流超窗隔离、取消、流控及控制排空回归继续保留。其他未采样的 HPACK 错误、异常交错、扩展帧、缓存压力、非 Unix 与真实业务代理仍待验收。
+
+168 份官方 NetLog 的 session 关闭原因与服务端原始 GOAWAY 字段交叉核对。首批 TTNet 未开启日志的样本及五份被进程终止截断的 Work 日志均保留，未把缺失日志判作通过；TTNet 启用官方日志接口后重新采集，Work 改为经 `Browser.close` 正常退出后补采。补齐后的日志均为完整 JSON，异常码／描述、忽略设置后的 PING 与完整正文均匹配。
+
+根模块普通全量、完整 upstream／providers race、固定 req 全量 race、HTTP/2 三轮 race、构建、vet、lint 和格式检查通过，未跳过原回归。台湾时间 17:27 保数据更新最终 dev，实际容器 Work／Code 流式正文及正常结束通过，容器健康。重建与实测后的完整最新凭据、固定设备身份、配置、auth 文件及账号设置一致，本轮没有 UMID 刷新；两条绑定仅续期，无增删，停机备份、原严格报告及独立字段核对均保留。前端未改，未提交、未推送。
+
+### HPACK 解码错误分类与动态表状态（2026-11-18）
+
+三套官方 Trae 运行时的隔离回环新增响应 HPACK 对照。先消费 8 KiB 预热响应，再发送构造的 HEADERS，确保错误发生前请求已被接受，避免重试掩盖原连接的关闭行为。样本区分无效字段／名称索引、索引／名称长度／值长度整数溢出、名称／值的 Huffman padding 与 EOS、截断头块、超出声明限制的字符串长度，以及动态表更新的范围、次数和位置。脱敏输入和一致回复保存于 `clienthello/trae-http2-hpack-errors.json`；其中合法的块首两次表更新使用完整结束的空 trailers，检查不会误断连。
+
+实现复用固定 req 中已有的 x/net HPACK 副本，保留原版权、动态表和 Huffman 实现。`NewChromiumDecoder` 仅用于 `ChromiumUpload` 的入站头块，普通 req 路径继续使用原 x/net decoder。分类依据为官方原始 GOAWAY，以及固定版本 Quiche 的 [HpackDecoderState](https://quiche.googlesource.com/quiche/+/a1628192cf32ba40d21e0dd80f485d68c24ff87a/quiche/http2/hpack/decoder/hpack_decoder_state.cc)／[HpackWholeEntryBuffer](https://quiche.googlesource.com/quiche/+/a1628192cf32ba40d21e0dd80f485d68c24ff87a/quiche/http2/hpack/decoder/hpack_whole_entry_buffer.cc)，不是对 Go 错误字符串作猜测映射：
+
+- 初始表容量为 4096，本端允许的最大容量为 65536；对端须显式更新才能保留更大的条目。合法更新后跨头块引用保留，不能只根据本端声明提前扩容。
+- 每块在普通字段之前最多允许两次动态表更新。静态字段后更新也必须拒绝，不能以当前动态表为空为由放行；每块结束后次数重置。
+- 名称索引在值解码完成后查找：同一字段还含坏 Huffman、值长度整数错误或截断时，先报告值错误。名称本身的 Huffman 已失败时则不继续等值。表更新的整数须先解码，截断／整数溢出优先于更新位置错误。
+- 接收字符串限制来自本端声明的 262144 字节头部限制。65537 字节的声明本身未越限，缺少内容时仍报告截断；真正越限的名称／值声明分别归类，不能混同截断。头块／CONTINUATION 之间保留解码状态，错误向上保留官方编号、名称及连接压缩错误码。
+
+离线矩阵复用原始输入，检查准确 GOAWAY、连接关闭、错误正文隔离和合法更新后的正常结束；固定副本另覆盖逐字节输入、复合错误优先级、跨块次数重置、明确扩容后的跨块索引及默认解码策略。旧网关已复现笼统调试字段、表更新位置与初始容量等差异。验证范围仍限已采场景，整帧未收齐时的 HPACK 交付、其他头部语义与聚合限制、后续设置缩表的完整状态、扩展帧及异常交错继续待验收。
+
+最终 30 类场景、两轮三套官方与对应网关共 360 份样本，GOAWAY 的流编号、错误码、完整调试文本及关闭行为均匹配；合法控制的 PING 与空 trailers 正常结束。180 份完整官方 NetLog 与服务端原始帧交叉核对，最终源码重新编译采集程序后另复采 90 份网关，全部通过。最初的合法控制样本把响应头伪字段与未结束 trailers 混在同一块，不能单独证明表更新行为；该版本保留，最终使用明确结束的空 trailers，不把旧控制通过扩大为其余头部语义已对齐。
+
+根模块普通全量、完整 upstream／providers race、固定 req 全量 race、HPACK／HTTP/2 三轮 race、构建、vet、lint 与格式检查通过，未跳过原回归。台湾时间 17:50 保数据更新 dev，实际容器 Work／Code 流式正文和正常结束均通过，容器健康。Qoder 国内三个临时 UMID 字段按已到期缓存刷新，新值与持久缓存核对一致；完整授权令牌、固定设备身份、配置、auth 文件与账号设置保留，两条绑定仅续期，无增删。停机备份、原严格差异及独立字段核对保留，没有恢复旧数据；前端未改，未提交、未推送。
+
+### HPACK 半帧的提前解码与错误（2026-11-18）
+
+前节的整帧矩阵不能证明物理帧未收齐时的行为。本轮三套官方运行时仅收到 HEADERS 或 CONTINUATION 的前缀时，已经确定的无效索引立即触发 `COMPRESSION_ERROR`，调试字段为 `Framer error: 19 (HPACK_INVALID_INDEX).`，不等待声明的剩余 payload。带 padding 或 priority 的 HEADERS 也遵循这一边界。名称 Huffman 声明 100 字节而只收到四个 `ff` 时，非法 EOS 已可确定，立即报告 `Framer error: 16 (HPACK_NAME_HUFFMAN_ERROR).`；不能等完整字符串才校验。旧网关在三条链路均等待余下物理帧，新增矩阵的无效索引子项已通过旧源码 overlay 复现超时。
+
+固定副本新增 `read_headers.go`，在 `ChromiumUpload` 路径按实际到达的片段交付 HPACK；单次至多读取 8 KiB，padding 长度和 priority 前缀先解析，padding 全部消费后才交付该物理帧的结束标记。逻辑头块继续等待最终 CONTINUATION，首个 HEADERS 的原始 flags 保留。HPACK 复用已有 Huffman 实现检查未完整字符串的前缀：仅拒绝已确定的非法编码，不把合法但尚未结束的编码前缀误判为 padding 错误。截断物理帧保留 EOF 原因，普通 req 路径保持原策略。
+
+脱敏输入保存于 `clienthello/trae-http2-hpack-fragments.json`，共六类非法前缀及四类合法控制。非法样本不发送尾部、不附加健康 PING，要求连接在只收到前缀时关闭；合法样本在明确补齐点之前不能完成，随后补齐 payload、padding 和 CONTINUATION，要求空 trailers 正常结束。两轮三套官方与对应网关共 120 份样本、60 份完整官方 NetLog 已独立核对错误码、完整调试文本、关闭及正文；合法控制同时检查服务端的提前完成观测点。该等待只用于控制采样边界，生产代码没有新增固定等待。
+
+本轮完整 race 首次挂在 TLS 票据测试等待下一次 ClientHello 的 channel；SIGQUIT 栈及失败日志保留。另以受控任务回归确认：请求已结束但 ACK 等连接任务尚未排空时，`CloseIdleConnections` 原先直接返回，既没有禁止复用，也没有安排稍后关闭。现先禁止该空闲连接接受新请求，异步等待既有任务排空后关闭，活动流、预留请求和待分配流继续保留。重复回收不重复启动等待，显式关闭和错误排空可中断等待；票据测试增加明确失败期限，保留四次新握手、恢复状态与业务请求次数断言，没有放宽这些要求。此受控漏洞不等于已经证明它是首次挂起的唯一原因。
+
+最终源码重新编译后另复采 30 份网关样本，全部通过。根模块普通全量、完整 upstream／providers race、固定 req 全量 race、HPACK／HTTP/2 三轮 race、TLS 票据二十轮 race、构建、vet、lint 与格式检查通过，未跳过旧测试。首次完整 race 的 SIGQUIT 失败及修正前受控回归失败均保留，没有将其覆盖为成功日志。
+
+台湾时间 18:18 保数据更新 dev，容器健康；实际容器内 Work／Code 流式正文与正常结束均通过。配置、auth 文件、全部完整最新凭据、固定设备身份与账号设置一致，本轮没有临时 UMID 变化；两条绑定仅到期时间前进，账号及会话未变，无增删。停机备份、原严格差异和独立字段核对均保留，没有恢复旧数据。前端未改，未提交、未推送。
+
+其他头部语义与聚合限制、后续设置缩表的完整状态、扩展帧、异常交错、缓存压力、非 Unix 与真实代理业务仍未全部验收，不能以本节有限矩阵推导所有传输完全一致。
+
+### 响应头语义、聚合限制与流错误（2026-11-18）
+
+本轮对 Chrome 156、Electron 39／Chromium 142 和 TTNet／Chromium 107 的真实运行时新增 47 类响应头样本。初始响应与 trailers 分别采样，后者先交付 8 KiB 预热正文，避免重试及读取预取混淆错误范围；畸形头块后发送探测 PING，核对 GOAWAY、RST、响应结果及控制帧顺序。脱敏原始输入保存于 `clienthello/trae-http2-header-semantics.json`，连续重复测试字节用无损游程表示，回归重组后验证 SHA-256。三套官方基线共 141 份样本及 141 份完整 NetLog 已交叉核对。
+
+官方固定版本的 [HeaderCoalescer](https://chromium.googlesource.com/chromium/src/+/156.0.8078.79/net/spdy/header_coalescer.cc)、[SpdyStream](https://chromium.googlesource.com/chromium/src/+/156.0.8078.79/net/spdy/spdy_stream.cc) 和 [SpdyHttpUtils](https://chromium.googlesource.com/chromium/src/+/156.0.8078.79/net/spdy/spdy_http_utils.cc)，以及 142／107 对应文件，与样本共同确认以下行为：
+
+- 响应伪字段可以是请求类或未知名称，只要冒号后是合法小写 token、位于普通字段之前；响应层读取 `:status`，其他伪字段不参与响应转换。缺少状态、重复状态合并后无法解析，或状态超过有符号 32 位整数范围，均只重置该流。两位、四位和 `099` 这些样本在传输层可接受，不能凭 HTTP/1 常规状态码范围收紧。
+- 头名为空、大写、含空格，字段值含 CR／LF／NUL，或普通字段之后再出现伪字段，只重置该流。水平制表符与两端空白可接受。语义错误后仍必须消费剩余 HPACK 并更新动态表；若后续又遇压缩错误，则升级为相应连接级压缩错误，不用先前语义错误掩盖。
+- 聚合上限为未压缩字段名、值及每字段 32 字节开销的总和 262144。加上固定 CORS／正文类型字段后，边界减一、等于及加一均实测；连续大字段或多次较小字段越限都只重置该流，不能沿用 Go 为避免浪费解码而提前关闭整个连接的策略。单字符串 HPACK 解码长度限制仍与前节保持。
+- 初始最终响应中的 `transfer-encoding` 导致单流协议错误；`connection`、`upgrade`、`te` 等已采控制不触发该错误。已采相同／不同重复 Content-Length 和无效长度不据此升级连接错误，其他未采组合不作结论。
+- trailers 中合法拼写的伪字段可接受。未带 END_STREAM 的 trailers 继续等结束；随后空 DATA 可以结束，有正文的 DATA 或又一块 HEADERS 则只重置该流。原有头名／值校验仍应用于 trailers。
+- 连续六次 `100` 或 `103` 后正常最终响应可用，Chromium 路径去掉 Go 的第五次上限；普通 req 路径保留。其他无限信息响应、101 及更多结束时序尚未全部验收。
+
+原始输入和首个探测 PING 在同一次 TLS 写入，与官方采样保持一致；大头块跨越已有读预算时仍依实际批次让出。读取错误触发的 RST 现于通知业务错误之前纳入网络序列，之后请求清理通过同一标记避免重复发送，不再依赖请求 goroutine 稍后排入取消帧。原 race 首次发现 RST 落后于后续探测的失败日志保留，修正后该子项连续 300 轮 race 通过；受控队列回归另检查错误通知前已入队、流删除后仍写出且只发一次。原异步正文／补窗回归把任意同流帧都计作正文，因新增正确 RST 而失败，现分别检查 DATA 与 FLOW_CONTROL_ERROR RST，保留无正文断言并增加准确重置数量。
+
+Electron `net.fetch` 的非常规状态码样本超时，原日志保留；本轮使用同一官方网络栈的 `net.request` 直接消费响应事件，未把包装层未返回视为 HTTP/2 已失败。TTNet 官方 JS 桥还将已采的 `20`／`2000`／`099` 暴露为 `200`；不改变返回值的 Cronet C API getter 采样确认底层分别为 20／2000／99。夹具分别记录传输层 status 与 `application_statuses`，网关 HTTP/2 回归核对前者，不把 JS 桥的转换误当成协议行为。两套包装层的其他状态与业务影响仍待单独验收。
+
+旧源码 overlay 已复现额外伪字段拒绝、聚合越限升级 GOAWAY、trailers 升级 GOAWAY、信息响应数量上限以及状态溢出误接受。新矩阵同时检查单流错误后的同连接新请求，保留原压缩错误、异常帧、半帧及窗口回归；普通 decoder 的伪字段校验保持。
+
+最终六套运行时另采 282 份样本，连同官方基线共 423 份样本及 282 份官方 NetLog，准确错误、顺序、正文、传输状态和输入摘要逐项匹配。最终源码重新编译后另复采 141 份网关，累计 564 份样本核对通过。新旧协议矩阵与固定副本相关三轮 race、根模块普通全量、完整 upstream／providers race、固定 req 全量 race、构建、vet、lint、格式与差异检查通过，未跳过旧测试。
+
+台湾时间 19:00 已保数据更新 dev，容器健康，实际容器 Work／Code 流式正文与结束均通过。Qoder 国内临时 UMID 三字段按到期缓存刷新，已核对新缓存与到期时间；完整授权令牌、固定设备身份、配置、auth 文件及账号设置保持。两条绑定只续期，无增删；停机备份、原严格差异和独立字段审计保留，没有回填旧令牌或身份。前端未改，未提交、未推送。
+
+其他响应转换、101、内容长度与压缩组合、扩展帧、缓存压力、非 Unix 和真实代理业务继续待验，不能以这 47 类样本宣称全部响应语义一致。
+
+### 信息响应结束与 Content-Length（2026-11-18）
+
+本轮延续三套官方运行时，新增 37 类生命周期对照：`101` 的空流／正文／后一块响应头，`100`／`103`／`199` 的 END_STREAM 与随后最终响应，信息响应中的 transfer-encoding，Content-Length 的零／正数／负数／符号／空白／前导零／溢出，分片正文长短不符，以及 `204`／`205`／`304` 的空流和正文。三套官方基线共 111 份原始帧样本及完整 NetLog 已核对，脱敏输入和分平台结果保存于 `clienthello/trae-http2-response-lifecycle.json`。
+
+固定版本 [SpdyHttpStream](https://chromium.googlesource.com/chromium/src/+/156.0.8078.79/net/spdy/spdy_http_stream.cc) 与 [HttpNetworkTransaction](https://chromium.googlesource.com/chromium/src/+/156.0.8078.79/net/http/http_network_transaction.cc) 及 142／107 对应文件显示，HTTP/2 正文以实际 DATA 和流结束为准，不用 Content-Length 截断读取或在正常 END_STREAM 后生成长度不符错误。Work／Auth 的真实样本确认声明为 0、3 或 5 时仍完整交付四字节，声明为 5 但 HEADERS 直接结束时正常空正文。固定副本已移除仅在 `chromiumResponseRead` 路径继承的 Go 长度校验；响应头与 `Response.ContentLength` 元数据继续保留，普通 req 路径仍检查超长及提前结束，新增回归分别确认这两类策略。此前响应合并一节所谓“长度错误保留”只描述当时沿用 Go 行为，本轮官方样本已推翻该行为作为 Chromium 对齐要求的假设。
+
+TTNet 原生桥另有消费阶段差异：Content-Length 为零时不启动 Cronet 正文读取，直接完成空正文。只读 Cronet 回调记录确认该样本没有 `OnReadCompleted`，其他已采正长度不符则仍交付实际 DATA，例如声明三字节时回调累计四字节。Trae Code 的 profile 现对 HTTP/2 零长度响应关闭原正文并暴露 `http.NoBody`，释放仍由现有流结束／取消路径负责；Work／Auth 不应用这条桥接规则。原 `@aha-kit/net` 的 WHATWG Response 包装在 `204`／`205`／`304` 加上非空 ReadableStream 时会抛构造错误，即使没有实际字节；本轮使用官方 `rawFetch` 的原始正文流隔离这层包装，并保留原失败日志，不把构造器异常转写成传输错误。
+
+三套官方在隔离页面策略后均将非 WebSocket 请求的 `101` 暴露为默认 `200`：`SpdyStream` 先接受 `101` 为响应，事务层为跳过信息响应清空头后重读，`SpdyHttpStream` 仍记录响应头完成，空 `HttpResponseHeaders` 按默认值转换。固定副本按这个阶段处理，不把 `101` 当普通 `100` 等待另一份最终响应，也不保留被事务层清空的原字段；之后第二块 HEADERS 是 trailers，随后的非空 DATA 仍触发单流协议错误。该规则不用于普通 req，也不宣称 WebSocket 握手已支持。
+
+最初 Work 网页的跨域样本在 `101` 后取消，RST 为 CANCEL；在回环采样中移除跨域检查后，同一 HTTP/2 输入正常得到默认 200。原样本保留，最终 Chrome 仅在隔离回环中禁用页面安全策略以采传输行为，生产配置不变；不能把跨域策略导致的取消混为底层协议拒绝。Auth 使用 `net.request`，TTNet 使用原生 `rawFetch`，其 C API getter 和读取／成功／失败回调均只记录并原样转发，分别核对状态、累计正文、完成与错误。原包装层差异仍是独立边界，不以本节替代完整网页／JS 业务验收。
+
+旧源码 overlay 已复现 `101` 误拒绝、超长正文被截断、短正文及空流误报 EOF；修改后的矩阵继续验证准确 RST／GOAWAY、正文、状态、输入摘要和同连接新请求，原 47 类头语义、HPACK、半帧、窗口及默认 req 检查保持。
+
+最终六套运行时另采 222 份样本，连同官方基线共 333 份及 222 份完整官方 NetLog，逐项核对准确错误、控制顺序、正文、状态和输入摘要；TTNet 同时检查 C API 读取累计与成功／失败回调。相关新旧矩阵与固定副本三轮 race、根模块普通全量、完整 upstream／providers race、固定 req 全量 race、构建、vet、lint、格式和差异检查通过，没有跳过旧回归。
+
+最终源码重新编译后另采 111 份网关，累计 444 份样本核对通过。台湾时间 19:26 保数据更新 dev，容器健康；实际容器 Work／Code 流式正文与正常结束均通过。配置、auth 文件、完整最新凭据、固定设备身份及账号设置保持，两条绑定只续期，无增删；本轮没有临时 UMID 差异。停机备份、原严格差异与独立字段审计保留，前端未改，未提交、未推送。
+
+其他信息响应、任意状态转换、内容编码与缓存组合、真实代理业务、非 Unix 及原生 ARM64 继续待验，不能据此宣称所有响应行为完全一致。
+
+### 压缩响应的分段读取和取消（2026-11-18）
+
+在只有回环接口的命名空间中，使用 HTTP/2 假上游分别调用 Chrome 156、Electron 39 的 `net.request` 和 TTNet 4.2.243.19 的 `rawFetch`。假上游把首段压缩字节拆成两个 DATA，收到客户端已经读到首段的确认后才发送结束事件与 END_STREAM。三套运行时都能读完单层 gzip、deflate 和双层 `gzip, deflate`。双层编码分别使用单行逗号列表和两行同名字段，顺序等价，符合 [RFC 9110 § 5.3 与 § 8.4](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.4)。
+
+旧网关拒绝单行双层编码，并且在两行字段里只按第一行选解压器。平台响应现合并全部 `Content-Encoding` 字段，再从最外层开始惰性解压。网关三种 Trae 路径均在结束前交付首段并正确读取结束事件。取消覆盖服务端已发响应头但尚未发 DATA、gzip 首段后、双层首段后三种时序，均核对取消错误、单条 `RST_STREAM(CANCEL)` 和同连接探测 PING 往返。共享解压器还修正了关闭顺序，先关闭原始响应体以打断读操作，再释放解压器。旧版 Zstandard 回归复现卡住及数据竞态，修正后定向 race 连续五轮通过。WorkBuddy 与入站请求仍采用原有的单编码选择方式。
+
+72 份复采覆盖上述读、取消及结束场景，保留了 36 份完整的官方 NetLog。Work／Auth 可解 Brotli、Zstandard 和两种 `gzip, br` 表示。TTNet 在线上声明 `gzip, deflate`，对三组含 Brotli 的响应返回 `-330` 并重置流；单层 Zstandard 返回原始压缩正文，Cronet 读取回调累计 64 字节与线上长度一致。Chromium 107 公开基线的[编码校验](https://chromium.googlesource.com/chromium/src/+/107.0.5304.110/net/http/http_network_transaction.cc)与[解码器识别范围](https://chromium.googlesource.com/chromium/src/+/107.0.5304.110/net/filter/filter_source_stream.cc)与这些样本一致。
+
+2026-11-19（台湾时间）将 Trae Code 的目录与推理请求接入 TTNet 的响应编码规则。含未声明 Brotli 的三种表示均拒绝并关闭正文，回环观察到单条 `RST_STREAM(CANCEL)`，同一连接继续响应 PING。Zstandard 和 `gzip, zstd` 保留线上正文及原响应头，网关读取的 SHA-256 精确匹配服务端实际发送字节，Cronet 读取回调累计分别为 64 和 87 字节。对应的 37 份网关样本与一份新增的 TTNet 混合编码样本完成审核。三套官方运行时都完整交付了缺少 gzip 尾部八字节的正文，网关仍在交付已解出的字节后报告 `unexpected EOF`，该差异继续待验。
+
+同日补采 16 份 gzip 边界样本，其中 12 份带官方 NetLog。Chrome、Electron、TTNet 在缺四字节尾部或 CRC 错误时交付完整输出并正常结束，在 DEFLATE 负载实际截断时也正常结束，交付的正文缺三字节。追加有效的第二个 gzip 成员时，三套运行时只交付第一成员。网关 Code 在前两种缺字节情形保留 `unexpected EOF`，在 CRC 错误时保留 `gzip: invalid checksum`，追加成员时继续解码第二成员。是否将校验失败或截断正文作为成功属于独立的业务决策，当前保留 Go 的校验及多成员读取行为。
+
+同日补验 gzip 头部与零填充。Chrome、Electron、TTNet 共保留 12 份完整 NetLog。头部截断时只收到空正文，错误头部和误标为 gzip 的 zlib 正文返回解码错误，有效 gzip 后的零填充正常结束。网关修复了解压器初始化失败后关闭响应体时的空指针崩溃。Trae Work／Auth／Code 的 `gzip` 和 `x-gzip` 按声明读取 gzip，支持最后一个完整成员后的零填充，完整读取时仍校验各成员的 CRC 和长度。最终网关 21 份回环样本覆盖头部、填充、双层编码、CRC 错误和多成员。误标 zlib 的三条链路均发出一条 `RST_STREAM(CANCEL)`，各组均完成同一连接的两次 PING。[RFC 9110 的 gzip 定义](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.4.1.3) [Chromium 156 解码器源码](https://raw.githubusercontent.com/chromium/chromium/156.0.8078.79/net/filter/gzip_source_stream.cc)
+
+平台 JSON 接口在 8 MiB 上限内读完整个响应，再解析目录、授权或额度数据。回环回归覆盖 JSON 本身有效但 gzip CRC 错误的目录，确认错误传到调用方。
+
+### TLS 票据过期与内存压力（2026-11-18）
+
+同一回环假上游给 TLS 1.2／1.3 票据设置四秒寿命，服务端同时记录 ClientHello 是否携带票据及实际是否恢复。Chrome 156、Electron 39／Chromium 142、TTNet 4.2.243.19 与对应网关共 12 组、96 次握手。TLS 1.3 在过期后均不再发送该票据，首次完整握手后可恢复。TLS 1.2 在四秒票据提示后仍发送旧票据，服务端拒绝恢复，接着发出新票据；六套路径一致。
+
+Chrome 和 Electron 共 19 组、3217 次握手。通过 DevTools `Memory.simulatePressureNotification` 触发通知，在同一进程内重新建立实际 TLS 连接。Linux Chrome 156 收到 moderate 后的容量为 512，第 513 个端点使最久未访问的有效票据淘汰。critical 清除旧票据，并在维持压力期间停止缓存新票据，切回 moderate 后恢复缓存。关闭 `StatefulMemoryPressure` 的对照组和 Electron 142 都在 critical 清空旧缓存后立即接受新票据。Electron 的 moderate 保留已测的 513 个未过期端点。Chromium 107 公开基线也有 moderate 清扫和 critical 清空。Trae 所带 TTNet 的 Linux 压力来源已另外采样，结果见下节。[Chrome 156 缓存实现](https://github.com/chromium/chromium/blob/156.0.8078.79/net/ssl/ssl_client_session_cache.cc) · [Chromium 142 缓存实现](https://github.com/chromium/chromium/blob/142.0.7444.235/net/ssl/ssl_client_session_cache.cc)
+
+桌面 Linux 的 Chromium 监听系统 LowMemoryMonitor 或桌面门户的 D-Bus `LowMemoryWarning`。实际 dev 容器能读取自身 cgroup 的内存事件，并使用独立内存上限。网关服务器在 Linux 上每秒读取所属 cgroup v2 的 `memory.events`。从启动时的计数继续，`high` 增加触发中度压力，`max` 增加触发严重压力，同时增加时以严重压力为准。连续 20 秒无新事件后恢复。内核没有提供 `memory.high` 软限制的部署，通常只会经过严重压力和正常两个阶段。桌面 D-Bus 通知、cgroup v1 和非 Linux 压力来源仍待覆盖。[Chromium Linux 压力事件来源](https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/dbus_memory_pressure_evaluator_linux.cc) · [Linux cgroup v2 的内存事件](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
+
+网关 Work 在中度压力时按 LRU 缩到 512 项，严重压力时清空并暂停缓存，压力解除后恢复 1024 项。Auth 在中度压力时清扫过期票据，严重压力时清空并继续接收后续票据。Auth 按 Chromium 142 源码跳过清空前开始的连接传来的晚到票据。Code 在两种压力下均清理过期项，保留有效票据及原有容量上限。
+
+晚到票据补采两组控制和两组压力场景。回环服务端收到首条连接的 TLS 1.3 Finished 后暂缓发送两张票据，再触发压力通知。Chrome 156 在严重压力降到中度后收到晚到票据，下一条连接恢复成功。Electron 142 在严重压力清空后收到晚到票据，下一条连接完整握手。两套运行时的无压力控制都恢复成功，结果与网关的同顺序回归一致。
+
+2026-11-19（台湾时间）在两个独立限额、仅有回环网络的 Docker 容器中写入可回收文件页。软限制组只出现 `high` 增量，三个 profile 的已有票据均用于恢复握手，Work 容量由 1024 降至 512，再回到 1024。硬限制组出现 `max` 增量，三个 profile 的首次重连均完整握手。下一次 Auth 和 Code 成功恢复，Work 在严重压力期间持续完整握手，压力解除后恢复缓存。这是当时网关的容器验收记录。Code 后续按官方 Linux TTNet 的硬限制样本修正，见下节。
+
+正常内存条件下，先注册一个长寿命端点和 16 个短寿命端点，等待短票据过期后补足容量。修复前三个官方运行时各做 1028 次握手，跨过容量边界后均能恢复最初的有效端点。对应的三条网关路径各做同样的 1028 次握手，均提前淘汰了这张有效票据。网关现按三个公开 Chromium 基线，在每第 256 次查找时先清扫过期票据，查找未命中也计数。普通查找先取出首张单次票据再清理该端点，首张到期时本次完整握手，仍有效的备用票据可留给下次。全局清扫发现首张已到期时移除整个端点。
+
+TLS 1.2 采用 Chromium 的一小时本地期限。TLS 1.3 采用服务端票据期限和 BoringSSL 默认两天可续期期限中的较短值。网关用 TLS 配置的同一时钟判断到期。固定的 uTLS v1.8.2 没有时间 getter，缓存写入时从 `ResumptionState` 返回的结构反射只读 `createdAt` 和 `useBy`，字段不可读时走完整握手。升级 uTLS 时需要验证这两个字段及其语义。连续恢复时的认证期限及 TTNet 长期到期边界已在下节补验。[Chrome 156 TLS 配置](https://github.com/chromium/chromium/blob/156.0.8078.79/net/socket/ssl_client_socket_impl.cc#L195) · [BoringSSL 票据期限](https://github.com/google/boringssl/blob/2ea3200c3a3ec176613ab7a0b9a4ffc6db846120/ssl/tls13_client.cc#L1158) · [uTLS v1.8.2 会话接口](https://github.com/refraction-networking/utls/blob/v1.8.2/u_public.go)
+
+2026-11-19（台湾时间）三条网关路径重新采样 3132 次握手。跨端点矩阵最后依次访问长寿命、过期、长寿命端点，三条路径的 ClientHello 票据发送及服务端恢复结果均为「是／否／是」，与原官方基线一致。六组四秒短寿命复测仍与原官方基线一致，另用受控时钟覆盖到期秒和时钟回退。
+
+另用两条并发握手的确定事件顺序，复现旧连接的延后失效通知误删另一条连接刚写入的新票据。网关现只允许通知清理该握手取票时的缓存版本。TLS 1.2／1.3 均有回归，同时保留两张单次票据、现有 1024 项上限及早期失败重连行为。
+
+定向竞态测试另确认，底层 Transport 会把拨号与发起请求的取消信号分离。客户端取消后遇到恢复阶段 EOF 时，三条网关路径原本均会在后台额外拨号。现由发起请求的上下文约束恢复失败后的重连；回归等待握手回调结束再检查拨号次数。
+
+### ClientHello 会话恢复的长期到期边界（2026-11-19）
+
+在仅有回环网络的 Linux x64 命名空间中，分别运行 Chrome 156.0.8078.79、Electron 39.2.7 和 Trae 自带的 TTNet。测试专用证书有效期覆盖整个场景。每次连接前推进客户端进程的墙钟，单调时钟继续正常运行。假上游分别记录 ClientHello 是否携带票据以及服务端是否实际恢复。网关测试通过真实 Transport 连接信任同一类测试证书的回环服务端，以同样的时间点检查这两个结果。九组场景包含官方 84 次和网关 84 次握手，逐次对照一致。另做 12 次 TLS 1.2 官方握手，要求假上游在恢复时重发非空票据，三套运行时均在最初认证的第 3600 秒完整握手。
+
+| 场景 | 官方运行时与网关的结果 |
+|---|---|
+| TLS 1.2 一小时期限 | 第 3599 秒可恢复，第 3600 秒不带旧票据，下一秒可用新票据恢复。Go 假上游在恢复时重发票据，修复前网关在第 3600 秒仍携带旧认证的票据。 |
+| TLS 1.3 两天可续期窗口 | 在两天前一秒恢复，此后恰好两天再连接时完整握手，下一秒可恢复。 |
+| TLS 1.3 七天认证期限 | 每天恢复并更换票据，第七天前一秒仍可恢复。第七天整不发送 PSK。修复前三条网关路径在该秒都发送了 PSK，服务端也接受了恢复。 |
+| 服务端拒绝恢复 | 第八天在服务端更换票据密钥，客户端发送 PSK 后完成证书握手。其后连续换票，第十五天前一秒可恢复，第十五天整重新完整握手。 |
+
+网关在每条票据上保留所属连接最初认证的时间。只有握手实际恢复才继承这个时间。TLS 1.3 还按本次握手的两天窗口和服务端声明的票据寿命取最早期限。单元回归另覆盖延迟到达的票据，已到期连接收到的新票据不能覆盖另一条连接的新认证。[RFC 8446 §4.6.1](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.6.1) · [BoringSSL 的七天认证期限](https://github.com/google/boringssl/blob/2ea3200c3a3ec176613ab7a0b9a4ffc6db846120/include/openssl/ssl.h) · [BoringSSL 的会话续期](https://github.com/google/boringssl/blob/2ea3200c3a3ec176613ab7a0b9a4ffc6db846120/ssl/ssl_session.cc)
+
+### Linux TTNet 的内存压力与恢复握手（2026-11-19）
+
+在仅有回环网络的 Linux x64 环境中，用 Trae 的 Electron 39.2.7 同时调用 `electron.net.fetch` 和官方 `@aha-kit/net`。确认主进程已经加载随包的 `libsscronet.so`。每条路径访问两个独立端口，每次响应均关闭连接。触发事件前先确认两个端点都能恢复；事件后的首次重连分别延迟约 350 毫秒和 1.85 秒，再各重连一次。假上游独立记录 ClientHello 是否携带 PSK、TLS 是否实际恢复，并核对正文确实来自对应端点。
+
+七种场景各跑三轮，合计 336 次握手。两种 DevTools 通知均收到成功回执。两个私有 D-Bus 服务分别发送 `LowMemoryWarning(255)`，独立监听端逐次收到，查询到的相关订阅规则均来自验收监听端。两个 cgroup 场景分别用可回收文件页触发真实 `high` 或 `max` 增量，均未发生 OOM。[DevTools Memory 域](https://chromedevtools.github.io/devtools-protocol/tot/Memory/#method-simulatePressureNotification) · [桌面门户 LowMemoryWarning 信号](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.MemoryMonitor.html#signals)
+
+| 事件 | Electron 首次重连 | 同一进程的 TTNet 首次重连 |
+|---|---|---|
+| 无通知、DevTools moderate | 两个端点均恢复 | 两个端点均恢复 |
+| DevTools critical | 两个端点均完整握手，此后的重连恢复 | 两个端点均恢复 |
+| 系统 LowMemoryMonitor、会话桌面门户 | 两个端点均恢复 | 两个端点均恢复 |
+| Linux cgroup v2 的软限制、硬限制 | 两个端点均恢复 | 两个端点均恢复 |
+
+另以 Trae 自带的 Electron Node 单独加载 TTNet，复测无通知、两种 D-Bus 通知及两种 cgroup 限制，合计 40 次握手。两个端点在每次事件后均携带 PSK 并成功恢复。
+
+网关此前将 Code 的硬限制事件映射到 Chromium 107 的严重压力清空策略。旧版在真实 `max` 增量后，Code 首次重连完整握手；修正后保留有效票据、清扫过期项，容量仍为 1024 个端点。这里只确认 Linux 进程外部事件下的握手结果。随包 JS binding 和 Cronet 导出接口中尚未找到可直接向 TTNet 内部投递压力通知的入口；内部监听器接到通知时的行为仍未确认。
+
+### 账号绑定代理访问真实上游（2026-11-18）
+
+23:05（台湾时间），复用正在运行的 dev 镜像另启隔离网关。容器仅有 loopback、没有直连路由。每轮把验收副本的账号显式绑定到一个要求认证的代理，启用「只许走号的代理」。代理只转发到本次验收所需的官方地址，记录确认四种线路合计 33 条隧道实际双向交换 TLS 数据。临时实例只使用当时有效的访问令牌和已有设备字段，未传入刷新令牌、PAT 或签名私钥。
+
+HTTP CONNECT、HTTPS CONNECT、SOCKS5、SOCKS5H 四种绑定均通过 Trae Work／Code 实时目录、Trae Auth 用户查询、Qoder 国内目录及国内／国际官方额度。四种线路的 Qoder 国际目录都报告上游模型停用。HTTPS CONNECT 的 Trae Work `deepseek-v4.1-flash` 和 SOCKS5H 的 Trae Code `Doubao-Seed-Code` 各一次流式请求均完成，正文和结束事件正确。首轮临时代理的启动健康检查受测试端点白名单影响，记录保留。正式轮将启动探测移出业务采样窗口，代理认证和真实上游请求仍逐条核对。
+
+Trae Auth 此轮调用的是官方 `GetUserInfo`，代理上的授权码交换和账号令牌刷新继续待验。Qoder UMID helper 的四种代理另有[真机交互记录](qoder-device-identity.md#实际验收记录)。隔离容器、网关和临时代理均退出，实际 dev 继续运行，未变更账号绑定和配置。
+
+23:36（台湾时间），将当前源码编译出的网关放进同一 dev 镜像的隔离副本。第一条 HTTP CONNECT 校验了预期认证头并注入一次 407，第二条绑定线路与官方 Trae Code 完成 TLS 双向传输。单次 `Doubao-Seed-Code` 请求返回 HTTP 200、预期正文及 SSE 结束事件。请求记录显示两次尝试并归属至成功的账号和代理，粘性也落到成功账号。首条代理转为不可用，两个账号均无新增冷却且已释放在途槽位，隔离副本的临时访问凭证保持一致。首轮夹具提前断开连接，第二轮才取得明确的 407 证据。两轮容器均已退出。
+
+离线回归分别在目录、推理和刷新 CONNECT 阶段注入拒绝，同时核对取消、部分输出和全部线路不可用的 503。TraeWork 创建会话后、Qoder 接受队列请求后，以及刷新已收到重定向再遇到线路故障时均不换号。Qoder 目录的线路故障不淘汰已发现的节点。
+
+2026-11-19 13:48 至 13:51（台湾时间），在无直连路由的隔离实例中补验七种真实故障切换。Trae Work 覆盖 HTTP CONNECT、HTTPS CONNECT、SOCKS5、SOCKS5H，Trae Code 补齐后三种。第一条绑定代理均拒绝一次认证，其中 CONNECT 返回 407，SOCKS 返回用户名／密码认证失败。第二条与官方上游交换 TLS 数据，返回 HTTP 200、预期正文和 SSE 结束。七次请求均在第二次尝试成功，日志和会话绑定归属正确，账号无新增冷却、在途槽位均释放，验收副本的访问凭据一致。隔离实例均已退出。Trae 代理授权码兑换和刷新、其他平台的真实故障切换继续待验。
+
+### 账号额度的展示口径
+
+Trae 官方 Work 网页 `work-1402.b3bc0495.js` 的商业领域转换保留 `quota.credits_limit`、`usage.credits_amount`，`credits_limit=-1` 表示不限量，缺失的用量保持未知；时间字段为 `entitlement_base_info.start_time/end_time`，另保留包返回的 `expire_time/next_billing_time`。网关只投影这些已知字段和样本中的 `total_balance`、`usage_summary.consumed_amount/total_amount`，不透传 user_id／entitlement_id 等身份信息，不按逐包汇总替换官方账号数字。真实样本的包用量与汇总增量未完全对齐，尚未确认包状态枚举。
+
+2026-11-18 核对官网已加载的 `90247.082df4f81d.js`，其中专属积分升级通用积分的告知配置自 2026-09-22 20:00（台湾时间）生效。[当前套餐与计费](https://docs.trae.cn/ide_plans-and-billing)按会员积分与奖励积分说明余额和消耗顺序。读取到的账号快照尚不能证明存在现行 Work／Code 独立额度池或区分某笔扣费所用的包。
+
+Qoder 国内／国际的 `qoderUsage.userQuota` 的 total、used、remaining 和 unit 分别保留；期限使用返回的 expiresAt／refreshAt，不推算周期。未知 displayMode／缺少已确认数字时报告协议未支持，不补零；enterprise 响应仍待独立核实。国内查询继续使用已实测的 `Cosy-ClientType: 10`、`User-Agent: Qoder`；国际版使用 CLI OpenAPI 身份，两者不与 COSY 推理请求混用。
+
+
+### 单次扣费字段与归属（2026-11-17）
+
+- Qoder CLI `1.1.89` 的 session credits 计量器按 request ID 去重，合并 `usage.credits`／`original_credits`／`billable`。本仓库与官方计量器一致：`billable=false` 实际扣费为零；`billable=true` 时仅使用有限非负的 `credits`；缺完整字段则未知。`original_credits` 不等于实际扣费，SDK 的 `total_credits` 是多次模型调用累计，也不能当单次扣费。
+- Trae Work 网页 `work-main.3b45430b.js` 的 `getCnSessionUsage` 用 `userMessageId` 查询 `POST ${getCoreHost()}/api/v1/commercial/get_session_usage`，正文为 `{"session_id": userMessageId}`。国内部署的 `CORE_HOST` 为 `https://trae-api-cn.mchost.guru`，鉴权头为 `Authorization: Cloud-IDE-JWT <token>`；使用网页运行时的 UA／TLS／HTTP2，JSON Content-Type。费用取 `user_usage_group_by_session.credits_float`（支持可选 `data` 外包装），网页对非正数不展示费用。
+- 容器真实取样证实，Work 创建会话响应的 `data.message_id` 可取得单消息已结算费用，费用响应的 `session_id` 与该 ID 相等；不能替换为 `chat_session_id`。网关额外要求响应回显 ID 一致，拒绝误归属。
+- 同轮 Trae Code `llm_utils_chat` 原始 SSE 包含 metadata／timing_cost／output／extra_info／token_usage／done，没有 fee_usage 或其他已确认扣费字段。Work 原始流亦无单次费用，须查官方消息费用接口。不能根据客户端定义了 `fee_usage` 枚举便宣称当前路径已提供扣费。
+- 2026-11-18（台湾时间）复核归档及只读查询。Code 样本的 metadata 回显请求传入的 `session_id`，`prompt_completion_id` 为空。用同一账号从 dev 查询四个 ID：Work 用户消息得到正数费用及一条明细；Code 会话得到零金额及一条明细；Work 聊天会话和一个新生成、未使用的 ID 得到相同的无明细响应。Code 的明细因此可与未命中区分，但 `usage_group_details` 及附加信息没有可与单次生成关联的请求或消息 ID，也没有确认结算状态的字段。继续将 Code 的逐请求费用记为未知。此检查未发起新的模型推理。
+- 2026-11-18 23:07（台湾时间）核对[官网个人用量管理](https://www.trae.cn/dashboard#usage)当时加载的官方 `dashboard/page.6e98c37aaa.js`。积分明细通过 `POST https://api.trae.cn/trae/api/v1/pay/query_user_usage_group_by_session` 获取，授权使用 `Cloud-IDE-JWT`，积分筛选为 `usage_type: [7]`，时间和页码由页面传入。实际 dev 容器从官方取得 11 月 17 日至 18 日的数据，分页完整，分别按旧 Code 会话 ID 和旧 Work 用户消息 ID 命中。已观察的账单行、`usage_group_details` 与可解析的 `extra_info` 中都没有可绑定到单次生成的请求或消息标识。官网能回查会话积分，单次 Code 扣费继续记未知。页面入口见[官方订阅管理](https://docs.trae.cn/ide_subscription-management)。
+- 2026-11-19（台湾时间）核对企业版用量 OpenAPI。按会话查询需要 `statistics:read`，按会话返回 `total_cost` 和聚合后的 `model_call_count`。官方响应示例的一条明细包含两次模型调用，顶层 `request_id` 标识这次用量查询。个人版 Code 路径的单次扣费仍缺可用的关联字段。[企业版会话用量接口](https://docs.trae.cn/enterprise_query-usage-details-by-session-id?lang=zh)
+- Work 网页的 `getSettlementDelay` 为新消息安排两秒等待，历史消息可立即查。网关在流结束或中断时立即查询，第一次为空或为零时于查询开始两秒后补查一次，共用三秒期限。流中的 `usage.credit` 不作为费用来源，Token 用量照常处理。到期尚未结算时记未知，真实额度池隔离与逐包差额仍未确认。
+
+真实原始样本及消息归属校验保存在仓库外的私有验收材料中，文档不包含账号身份、令牌或实际额度数字。

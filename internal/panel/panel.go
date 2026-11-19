@@ -16,6 +16,7 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -37,16 +38,19 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
 	"github.com/yreidev/workbuddy2api-panel/internal/logarchive"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
+	"github.com/yreidev/workbuddy2api-panel/internal/providers"
 	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
 	"github.com/yreidev/workbuddy2api-panel/internal/scheduler"
 	"github.com/yreidev/workbuddy2api-panel/internal/selfupdate"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 	"github.com/yreidev/workbuddy2api-panel/internal/usage"
 )
 
 // Config 面板依赖（main 装配注入）。
 type Config struct {
+	Providers *providers.Manager
 	Pool      *pool.Pool
 	Upstream  *upstream.Client
 	Scheduler *scheduler.Scheduler // 手动触发签到/保活；nil 时对应接口返回 501
@@ -55,6 +59,9 @@ type Config struct {
 	Keys      *apikeys.Store       // 客户端密钥（nil = 密钥接口返回 501）
 	RedisMode string               // "upstash" / "noop"，仅观测透出
 	Version   string               // 网关版本号（语义化版本，不带 v）
+
+	// ProviderLiveness 与 Handler 创建后装配，nil 时新平台测活返回 501。
+	ProviderLiveness func(context.Context, string, string) (providers.LivenessResponse, error)
 
 	// Changelog 内嵌的更新日志原文（docs/CHANGELOG.md），「本次更新」弹窗从这里取条目。
 	Changelog string
@@ -262,6 +269,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
+	p.registerProviderRoutes()
 	p.mux.HandleFunc("GET /panel/api/keys", p.withAuth(p.keysList))
 	p.mux.HandleFunc("POST /panel/api/keys", p.withAuth(p.keyCreate))
 	p.mux.HandleFunc("POST /panel/api/keys/{id}", p.withAuth(p.keyUpdate))
@@ -477,6 +485,9 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	platformModels, platformErrors := p.cfg.Providers.CatalogDetails(r.Context(), nil, true)
+	out = append(out, platformModels...)
+	fetchErrs = append(fetchErrs, platformErrors...)
 	if len(out) == 0 {
 		if len(fetchErrs) > 0 {
 			writeErr(w, http.StatusBadGateway, "fetch models: "+strings.Join(fetchErrs, "; "))
@@ -485,7 +496,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "没有可用账号：请先在面板添加账号再查询")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out, "warnings": fetchErrs})
 }
 
 // panelModelEntry 构造单个模型条目（两域共用）：id 带 realm 前缀（调用值即显示值），
@@ -493,6 +504,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 // EffortListing（远端权威 ∪ 静态兜底表）——与 /v1/models 同一口径，两侧不再漂移。
 func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string, remoteDefault string, httpc *http.Client) map[string]any {
 	entry := map[string]any{
+		"target":               "workbuddy:" + realm,
 		"id":                   realm + ":" + mi.ID,
 		"name":                 mi.Name,
 		"default_effort":       mi.DefaultEffort,
@@ -819,6 +831,13 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	win := usage.Window{}
+	if target := q.Get("target"); target != "" {
+		if !targets.Valid(target) {
+			writeErr(w, 400, "无效的上游筛选")
+			return
+		}
+		win.Target = target
+	}
 	win.From = parseTimeParam(q.Get("from"))
 	win.To = parseTimeParam(q.Get("to"))
 	if win.From.IsZero() && win.To.IsZero() {
@@ -838,6 +857,9 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 		if s.Nickname != "" {
 			nicks[s.UID] = s.Nickname
 		}
+	}
+	for _, a := range p.cfg.Providers.List() {
+		nicks[a.ID] = a.Name
 	}
 	// key：只看这个密钥（客户端密钥的 id、admin；- 表示没开鉴权和旧数据）。
 	if v, ok := q["key"]; ok && len(v) > 0 && v[0] != "" {
@@ -896,7 +918,10 @@ func (p *Panel) usageSave(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "usage recorder not available")
 		return
 	}
-	p.cfg.Usage.Save()
+	if err := p.cfg.Usage.Save(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "保存用量失败："+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -54,6 +55,8 @@ func SetChatLogOutput(w io.Writer) { chatLogOut = w }
 
 // chatStat 单个 chat 请求的日志统计；handler 挂 defer，请求出口后落一行。
 type chatStat struct {
+	target           string
+	tokensKnown      bool
 	start            time.Time
 	model            string
 	mode             string // "stream" | "sync"
@@ -68,6 +71,7 @@ type chatStat struct {
 	attempts         int
 	credit           float64
 	hasCredit        bool
+	creditUnit       string
 	promptTokens     int64
 	completionTokens int64
 	totalTokens      int64
@@ -434,6 +438,11 @@ func (t *requestTrace) event(status int, errBody []byte) reqlog.Event {
 		e.Account = logfmt.Label(s.uid, s.nick)
 		e.Proxy = s.proxy
 		e.Model = s.model
+		e.Target = s.target
+		if s.target != "" && !targets.WorkBuddy(s.target) {
+			e.AccountID = s.uid
+		}
+		e.TokensKnown = s.tokensKnown || s.toks >= 0
 		e.Outcome = s.outcome
 		e.TTFBMs = s.ttfb.Milliseconds()
 		e.Attempts = s.attempts
@@ -442,6 +451,7 @@ func (t *requestTrace) event(status int, errBody []byte) reqlog.Event {
 		e.TotalTokens = s.totalTokens
 		e.Credit = s.credit
 		e.HasCredit = s.hasCredit
+		e.CreditUnit = s.creditUnit
 		e.CacheHitTokens = s.cacheHit
 		e.CacheMissTokens = s.cacheMiss
 	}

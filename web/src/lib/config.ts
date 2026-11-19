@@ -88,7 +88,7 @@ export const CONFIG_TABS: ConfigTab[] = [
         title: '定时测活',
         fields: [
           toggle('liveness_enabled', ['schedule', 'liveness_enabled'], '定时测活',
-            '每隔一段时间给整个号在限流冷却、熔断中的号发一条最短的真实对话，测通就提前恢复；余额不足、风控、已禁用、暂停选号的号不测，健康的号也不测'),
+            '给 WorkBuddy 冷却、熔断中的号发最短对话；Trae／Qoder 仅测试已保存测活模型且有临时冷却记录的号。人工禁用、暂停、刷新保护与健康账号不测，可能消耗平台额度'),
           num('liveness_minutes', ['schedule', 'liveness_minutes'], '测活间隔（分钟）', '30', { min: 1 }),
         ],
       },
@@ -180,7 +180,7 @@ export const CONFIG_TABS: ConfigTab[] = [
       {
         title: '出站请求',
         fields: [
-          { name: 'user_agent', path: ['upstream', 'user_agent'], label: '出站 User-Agent', kind: 'text', placeholder: '留空 = 按账号域对齐官方桌面端（国内版 WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0）', hint: '影响官网积分记录「使用端」显示', restart: true, clearable: true },
+          { name: 'user_agent', path: ['upstream', 'user_agent'], label: '出站 User-Agent', kind: 'text', placeholder: '留空 = 按账号域使用内置的官方桌面端版本', hint: '影响官网积分记录「使用端」显示', restart: true, clearable: true },
           {
             name: 'prompt_mode', path: ['prompt', 'mode'], label: '系统提示词模式', kind: 'select', restart: true,
             options: [

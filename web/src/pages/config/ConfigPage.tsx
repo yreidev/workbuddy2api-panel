@@ -18,9 +18,10 @@ import {
   ALL_FIELDS, CONFIG_TABS, changedFields, fromForm, tabOfField, toForm, validateField, type FieldDef, type FormValues,
 } from '../../lib/config'
 import { toastError } from '../../lib/hooks'
-import { qk, useConfig, useLogStorage } from '../../lib/queries'
+import { useHasProviderData, qk, useConfig, useLogStorage } from '../../lib/queries'
 import type { SaveConfigResp } from '../../lib/types'
 import { BusyButton, Confirm, Loaded } from '../../components/Feedback'
+import { InfoTip } from '../../components/Panel'
 import { StoreFooter } from './StoreFooter'
 
 export function ConfigPage() {
@@ -33,6 +34,7 @@ export function ConfigPage() {
 }
 
 function ConfigForm({ path, config }: { path?: string; config: Record<string, unknown> }) {
+  const multiPlatform = useHasProviderData()
   const qc = useQueryClient()
   const base = useMemo(() => toForm(config), [config])
   const [edits, setEdits] = useState<FormValues>({})
@@ -79,7 +81,10 @@ function ConfigForm({ path, config }: { path?: string; config: Record<string, un
 
   return (
     <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); void save() }}>
-      {path && <p className="text-sm text-muted">配置文件：<span className="font-mono">{path}</span></p>}
+      {(path || multiPlatform) && <div className="flex flex-wrap items-center gap-1">
+        {path && <p className="break-all text-sm text-muted">配置文件：<span className="font-mono">{path}</span></p>}
+        {multiPlatform && <InfoTip label="配置适用范围">服务、鉴权、日志和客户端密钥适用于全部平台。积分、签到、成长任务与跨域成本策略为 WorkBuddy 专属。Trae／Qoder 的暂停、分组、优先级、代理、模型限制及测活模型在账号设置中修改。</InfoTip>}
+      </div>}
       <Tabs selectedKey={tab} onSelectionChange={(k) => setTab(String(k))}>
         <Tabs.ListContainer>
           <Tabs.List aria-label="配置分组">

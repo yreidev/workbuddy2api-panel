@@ -5,6 +5,12 @@
 import { describe, expect, it } from 'vitest'
 import { cleanRoutes, explainRoute, globMatch, routesFromConfig, shadowedBy, validateRoutes, type ModelRoute } from './routes'
 
+it('完整新平台前缀不改写，裸名不会借同名新平台目录直通', () => {
+  const rules = [{ match: '*', target: 'qoder:cn:target' }]
+  expect(explainRoute(rules, 'qoder:global:same', [])).toEqual({ kind: 'prefixed' })
+  expect(explainRoute(rules, 'same', ['qoder:cn:same'])).toEqual({ kind: 'route', index: 0, target: 'qoder:cn:target' })
+})
+
 describe('globMatch', () => {
   it.each([
     ['claude-*haiku*', 'claude-haiku-4-5-20251001', true],

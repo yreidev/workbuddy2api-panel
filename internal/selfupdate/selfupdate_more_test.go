@@ -188,6 +188,23 @@ func TestRollbackEdges(t *testing.T) {
 		}
 	})
 
+	t.Run("密钥格式不兼容时保留正在运行的版本", func(t *testing.T) {
+		u := newTestUpdater(t, "1.14.0-rc.1")
+		u.override, u.baseVersion = true, "1.13.2"
+		if err := os.MkdirAll(u.dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(u.binPath(), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		restarting, err := u.Rollback()
+		if restarting || !errors.Is(err, ErrKeyDowngrade) || u.Status().Phase != PhaseIdle {
+			t.Fatal(restarting, err)
+		}
+		if _, err := os.Stat(u.binPath()); err != nil {
+			t.Fatal("正在运行的版本被移除", err)
+		}
+	})
 	t.Run("删除失败回到 idle", func(t *testing.T) {
 		u := newTestUpdater(t, "1.2.0")
 		u.override = true

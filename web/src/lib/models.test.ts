@@ -28,6 +28,19 @@ const ids = (f: Partial<ModelFilter>, sort: ModelSort = 'default') =>
   filterModels(models, { ...EMPTY_MODEL_FILTER, ...f }, sort).map((m) => m.id)
 
 describe('models', () => {
+  it('多平台按产品和地区筛选，隐藏完整名不影响同名 WorkBuddy 模型', () => {
+    const catalog: Model[] = [{ id: 'cn:same' }, { id: 'traework:cn:same' }, { id: 'qoder:cn:same' }, { id: 'qoder:global:same' }]
+    expect(filterModels(catalog, { ...EMPTY_MODEL_FILTER, product: 'qoder', realm: 'cn' }).map((m) => m.id)).toEqual(['qoder:cn:same'])
+    expect(filterModels(catalog, { ...EMPTY_MODEL_FILTER, q: 'Qoder 国际' }).map((m) => m.id)).toEqual(['qoder:global:same'])
+    const hidden = hiddenModelSet(['qoder:cn:same', 'workbuddy:global:same', 'same'])
+    expect([...hidden].sort()).toEqual(['cn:same', 'global:same', 'qoder:cn:same'])
+  })
+
+  it('新平台状态按真实请求判断，流内错误不能因 HTTP 200 显示成功', () => {
+    const event = { model: 'qoder:cn:same', attempts: 1, status: 200, outcome: 'stream_error' } as RequestEvent
+    expect(modelAvailability(event.model!, [], [event], () => '')?.label).toBe('最近失败')
+    expect(modelAvailability('qoder:global:same', [], [event], () => '')?.label).toBe('待验证')
+  })
   it('按域、能力、关键字筛选', () => {
     const f = (x: Partial<ModelFilter>) => filterModels(list, { ...EMPTY_MODEL_FILTER, ...x }).map((m) => m.id)
     expect(f({ realm: 'cn' })).toEqual(['cn:glm-5.2', 'cn:hunyuan'])

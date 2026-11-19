@@ -21,7 +21,7 @@
 | 单文件二进制 | Windows / macOS / Linux，不想装 Docker | 无；面板前端已打进二进制 |
 | 从源码构建 | 开发调试 | Go 1.26+、Node.js 22+ |
 
-所有方式都只需要两个可写目录：`auths/`（账号凭证）和 `data/`（池状态、用量、请求记录与运行日志的留存）。
+常规数据使用两个可写目录：`auths/`（账号凭证）和 `data/`（池状态、用量、请求记录与运行日志的留存）。Qoder 自动设备初始化另需 glibc（Alpine 使用 `gcompat`）及 `libstdc++`，经代理初始化／刷新还需 `proxychains-ng` 的 `proxychains4`，镜像已包含；独立二进制部署还需保留运行用户的 SDK 状态，详见[Qoder 设备身份](qoder-device-identity.md)。
 
 ## Docker 镜像（推荐）
 
@@ -44,7 +44,7 @@ docker run -d --name workbuddy2api --restart unless-stopped \
 - **`--user "$(id -u):$(id -g)"`**：让容器以你自己的身份运行，刚建的 `auths/`、`data/` 就是你的，不会遇到写入权限问题。不加这一项时容器默认以 uid 10001 运行，见[常见问题](faq.md#docker-部署登录后报写入-auths-失败-permission-denied)。
 - 账号为空时 `/healthz` 返回 503，容器状态会显示 `unhealthy`，添加账号后自动恢复。
 
-镜像标签：`latest`（同 `main`）是 `main` 分支最新提交；每个正式版本有 `x.y.z`、`x.y`、`x` 三个标签（如 `1.0.0`、`1.0`、`1`），想固定版本或只跟随某个主版本就用它们；每次提交另有一个 `sha-xxxxxxx` 标签。各版本的变更见[更新日志](CHANGELOG.md)。
+镜像标签：`latest`（同 `main`）跟随 `main` 分支最近的正式构建；每个正式版本有 `x.y.z`、`x.y`、`x` 三个标签（如 `1.0.0`、`1.0`、`1`），想固定版本或只跟随某个主版本就用它们；正式构建另有一个 `sha-xxxxxxx` 标签。预发布镜像只使用完整候选版本号，例如 `1.14.0-rc.1`。各版本的变更见[更新日志](CHANGELOG.md)。
 
 ## Docker Compose
 
@@ -72,7 +72,7 @@ docker compose down         # 停止并移除容器，./auths 与 ./data 不受�
 
 二进制自带面板前端，拷到任意机器即可运行，只要当前目录下的 `auths/`、`data/` 可写。
 
-从 [Releases 的「最新构建」](https://github.com/yreidev/workbuddy2api-panel/releases/tag/latest)下载对应平台的包。它随 `main` 分支自动更新，与 Docker 的 `latest` 镜像同步；文件名不带版本号，下面的链接一直有效：
+从 [Releases 的「最新构建」](https://github.com/yreidev/workbuddy2api-panel/releases/tag/latest)下载对应平台的包。它随 `main` 分支的正式构建自动更新，与 Docker 的 `latest` 镜像同步；文件名不带版本号，下面的链接一直有效：
 
 | 平台 | 文件 |
 |---|---|

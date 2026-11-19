@@ -5,16 +5,16 @@
 // 所有读接口的查询（TanStack Query）。打上游的接口（模型、积分包、任务、券码、补偿）不随窗口聚焦自动重查，
 // 只读网关内存的接口（总览、日志、队列、版本）按页面需要轮询；标签页切到后台时轮询自动暂停。
 import { useMemo } from 'react'
-import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
+import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { accountName, namesOf, relabel } from './accounts'
-import { ApiError, acct, api, errorMessage } from './api'
+import { ApiError, acct, api, errorMessage, post } from './api'
 import { creditLogQuery } from './credits'
 import { logArchiveQuery, type LevelFilter, type LogChannel } from './logs'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
 import { SEEN_VERSION_KEY, readStored, updateBusy } from './update'
 import type {
   CompensationResp, ConfigResp, CreditLogResp, GroupsResp, KeysResp, LogArchiveResp, LogEntry, LogStorage, Model, Overview, PackageAccount, ProbesResp, ProxiesResp, QueueState,
-  RequestEvent, RequestMetrics, Task, UsageResp, VersionResp, VoucherAccount,
+  ProviderAccount, ProviderQuotaStatus, ProvidersResp, RequestEvent, RequestMetrics, Task, UsageResp, VersionResp, VoucherAccount,
 } from './types'
 
 export const queryClient = new QueryClient({
@@ -29,6 +29,9 @@ export const queryClient = new QueryClient({
 
 export const qk = {
   overview: ['overview'] as const,
+  providers: ['providers'] as const,
+  providerQuota: (id: string) => ['provider_quota', id] as const,
+  providerModels: (id: string, target: string) => ['provider_models', id, target] as const,
   logs: ['logs'] as const,
   /** 按时间范围查的历史运行日志；清空留存后按前缀 ['logs_archive'] 一起作废 */
   logArchive: (range: TimeRange, ch: string, level: string, q: string, limit: number) => ['logs_archive', rangeKey(range), ch, level, q, limit] as const,
@@ -39,7 +42,7 @@ export const qk = {
   recentRequests: ['request_metrics', 'recent'] as const,
   models: ['models'] as const,
   probes: ['model_probes'] as const,
-  usage: (range: TimeRange, key: string) => ['usage', rangeKey(range), key] as const,
+  usage: (range: TimeRange, key: string, target = '') => ['usage', rangeKey(range), key, target] as const,
   keys: ['keys'] as const,
   groups: ['groups'] as const,
   proxies: ['proxies'] as const,
@@ -61,6 +64,47 @@ export function useOverview(intervalMs = 30_000) {
   })
 }
 
+/** 新平台账号、缓存目录与用量；只读网关状态，不触发上游请求。 */
+export function useProviders(intervalMs = 30_000) {
+  return useQuery({ queryKey: qk.providers, queryFn: () => api<ProvidersResp>('providers'), refetchInterval: intervalMs })
+}
+
+/** 纯 WorkBuddy 面板沿用原布局；已移除的新平台账号仍可有历史用量。 */
+export function hasProviderData(data?: ProvidersResp) {
+  return !!(data?.accounts.length || data?.usage.length)
+}
+
+export function useHasProviderData() {
+  return hasProviderData(useProviders().data)
+}
+
+/** 首次查看才查额度；切页和轮询使用缓存，手动刷新才再次请求上游。 */
+export function useProviderQuota(account: ProviderAccount) {
+  const qc = useQueryClient()
+  const key = qk.providerQuota(account.account_id)
+  const query = useQuery({
+    queryKey: key,
+    queryFn: () => post<ProviderQuotaStatus>(`providers/accounts/${account.account_id}/quota`, {}),
+    initialData: account.quota,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+  })
+  const refresh = useMutation({
+    mutationFn: () => post<ProviderQuotaStatus>(`providers/accounts/${account.account_id}/quota`, { force: true }),
+    onSuccess: (status) => { qc.setQueryData(key, status); void qc.invalidateQueries({ queryKey: qk.providers }) },
+  })
+  return { query, refresh }
+}
+
+/** 仅打开新平台测活弹窗或主动刷新时查询该账号的指定产品目录。 */
+export function useProviderModels(id: string, target: string) {
+  return useQuery({
+    queryKey: qk.providerModels(id, target),
+    queryFn: () => post<{ models: ProviderAccount['models'] }>(`providers/accounts/${id}/models`, { target }),
+  })
+}
+
 const NO_NAMES: ReturnType<typeof namesOf> = { notes: new Map(), nicks: new Map() }
 
 /**
@@ -70,12 +114,14 @@ const NO_NAMES: ReturnType<typeof namesOf> = { notes: new Map(), nicks: new Map(
  */
 export function useAccountNames() {
   const { data: names = NO_NAMES } = useQuery({ queryKey: qk.overview, queryFn: () => api<Overview>('overview'), enabled: false, select: namesOf })
+  const { data: providers } = useQuery({ queryKey: qk.providers, queryFn: () => api<ProvidersResp>('providers'), enabled: false })
+  const platformNames = useMemo(() => new Map(providers?.accounts.map((a) => [a.account_id, a.name])), [providers])
   return useMemo(() => ({
     note: (uid: string) => names.notes.get(uid),
-    name: (uid: string, nickname?: string) => accountName({ uid, nickname: nickname || names.nicks.get(uid), note: names.notes.get(uid) }),
+    name: (uid: string, nickname?: string) => platformNames.get(uid) || accountName({ uid, nickname: nickname || names.nicks.get(uid), note: names.notes.get(uid) }),
     /** 请求记录里的「昵称(uid8)」标签 */
     label: (label: string) => relabel(label, names.notes),
-  }), [names])
+  }), [names, platformNames])
 }
 
 export function useLogs(live: boolean) {
@@ -156,7 +202,7 @@ export function useRecentRequests() {
 }
 
 /** 模型目录（实时查上游）：用量页借它回填积分倍率，与模型页共用同一份缓存 */
-const fetchModels = () => api<{ models: Model[] | null }>('models')
+const fetchModels = () => api<{ models: Model[] | null; warnings?: string[] | null }>('models')
 
 /** 模型列表会实时查上游并刷新降级缓存：只在首次进入和手动「重新获取」时查 */
 export function useModels() {
@@ -180,13 +226,14 @@ export function useProbes() {
  * 用量。积分扣除按模型的「积分倍率」来自网关缓存的模型目录：拉用量前先确保目录在 10 分钟内查过
  * （和旧版面板同口径；模型页刚查过就直接复用，不重复打上游）。目录查询失败不影响用量本身。
  */
-export function useUsage(range: TimeRange, key = '') {
+export function useUsage(range: TimeRange, key = '', target = '') {
   return useQuery({
-    queryKey: qk.usage(range, key),
+    queryKey: qk.usage(range, key, target),
     queryFn: async () => {
       await queryClient.fetchQuery({ queryKey: qk.models, queryFn: fetchModels, staleTime: 10 * 60_000 }).catch(() => undefined)
       const q = rangeQuery(range, true)
       if (key) q.set('key', key)
+      if (target) q.set('target', target)
       return api<UsageResp>('usage?' + q.toString())
     },
     placeholderData: keepPreviousData,

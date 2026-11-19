@@ -64,7 +64,7 @@ function Body({ a, onClose }: { a: Account; onClose: () => void }) {
             </ListBox>
           </Select.Popover>
         </Select>
-        {test.data && <Result data={test.data} />}
+        {test.data && <LivenessResultView data={test.data} />}
       </Modal.Body>
       <Modal.Footer>
         <Button variant="tertiary" onPress={onClose}>关闭</Button>
@@ -85,7 +85,7 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function Result({ data: { result: r, reply } }: { data: LivenessResp }) {
+export function LivenessResultView({ data: { result: r, reply } }: { data: LivenessResp }) {
   return (
     <div className="flex flex-col gap-3">
       <Alert status={r.ok ? 'success' : 'danger'}>
@@ -99,7 +99,8 @@ function Result({ data: { result: r, reply } }: { data: LivenessResp }) {
         {r.model && <Line label="模型">{r.model}</Line>}
         {!!r.status && <Line label="状态码">{r.status}</Line>}
         <Line label="耗时">首字 {formatLatency(r.ttfb_ms)} · 共 {formatLatency(r.duration_ms)}</Line>
-        {!!r.credit && <Line label="扣积分">{r.credit}</Line>}
+        {(r.credit_known !== undefined || r.credit != null) && <Line label="扣积分">{r.credit_known === false ? '未知' : `${r.credit ?? 0} ${r.credit_unit || 'credit'}`}</Line>}
+        {r.tokens_known !== undefined && <Line label="token">{r.tokens_known ? `输入 ${r.prompt_tokens} · 输出 ${r.completion_tokens}` : '上游未返回，未知'}</Line>}
       </div>
       {reply && (
         <div className="flex flex-col gap-1">

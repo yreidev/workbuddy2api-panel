@@ -103,8 +103,11 @@ func (h *Handler) withKeyAuth(format sdktranslator.Format, xAPIKey bool, next ht
 // admitKey 客户端密钥的对话请求：先按白名单判实际发上游的模型（裸模型名），再按上限放行并计一次
 // 请求（请求最后失败时由调用方 Refund 退还）。不放行时写好错误并返回状态码，放行返回 0。管理员密钥
 // 和没开鉴权的请求直接放行。
-func (h *Handler) admitKey(w http.ResponseWriter, p principal, bareModel string, now time.Time) int {
-	d := h.keyDenial(p, bareModel, now)
+func (h *Handler) admitKey(w http.ResponseWriter, p principal, target, bareModel string, now time.Time) int {
+	var d *apikeys.Denied
+	if p.key != nil {
+		d = h.cfg.Keys.AdmitTarget(p.key.ID, target, bareModel, now)
+	}
 	if d == nil {
 		return 0
 	}
@@ -119,11 +122,18 @@ func (h *Handler) keyDenial(p principal, bareModel string, now time.Time) *apike
 	if p.key == nil {
 		return nil
 	}
+	if current, ok := h.cfg.Keys.Get(p.key.ID, now); ok {
+		p.key = &current
+	}
 	if bareModel != "" && !p.key.AllowsModel(bareModel) {
 		return &apikeys.Denied{Status: http.StatusForbidden, Code: "model_not_allowed",
 			Message: fmt.Sprintf("密钥「%s」不能用模型 %s，允许的模型：%s", p.key.Name, bareModel, strings.Join(p.key.Models, "、"))}
 	}
-	return h.cfg.Keys.Admit(p.key.ID, now)
+	target := "workbuddy:cn"
+	if !p.key.AllowsTarget(target) && p.key.AllowsTarget("workbuddy:global") {
+		target = "workbuddy:global"
+	}
+	return h.cfg.Keys.AdmitTarget(p.key.ID, target, "", now)
 }
 
 // denialHeaders 上限用完重试没用：告诉 SDK 别自动重试，每天的上限另给出到日切的秒数。

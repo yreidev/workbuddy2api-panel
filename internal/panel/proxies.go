@@ -61,7 +61,31 @@ func (p *Panel) proxiesList(w http.ResponseWriter, r *http.Request) {
 	if !p.proxiesReady(w) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"view": p.cfg.Proxies.View(), "accounts": p.cfg.Proxies.AccountViews()})
+	view := p.cfg.Proxies.View()
+	accounts := p.cfg.Proxies.AccountViews()
+	for _, a := range p.cfg.Providers.List() {
+		account := proxies.AccountView{Proxy: a.ProxyID, Manual: a.ProxyID != ""}
+		if a.ProxyID == "" && view.Settings.RequireBound {
+			account.Blocked = "只允许使用已绑定代理的账号"
+		}
+		if a.ProxyID != "" {
+			account.Blocked = "绑定的代理已不存在，请重新绑定"
+			for i := range view.Proxies {
+				px := &view.Proxies[i]
+				if px.ID != a.ProxyID {
+					continue
+				}
+				px.PlatformAccounts = append(px.PlatformAccounts, a.ID)
+				account.ProxyName = px.Name
+				account.Blocked = ""
+				if !px.Usable {
+					account.Blocked = "绑定的代理不可用或已到期"
+				}
+			}
+		}
+		accounts[a.ID] = account
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"view": view, "accounts": accounts})
 }
 
 // proxyImportInput 批量导入：一行一个代理；Scheme 没写协议的行按什么算（http / socks5）；Pool 导入到哪个

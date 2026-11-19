@@ -134,6 +134,8 @@ func handshakeTLS(ctx context.Context, raw net.Conn, host string, base *tls.Conf
 		ServerName:         cfg.ServerName,
 		RootCAs:            cfg.RootCAs,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		// 官方 Electron 37／Node 22 的大正文记录上限为 16 KiB。
+		DynamicRecordSizingDisabled: true,
 	}, utls.HelloCustom)
 	if err := uconn.ApplyPreset(spec); err != nil {
 		return nil, fmt.Errorf("套用官方 ClientHello: %w", err)

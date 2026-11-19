@@ -40,6 +40,13 @@ func (s *Scheduler) SetLiveness(fn LivenessFunc) {
 	s.livenessMu.Unlock()
 }
 
+// SetProviderLiveness 接入已显式配置模型的新平台恢复探测，沿用同一个定时间隔与批次锁。
+func (s *Scheduler) SetProviderLiveness(fn func()) {
+	s.livenessMu.Lock()
+	s.providerLiveness = fn
+	s.livenessMu.Unlock()
+}
+
 func (s *Scheduler) liveness() LivenessFunc {
 	s.livenessMu.Lock()
 	defer s.livenessMu.Unlock()
@@ -104,6 +111,12 @@ func (s *Scheduler) RunLivenessNow() {
 	defer s.livenessRunning.Store(false)
 	if uids := s.cfg.Pool.LivenessDue(time.Now()); len(uids) > 0 {
 		runLiveness(fn, uids, 1, "定时测活", true)
+	}
+	s.livenessMu.Lock()
+	probeProviders := s.providerLiveness
+	s.livenessMu.Unlock()
+	if probeProviders != nil {
+		probeProviders()
 	}
 }
 

@@ -331,3 +331,24 @@ func TestRun(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestProbeExplicitPlatformBindings(t *testing.T) {
+	tr := newReg(t)
+	pool := tr.pool(t, PoolInput{Name: "池", DefaultGlobal: true})
+	id := tr.add(t, pool, "http://p:1 甲")[0]
+	tr.SetProviderHosts(func() map[string][]string { return map[string][]string{id: {"trae.example"}} })
+	tr.tick(t.Context())
+	if got := tr.takeTested(); !slices.Equal(got, []string{"http://p:1@trae.example"}) {
+		t.Fatalf("仅平台绑定: %v", got)
+	}
+	tr.Track(tr.acct(t, "fixture", "cn"), false)
+	if _, err := tr.Bind([]string{"fixture"}, BindTarget{Proxy: id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.TestNow(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.takeTested(); !slices.Equal(got, []string{"http://p:1@cn.example", "http://p:1@trae.example"}) {
+		t.Fatalf("混合绑定: %v", got)
+	}
+}

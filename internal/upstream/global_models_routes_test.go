@@ -51,8 +51,8 @@ func TestDesktopUAForRealm(t *testing.T) {
 	}{
 		{"国际版 CLI", c.defaultCLIUA(global), "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
 		{"国际版后台服务", c.defaultDaemonUA(global), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
-		{"国内版 CLI", c.defaultCLIUA(cn), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"},
-		{"国内版后台服务", c.defaultDaemonUA(cn), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"},
+		{"国内版 CLI", c.defaultCLIUA(cn), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0"},
+		{"国内版后台服务", c.defaultDaemonUA(cn), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s UA = %q, want %q", tc.name, tc.got, tc.want)

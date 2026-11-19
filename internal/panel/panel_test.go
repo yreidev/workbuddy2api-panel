@@ -902,3 +902,27 @@ func TestPanelModelEntry(t *testing.T) {
 		}
 	})
 }
+
+func TestPanelUsageSavePropagatesDiskError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	recorder := usage.New(path)
+	recorder.Add(time.Now(), "cn", "fixture", "model", usage.Delta{}, true)
+	p, _ := newPanelFor(t, Config{Usage: recorder})
+	if err := os.Mkdir(path+".tmp", 0700); err != nil {
+		t.Fatal(err)
+	}
+	resp := postJSON(t, p, "/panel/api/usage/save", "")
+	if resp.Code != http.StatusInternalServerError || autoDecode(t, resp)["ok"] == true {
+		t.Fatal(resp.Code, resp.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path + ".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	autoWantCode(t, postJSON(t, p, "/panel/api/usage/save", ""), http.StatusOK)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}

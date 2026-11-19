@@ -28,6 +28,7 @@ const rootRoute = createRootRoute({
 // 每个路由单独 createRoute（路径要保持字面量类型，封装成接收 string 的辅助函数会让整棵路由树的类型退化成 any）
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: () => <Navigate to="/accounts" replace /> })
 const accountsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/accounts', component: AccountsPage, staticData: { title: '账号池' } })
+const providersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/providers', beforeLoad: () => { throw redirect({ to: '/accounts', replace: true }) } })
 const proxiesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/proxies', component: ProxiesPage, staticData: { title: '代理' } })
 const usageRoute = createRoute({
   getParentRoute: () => rootRoute, path: '/usage', staticData: { title: '用量' },
@@ -56,7 +57,7 @@ const logsRoute = createRoute({
 const requestsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/requests', component: RequestMetrics, staticData: { title: '请求记录' } })
 
 const routeTree = rootRoute.addChildren([
-  indexRoute, accountsRoute, proxiesRoute, usageRoute, requestsRoute, packagesRoute, creditsRoute, taskCenterRoute, modelsRoute, keysRoute, configRoute, logsRoute,
+  indexRoute, accountsRoute, providersRoute, proxiesRoute, usageRoute, requestsRoute, packagesRoute, creditsRoute, taskCenterRoute, modelsRoute, keysRoute, configRoute, logsRoute,
 ])
 
 // 旧版面板的地址是 #accounts、#usage…（没有斜杠），书签打开时换成新格式

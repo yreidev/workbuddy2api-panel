@@ -50,8 +50,8 @@ func TestBillingHeadersOfficialShape(t *testing.T) {
 		ua, domain   string
 		ent, ctype   string
 	}{
-		{"国内版个人号 POST", http.MethodPost, cnAuth(), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.codebuddy.cn", "", "application/json"},
-		{"国内版企业号 POST", http.MethodPost, cnEnt, "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.codebuddy.cn", "corp-cn", "application/json"},
+		{"国内版个人号 POST", http.MethodPost, cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "", "application/json"},
+		{"国内版企业号 POST", http.MethodPost, cnEnt, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "corp-cn", "application/json"},
 		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0", "www.workbuddy.ai", "", ""},
 	}
 	prevID := ""
@@ -126,8 +126,8 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 		a          *auth.Auth
 		ua, domain string
 	}{
-		{"国内版", cnAuth(), "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.codebuddy.cn"},
-		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0", "www.workbuddy.cn"},
+		{"国内版", cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn"},
+		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.workbuddy.cn"},
 		{"国际版", globalAuth(), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0", "www.workbuddy.ai"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

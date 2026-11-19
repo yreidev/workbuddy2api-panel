@@ -485,8 +485,12 @@ func (r *repeatReader) Read(p []byte) (int, error) {
 	if len(p) > r.n {
 		p = p[:r.n]
 	}
-	for i := range p {
-		p[i] = 'x'
+	if len(p) > 0 {
+		p[0] = 'x'
+		// 成倍复制相同内容，避免 race 为 32 MiB 的每个字节执行一次写插桩。
+		for filled := 1; filled < len(p); {
+			filled += copy(p[filled:], p[:filled])
+		}
 	}
 	r.n -= len(p)
 	return len(p), nil

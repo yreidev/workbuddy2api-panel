@@ -41,6 +41,16 @@ import (
 // proxyEnvKeys 读代理地址的环境变量，取第一个非空的。前四个的顺序同官方，ALL_PROXY 是网关多认的。
 var proxyEnvKeys = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"}
 
+// DialProxyContext 供官方外部组件的受控隧道复用现有拨号；必须提供代理，失败不直连。
+// 不应用 NO_PROXY 或 localhost 旁路，调用方已选定该操作的线路。
+func DialProxyContext(ctx context.Context, rawURL, network, addr string) (net.Conn, error) {
+	u, err := parseProxyURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	return (&outboundProxy{url: u}).dial(ctx, newDialer(), network, addr)
+}
+
 // outboundProxy 出站代理。nil 表示不走代理，方法对 nil 也能调。
 type outboundProxy struct {
 	url *url.URL
@@ -51,6 +61,21 @@ type outboundProxy struct {
 	// tlsConfig 和 https 代理本身握手用的配置；nil 用系统根证书（测试换成自签根）。
 	tlsConfig *tls.Config
 }
+
+// x/net 的 SOCKS CONNECT 握手结束后，返回的包装只额外记录代理绑定的地址。
+// 保留拨号时的 TCP，供后续的 TLS 写缓冲使用。
+type socksProxyDialer struct {
+	*net.Dialer
+	conn net.Conn
+}
+
+func (d *socksProxyDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := d.Dialer.DialContext(ctx, network, addr)
+	d.conn = conn
+	return conn, err
+}
+
+type profileProxyBIOKey struct{}
 
 // envProxy 读代理环境变量（proxyFromEnv），记一行日志：用的是哪个代理，或者设了但用不了（那样直连）。
 func envProxy() *outboundProxy {
@@ -171,16 +196,25 @@ func proxyDial(p *outboundProxy, d *net.Dialer) func(context.Context, string, st
 func (p *outboundProxy) dial(ctx context.Context, d *net.Dialer, network, addr string) (net.Conn, error) {
 	if p.url.Scheme == "socks5" || p.url.Scheme == "socks5h" {
 		// 协议已在 parseProxyURL 里限定，FromURL 不会出错。域名交给代理解析（x/net 对两种写法都这样，同 Go 标准库）。
-		sd, _ := proxy.FromURL(p.url, d)
-		conn, err := sd.(proxy.ContextDialer).DialContext(ctx, network, addr)
+		forward := &socksProxyDialer{Dialer: d}
+		sd, _ := proxy.FromURL(p.url, forward)
+		_, err := sd.(proxy.ContextDialer).DialContext(ctx, network, addr)
 		if err != nil {
 			return nil, fmt.Errorf("经代理 %s 连 %s：%w", p, addr, err)
 		}
-		return conn, nil
+		return forward.conn, nil
 	}
 	conn, err := d.DialContext(ctx, network, proxyHostPort(p.url))
 	if err != nil {
 		return nil, fmt.Errorf("连代理 %s：%w", p, err)
+	}
+	if p.url.Scheme == "https" && ctx.Value(profileProxyBIOKey{}) == true {
+		wrapped, err := newProfileSocketBIO(conn)
+		if err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("初始化代理 %s 的 TLS 写缓冲：%w", p, err)
+		}
+		conn = wrapped
 	}
 	tunnel, err := p.connect(ctx, conn, addr)
 	if err != nil {

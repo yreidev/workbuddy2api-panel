@@ -455,12 +455,8 @@ func TestRunGrowthQueuedMoreBranches(t *testing.T) {
 // 更新检查
 // ---------------------------------------------------------------------------
 
-// updateCheckTick 调短后：开关开着到期就检查一次；取消后 goroutine 退出。
+// 开启更新检查，到期记录结果，取消后退出。
 func TestUpdateCheckTickEnabled(t *testing.T) {
-	oldTick := updateCheckTick
-	updateCheckTick = 5 * time.Millisecond
-	t.Cleanup(func() { updateCheckTick = oldTick })
-
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -474,32 +470,27 @@ func TestUpdateCheckTickEnabled(t *testing.T) {
 		Live:      livecfg.New(livecfg.Snapshot{UpdateCheck: true}),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	p.StartUpdateCheck(ctx)
-	waitPanelUntil(t, "更新检查执行一次", func() bool { return hits.Load() >= 1 })
-	p.upd.mu.Lock()
-	checked := !p.upd.checkedAt.IsZero()
-	p.upd.mu.Unlock()
-	if !checked {
-		t.Fatal("检查成功后应记录 checkedAt")
-	}
-	cancel()
-	// ctx 取消后 goroutine 退出：跨过若干个 tick 周期都不再请求。
-	after := hits.Load()
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		<-time.After(5 * time.Millisecond)
-		if hits.Load() != after {
-			t.Fatalf("ctx 取消后仍在检查：%d → %d", after, hits.Load())
-		}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.runUpdateCheck(ctx, 5*time.Millisecond)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	waitPanelUntil(t, "更新检查成功并保存结果", func() bool {
+		p.upd.mu.Lock()
+		defer p.upd.mu.Unlock()
+		return !p.upd.checkedAt.IsZero()
+	})
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("同一检查周期应只请求一次，实际 %d 次", got)
 	}
 }
 
 // 开关关着：tick 到期也不请求远端。
 func TestUpdateCheckTickDisabled(t *testing.T) {
-	oldTick := updateCheckTick
-	updateCheckTick = 5 * time.Millisecond
-	t.Cleanup(func() { updateCheckTick = oldTick })
-
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -514,8 +505,7 @@ func TestUpdateCheckTickDisabled(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
-	p.StartUpdateCheck(ctx)
-	<-ctx.Done()
+	p.runUpdateCheck(ctx, 5*time.Millisecond)
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("开关关闭时不应请求远端，实际 %d 次", got)
 	}

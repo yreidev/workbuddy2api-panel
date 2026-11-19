@@ -4,10 +4,17 @@
 
 // 从上游 internal/panel/frontend_test.go 的 TestAppJSRequestLogFormatting / TestAppJSRequestMatch 平移（期望值原样保留）。
 import { describe, expect, it } from 'vitest'
-import { cacheLevel, cacheRateText, matchRequest, outcomeLevel, requestCredit, requestLogText, type RequestFilter } from './requests'
+import { cacheLevel, cacheRateText, matchRequest, outcomeLevel, requestCredit, requestLogText, requestTokens, type RequestFilter } from './requests'
 import type { RequestEvent } from './types'
 
 describe('请求指标', () => {
+  it('新平台缺 token 显示未知，明确的零和旧 WorkBuddy 记录保持原语义', () => {
+    const event = { target: 'qoder:cn', total_tokens: 0 } as RequestEvent
+    expect(requestTokens(event)).toBeUndefined()
+    expect(requestTokens({ ...event, tokens_known: true })).toBe(0)
+    expect(requestTokens({ ...event, target: undefined })).toBe(0)
+    expect(requestLogText(event)).toContain('token 未知')
+  })
   it('摘要行紧凑可读，带调用来源与缓存命中；来源缺失时以 — 兜底', () => {
     const time = new Date(2026, 8, 28, 14, 5, 6).toISOString()
     const good: RequestEvent = {
@@ -28,6 +35,8 @@ describe('请求指标', () => {
       .toBe('14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 代理 香港1 | 密钥 张三 | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | req-4')
     expect(outcomeLevel('success')).toBe('ok')
     expect(outcomeLevel('http_error')).toBe('error')
+    expect(outcomeLevel('ledger_pending')).toBe('error')
+    expect(requestLogText({ ...good, ok: false, outcome: 'ledger_pending' })).toContain('上游已完成，账本待补写')
     expect(outcomeLevel('interrupted')).toBe('warn')
   })
 

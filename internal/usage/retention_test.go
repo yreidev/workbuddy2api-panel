@@ -37,7 +37,7 @@ func TestRetentionPrunesWholeBuckets(t *testing.T) {
 	for _, b := range r.buckets {
 		left += b.TT
 	}
-	if len(r.buckets) != 4 || left != 1+2+16 || !r.dirty {
+	if len(r.buckets) != 4 || left != 1+2+16 || r.revision == r.savedRevision {
 		t.Fatalf("应删掉整段在 7 天前的两个桶: 剩 %d 个、合计 %d", len(r.buckets), left)
 	}
 	if st := r.StoreStats(); st.RetentionDays != 7 || st.Buckets != 4 || st.OldestDay != "2026-10-21" {

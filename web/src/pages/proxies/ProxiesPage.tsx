@@ -79,9 +79,10 @@ function Proxies({ data }: { data: ProxiesResp }) {
   })
   const deleteProxies = (list: ProxyItem[], onDone?: () => void) => {
     const bound = list.reduce((n, p) => n + p.accounts.length, 0)
+    const platformBound = list.reduce((n, p) => n + (p.platform_accounts?.length ?? 0), 0)
     ask({
       title: list.length === 1 ? `删掉代理「${list[0].name}」？` : `删掉 ${list.length} 个代理？`,
-      body: bound ? `绑在上面的 ${bound} 个号改绑到同池别的代理，没有空位就等代理（等的时候不接请求）。` : '没有号绑在上面。',
+      body: (bound ? `绑在上面的 ${bound} 个 WorkBuddy 号改绑到同池别的代理，没有空位就等代理。` : '') + (platformBound ? `${platformBound} 个 Trae／Qoder 账号会停止出站，需在账号设置中重新选择代理。` : '') || '没有号绑在上面。',
       confirmLabel: '删掉',
       onConfirm: () => void post<{ deleted: number }>('proxies/delete', { ids: list.map((p) => p.id) }).then((r) => {
         toast.success(`删掉了 ${r.deleted} 个代理`)
@@ -93,10 +94,12 @@ function Proxies({ data }: { data: ProxiesResp }) {
   const deleteBad = () => {
     const down = bad.filter((p) => !p.expired).length
     const bound = bad.reduce((n, p) => n + p.accounts.length, 0)
+    const platformBound = bad.reduce((n, p) => n + (p.platform_accounts?.length ?? 0), 0)
     ask({
       title: `删掉 ${bad.length} 个不可用的代理？`,
       body: `连不上的 ${down} 个、已到期的 ${bad.length - down} 个（还没测过的不删）。` +
-        (bound ? `绑在上面的 ${bound} 个号改绑到同池能用的代理，没有空位就等代理。` : '没有号绑在上面。'),
+        (bound ? `绑在上面的 ${bound} 个 WorkBuddy 号改绑到同池能用的代理，没有空位就等代理。` : '') +
+        (platformBound ? `${platformBound} 个 Trae／Qoder 账号会停止出站，需重新绑定代理。` : ''),
       confirmLabel: '删掉',
       onConfirm: () => void post<{ deleted: number }>('proxies/delete_unavailable').then((r) => {
         toast.success(`删掉了 ${r.deleted} 个不可用的代理`)
@@ -458,6 +461,7 @@ function AccountsCell({ p, pool, names }: { p: ProxyItem; pool?: ProxyPool; name
           {p.accounts.map((uid) => names(uid)).join('、')}
         </Hint>
       )}
+      {!!p.platform_accounts?.length && <Hint tip={p.platform_accounts.map((uid) => names(uid)).join('\n')} className="text-xs text-muted">平台显式绑定 {p.platform_accounts.length} 个：{p.platform_accounts.map((uid) => names(uid)).join('、')}</Hint>}
     </div>
   )
 }

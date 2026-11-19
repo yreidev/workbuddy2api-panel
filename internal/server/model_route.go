@@ -9,6 +9,7 @@ import (
 	"log"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/glob"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 )
 
 // routedKey 请求上下文标记：模型名已经在入口路由过（Claude Code / Codex 入口先路由再翻译），
@@ -21,6 +22,12 @@ type routedKey struct{}
 // 只改目录里没有的名字：客户端发的是上游真实模型名就直通，规则里写 * 兜底也不会动到它。
 // 带 cn: / global: 前缀的名字是明确指定，不改。
 func (h *Handler) routeModel(ctx context.Context, model string) (string, bool) {
+	if _, _, explicit := targets.Parse(model); explicit {
+		return model, false
+	}
+	if p := principalFrom(ctx); p.key != nil && p.key.DefaultTarget != "" && !targets.WorkBuddy(p.key.DefaultTarget) {
+		return model, false
+	}
 	routes := h.loadLive().ModelRoutes
 	if len(routes) == 0 || model == "" || h.cfg.Upstream == nil || ctx.Value(routedKey{}) != nil {
 		return model, false
@@ -28,7 +35,8 @@ func (h *Handler) routeModel(ctx context.Context, model string) (string, bool) {
 	if _, bare := resolveModel(model); bare != model {
 		return model, false
 	}
-	if has, known := h.catalogHas(model); has || !known {
+	has, known := h.catalogHas(model)
+	if has || !known && (h.cfg.Pool.HasAccounts() || len(h.cfg.Providers.List()) == 0) {
 		return model, false
 	}
 	for _, rt := range routes {

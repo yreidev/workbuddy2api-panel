@@ -31,6 +31,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 	"github.com/yreidev/workbuddy2api-panel/internal/panel"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
+	"github.com/yreidev/workbuddy2api-panel/internal/providers"
 	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/redisstore"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
@@ -338,8 +339,27 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 
 	// 客户端密钥（面板里建、发给别人调 /v1/* 的密钥）：与 state 文件同目录。读不了就不启动——
 	// 当成没有密钥会让「建过密钥就必须带」的规则悄悄失效，接口变成谁都能调。
-	keys, err := apikeys.Open(stateSibling(cfg.StateFile, "api_keys.json"))
+	openKeys := apikeys.Open
+	if upd.NeedsLegacyKeyRecovery() {
+		openKeys = apikeys.OpenWithLegacyRecovery
+	}
+	keys, err := openKeys(stateSibling(cfg.StateFile, "api_keys.json"))
 	if err != nil {
+		return false, err
+	}
+	providerManager, err := providers.Open(stateSibling(cfg.StateFile, "providers.json"), up.ChatHTTP)
+	if err != nil {
+		return false, err
+	}
+	flushProviderActivity := func() {
+		if err := providerManager.FlushActivity(); err != nil {
+			log.Printf("[providers] 补写平台账本失败: %v", err)
+		}
+	}
+	defer flushProviderActivity()
+	providerManager.SetProxies(proxyReg)
+	providerManager.SetUsage(rec)
+	if err := providerManager.EnableQoderUMID(up.EnvProxyURL()); err != nil {
 		return false, err
 	}
 	keys.Start()
@@ -393,6 +413,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	logs := logStores{requests: requestLog, task: taskLog, system: systemLog, credit: creditLog, usage: rec}
 
 	pn := panel.New(panel.Config{
+		Providers:   providerManager,
 		Pool:        p,
 		Usage:       rec,
 		Keys:        keys,
@@ -429,6 +450,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	log.SetOutput(io.MultiWriter(os.Stderr, pn.Logs()))
 
 	h := server.NewHandler(server.Config{
+		Providers:    providerManager,
 		Pool:         p,
 		Upstream:     up,
 		APIKey:       cfg.APIKey,
@@ -453,6 +475,8 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	})
 	// 测活走 handler 的对话链路（面板单测、全部测活、定时测活都经 scheduler 调它）。
 	sch.SetLiveness(h.TestAccount)
+	pn.SetProviderLiveness(h.TestProviderAccount)
+	sch.SetProviderLiveness(h.RunProviderLivenessNow)
 
 	// 先占端口再起后台任务和停机协程：端口被占时直接返回，不先跑调度、不打停机日志。
 	if ln == nil {
@@ -465,6 +489,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	// 面板一键更新 / 退回走和停止信号同一条优雅停机路径，停完由 main 原地重启。
 	ctx, requestRestart := context.WithCancel(ctx)
 	defer requestRestart()
+	go up.MonitorSessionMemoryPressure(ctx)
 	var restarting atomic.Bool
 	upd.Restart = func() {
 		restarting.Store(true)
@@ -478,8 +503,33 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 
 	// 两个域的模型目录（含积分倍率表）启动先拉一遍，之后定时补拉、刷新（见 refreshModelCatalogs）。
 	// 异步执行：不阻塞监听启动。
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				flushProviderActivity()
+			}
+		}
+	}()
 	go refreshModelCatalogs(ctx, up, p)
 	go refreshEnterpriseCatalogs(ctx, up, p)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			// Models 自己按 30 分钟缓存节流；新加账号下一轮补拉，不发推理请求。
+			providerManager.Catalog(ctx, nil)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

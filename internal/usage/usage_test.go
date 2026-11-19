@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -41,8 +42,8 @@ func TestAddAndTotals(t *testing.T) {
 	if len(s.ByRealm) != 2 {
 		t.Fatalf("by_realm = %d 项, want 2", len(s.ByRealm))
 	}
-	if s.ByAccount[0].Realm == "" {
-		t.Fatal("by_account 行缺 realm 标注")
+	if len(s.ByAccount) != 1 || s.ByAccount[0].Realm != "" || !slices.Equal(s.ByAccount[0].Realms, []string{"cn", "global"}) {
+		t.Fatalf("账号行应列出实际使用的两个域: %+v", s.ByAccount)
 	}
 	if len(s.CreditByAccount) != 1 || s.CreditByAccount[0].Key != "uid1" ||
 		s.CreditByAccount[0].CreditSamples != 1 || s.CreditByAccount[0].CreditsPer1MTokens != 10000 {
@@ -388,5 +389,67 @@ func TestKeyDimension(t *testing.T) {
 	}
 	if none := r2.SnapshotWindow(Window{KeySet: true}, nil, nil); none.Totals.Requests != 1 || none.ByKey[0].Key != "" {
 		t.Fatalf("只看没开鉴权的 = %+v", none.Totals)
+	}
+}
+
+func TestFlushRetriesWithNoNewUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	r := New(path)
+	r.Add(time.Now(), "cn", "fixture", "model", Delta{Credit: 0.5, HasCredit: true}, true)
+	if err := os.Mkdir(path+".tmp", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.flush(false); err == nil {
+		t.Fatal("写入故障未返回")
+	}
+	if err := os.Remove(path + ".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.flush(false); err != nil {
+		t.Fatal(err)
+	}
+	restored := New(path)
+	if len(restored.buckets) != 1 {
+		t.Fatal("未在没有新请求时补写")
+	}
+	for _, b := range restored.buckets {
+		if b.Req != 1 || b.CR != 0.5 {
+			t.Fatal("恢复后用量错误", b)
+		}
+	}
+}
+
+func TestConcurrentSaveRetainsAccounting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	r := New(path)
+	now := time.Now()
+	const writers = 4
+	const rounds = 25
+	done := make(chan error, writers)
+	for range writers {
+		go func() {
+			for range rounds {
+				r.Add(now, "cn", "fixture", "model", Delta{Credit: 0.25, HasCredit: true}, true)
+				if err := r.Save(); err != nil {
+					done <- err
+					return
+				}
+			}
+			done <- nil
+		}()
+	}
+	for range writers {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened := New(path)
+	if len(reopened.buckets) != 1 {
+		t.Fatal("计数桶数量错误")
+	}
+	for _, b := range reopened.buckets {
+		if b.Req != writers*rounds || b.CR != writers*rounds*0.25 {
+			t.Fatalf("并发保存覆盖了新用量：%+v", b)
+		}
 	}
 }

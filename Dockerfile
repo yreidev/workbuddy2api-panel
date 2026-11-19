@@ -11,6 +11,7 @@ RUN npm run build
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod ./
+COPY third_party/req/ third_party/req/
 RUN go mod download
 COPY . .
 # 前端产物放进 go:embed 目录（构建上下文里的 internal/panel/dist 已被 .dockerignore 排除）
@@ -23,9 +24,12 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wb2api ./cmd/serve
 
 FROM alpine:3.20
 # python3：login.sh 的 JSON 解析 / 签到 / 落盘；bash：shell 脚本体。
-RUN apk add --no-cache wget ca-certificates tzdata python3 bash \
+RUN apk add --no-cache wget ca-certificates tzdata python3 bash gcompat libstdc++ proxychains-ng \
  && adduser -D -u 10001 app \
  && mkdir -p /app/auths /app/data \
+ && ln -s /app/data/qoder-umid/sdk /home/app/.config \
+ && ln -s /app/data/qoder-umid/sdk /.config \
+ && ln -s /app/data/qoder-umid/sdk /root/.config \
  && chown -R app:app /app
 WORKDIR /app
 # 脚本置入 + 去 CRLF（Windows 检出可能性）在切到 app 之前以 root 完成——
@@ -38,6 +42,8 @@ COPY login.sh signin.sh credit.sh /app/
 COPY scripts/probe_active.py /app/scripts/probe_active.py
 # 许可证随程序一起分发（AGPL-3.0 与附加条款）
 COPY LICENSE NOTICE /app/
+COPY internal/providers/NOTICE /app/internal/providers/NOTICE
+COPY internal/providers/cosy/NOTICE /app/internal/providers/cosy/NOTICE
 RUN sed -i 's/\r$//' /app/login.sh /app/signin.sh /app/credit.sh && chmod 755 /app/login.sh /app/signin.sh /app/credit.sh
 USER app
 EXPOSE 7863

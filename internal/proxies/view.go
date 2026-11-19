@@ -34,15 +34,16 @@ type PoolView struct {
 
 // ProxyView 代理和它的状态。
 type ProxyView struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	URL       string     `json:"url"`
-	Scheme    string     `json:"scheme"`
-	Host      string     `json:"host"`
-	Pool      string     `json:"pool"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	Health    Health     `json:"health"`
+	PlatformAccounts []string   `json:"platform_accounts,omitempty"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	URL              string     `json:"url"`
+	Scheme           string     `json:"scheme"`
+	Host             string     `json:"host"`
+	Pool             string     `json:"pool"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	Health           Health     `json:"health"`
 	// Accounts 绑在上面的号；Full 绑满了；Over 超过上限（调低上限以后）。
 	Accounts []string `json:"accounts"`
 	Full     bool     `json:"full,omitempty"`

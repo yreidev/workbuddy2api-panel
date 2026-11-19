@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-// 添加账号：浏览器 OAuth 登录（免重启热加载进池）或导入 JSON（账号池导出的凭证 / cockpit tools 导出的账号）。
+// 添加账号：先选产品与地区，再使用对应的授权或导入表单。
 // 建过代理池时两种方式都能选池：登录请求走池里分到的代理，新号绑在它上面；导入的号放进选的池（规则见 docs/proxy.md）。
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUpRightFromSquare, Copy } from '@gravity-ui/icons'
 import {
-  Alert, Button, Description, Label, ListBox, Modal, Radio, RadioGroup, Select, Spinner, Tabs, toast, Typography,
+  Alert, Button, Description, Label, ListBox, Modal, Select, Spinner, Tabs, toast, Typography,
 } from '@heroui/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { creditsText } from '../lib/accounts'
@@ -15,8 +15,11 @@ import { api, errorMessage, post, upload } from '../lib/api'
 import { copyText } from '../lib/clipboard'
 import { defaultPoolOf, poolSummary } from '../lib/proxies'
 import { qk, useProxies } from '../lib/queries'
+import { TARGETS } from '../lib/targets'
 import type { ImportResp, LoginPoll, LoginStart } from '../lib/types'
 import { BusyButton } from './Feedback'
+import { ProviderAccountForm } from './ProviderAccountForm'
+import { TargetSelect } from './TargetSelect'
 
 /** 选池的两个特殊项：默认池（发给网关是空串）、不绑代理（同 internal/proxies 的 NoPool） */
 const DEFAULT_POOL = 'default'
@@ -90,25 +93,29 @@ export function AddAccountModal({ open, onClose }: { open: boolean; onClose: () 
 }
 
 function AddAccountBody({ onClose }: { onClose: () => void }) {
+  const [target, setTarget] = useState('workbuddy:cn')
   return (
-    <Modal.Body>
-      <Tabs>
+    <Modal.Body className="flex flex-col gap-4">
+      <TargetSelect label="产品与地区" value={target} onChange={setTarget} targets={TARGETS} />
+      {target.startsWith('workbuddy:') ? <Tabs key={target}>
         <Tabs.ListContainer>
           <Tabs.List aria-label="添加方式">
             <Tabs.Tab id="login">浏览器登录<Tabs.Indicator /></Tabs.Tab>
             <Tabs.Tab id="import">导入 JSON<Tabs.Indicator /></Tabs.Tab>
           </Tabs.List>
         </Tabs.ListContainer>
-        <Tabs.Panel id="login" className="pt-4"><LoginPanel onClose={onClose} /></Tabs.Panel>
+        <Tabs.Panel id="login" className="pt-4"><LoginPanel realm={target === 'workbuddy:global' ? 'global' : 'cn'} onClose={onClose} /></Tabs.Panel>
         <Tabs.Panel id="import" className="pt-4"><ImportPanel /></Tabs.Panel>
-      </Tabs>
+      </Tabs> : <>
+        <p className="text-sm text-muted">当前为实验接入，尚未完成真实对话与额度验收。添加后统一在「账号池」管理。</p>
+        <ProviderAccountForm key={target} target={target} />
+      </>}
     </Modal.Body>
   )
 }
 
-function LoginPanel({ onClose }: { onClose: () => void }) {
+function LoginPanel({ realm, onClose }: { realm: string; onClose: () => void }) {
   const qc = useQueryClient()
-  const [realm, setRealm] = useState('cn')
   const [pool, setPool] = useState(DEFAULT_POOL)
   const [session, setSession] = useState<LoginStart | null>(null)
   const [starting, setStarting] = useState(false)
@@ -194,15 +201,7 @@ function LoginPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 标题单独一行、选项在下面并排，和下面的代理池下拉框一致（HeroUI 的横排把标题和选项排在同一行，窄屏会错开折行） */}
-      <RadioGroup value={realm} onChange={setRealm} orientation="horizontal" className="flex-col flex-nowrap gap-1">
-        <Label>版本</Label>
-        <div className="flex min-h-9 flex-wrap items-center gap-x-6 gap-y-2">
-          <Radio value="cn"><Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control>国内版（CN）</Radio.Content></Radio>
-          <Radio value="global"><Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control>国际版（Global）</Radio.Content></Radio>
-        </div>
-        <Description>国际版登录后，网关自动完成注册地区、激活与试用额度领取，全程无需手动操作。</Description>
-      </RadioGroup>
+      {realm === 'global' && <p className="text-sm text-muted">国际版登录后，网关自动完成注册地区、激活与试用额度领取，全程无需手动操作。</p>}
       <PoolPicker
         value={pool}
         onChange={setPool}

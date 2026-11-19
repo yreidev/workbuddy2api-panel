@@ -16,11 +16,13 @@ import {
 } from '../../lib/models'
 import { qk, useConfig, useModels, useOverview, useProbes, useRecentRequests } from '../../lib/queries'
 import type { Model, Probe } from '../../lib/types'
+import { parseModelTarget, targetName } from '../../lib/targets'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { Hint } from '../../components/Hint'
 import { InfoTip, Panel } from '../../components/Panel'
 import { HiddenModels } from './HiddenModels'
 import { ModelRoutes } from './ModelRoutes'
+import { TargetSelect } from '../../components/TargetSelect'
 
 function probeDays(ts?: string): number | null {
   if (!ts) return null
@@ -94,6 +96,7 @@ function AvailabilityCell({ av }: { av: ModelAvailability | null }) {
 const fmtEventTime = (iso: string) => dateTime(timeMs(iso))
 
 function Efforts({ m }: { m: Model }) {
+  if (parseModelTarget(m.id).product !== 'workbuddy' && m.supports_reasoning == null) return <span className="text-muted">未确认</span>
   const eff = [...(m.supported_efforts || [])]
   if (m.can_disable_thinking && eff.length && !eff.includes('off')) eff.push('off（可关）')
   if (!eff.length) {
@@ -102,16 +105,17 @@ function Efforts({ m }: { m: Model }) {
   return <span className="flex flex-wrap gap-1">{eff.map((e) => <Chip key={e} size="sm" variant="soft" color="warning">{e}</Chip>)}</span>
 }
 
-function ModelName({ m, hidden }: { m: Model; hidden: boolean }) {
+function ModelName({ m, hidden, showTarget }: { m: Model; hidden: boolean; showTarget: boolean }) {
   const caps: [string, 'success' | 'warning' | 'accent' | 'danger'][] = []
   if (hidden) caps.push(['对外隐藏', 'danger'])
   if (m.enterprise_only) caps.push(['企业专属', 'accent'])
   if (m.is_default) caps.push(['默认', 'success'])
-  if (m.supports_tool_call) caps.push(['工具', 'warning'])
+  if (m.supports_tool_call) caps.push([parseModelTarget(m.id).product === 'workbuddy' ? '工具' : '工具协议', 'warning'])
   if (m.supports_images) caps.push(['视觉', 'warning'])
   if (m.supports_reasoning && !m.can_disable_thinking) caps.push(['思考常开', 'warning'])
   return (
     <div className="flex min-w-0 flex-col gap-1">
+      {showTarget && <span className="text-xs text-muted">{targetName(parseModelTarget(m.id).target)}</span>}
       <span className="flex items-center gap-1">
         <span className="break-all font-medium">{m.id}</span>
         {m.description && <InfoTip label="模型说明">{m.description}</InfoTip>}
@@ -183,6 +187,10 @@ export function ModelsPage() {
   const filtered = JSON.stringify(filter) !== JSON.stringify(EMPTY_MODEL_FILTER)
 
   const list = useMemo(() => models.data?.models || [], [models.data])
+  const multiProduct = list.some((m) => {
+    const { product } = parseModelTarget(m.id)
+    return !!product && product !== 'workbuddy'
+  })
   const shown = useMemo(() => filterModels(list, filter, sort), [list, filter, sort])
   const pr = probes.data?.probes || {}
   const hit = list.filter((m) => probeFor(pr, m.id)).length
@@ -200,13 +208,14 @@ export function ModelsPage() {
         title="模型能力"
         desc={
           <>
-            max_tokens 已可正常透传最大输出；官方返回的最大输出仅供参考，不保证完全正确。
+            汇总已启用账号的模型目录；未提供的价格、思考档位与输出上限显示未知，目录存在不代表实际可用。
             {list.length > 0 && <> {list.length} 个模型 · 已刷新降级缓存{hit ? ' · ' + hit + ' 个有实测上限' : ''}</>}
           </>
         }
         actions={<BusyButton size="sm" variant="secondary" busy={models.isFetching} onPress={refresh}>重新获取</BusyButton>}
         contentClassName="flex flex-col gap-3"
       >
+        {!!models.data?.warnings?.length && <div role="status" className="rounded-xl bg-warning/10 p-3 text-sm text-warning">部分目录获取失败，其余模型仍可使用：{models.data.warnings.map((warning) => <p key={warning} className="break-all">{warning}</p>)}</div>}
         <div className="flex flex-wrap items-center gap-3">
           <SearchField aria-label="搜索模型" value={filter.q} onChange={(v) => set('q', v)} className="w-full sm:w-72">
             <SearchField.Group>
@@ -215,6 +224,7 @@ export function ModelsPage() {
               <SearchField.ClearButton />
             </SearchField.Group>
           </SearchField>
+          {(multiProduct || filter.product) && <TargetSelect compact label="按产品筛选" value={filter.product || 'all'} onChange={(v) => set('product', v === 'all' ? undefined : v)} targets={[{ id: 'all', name: '全部产品' }, { id: 'workbuddy', name: 'WorkBuddy' }, { id: 'traework', name: 'TraeWork' }, { id: 'traecode', name: 'Trae Code' }, { id: 'qoder', name: 'Qoder' }]} />}
           <ToggleButtonGroup aria-label="按域筛选" size="sm" selectionMode="single" disallowEmptySelection
             selectedKeys={[filter.realm]} onSelectionChange={(k) => set('realm', ([...k][0] as RealmFilter) ?? 'all')}>
             <ToggleButton id="all">全部</ToggleButton>
@@ -259,7 +269,7 @@ export function ModelsPage() {
                   <Table.Body>
                     {shown.map((m) => (
                       <Table.Row key={m.id} id={m.id}>
-                        <Table.Cell><div className="max-w-72"><ModelName m={m} hidden={hidden.has(m.id)} /></div></Table.Cell>
+                        <Table.Cell><div className="max-w-72"><ModelName m={m} hidden={hidden.has(m.id)} showTarget={multiProduct} /></div></Table.Cell>
                         <Table.Cell><AvailabilityCell av={avail(m)} /></Table.Cell>
                         <Table.Cell><RateCell m={m} /></Table.Cell>
                         <Table.Cell>{m.default_effort ? <Chip size="sm" variant="soft" color="success">{m.default_effort}</Chip> : <span className="text-muted">—</span>}</Table.Cell>
@@ -276,7 +286,7 @@ export function ModelsPage() {
             <div className="flex flex-col gap-3">
               {shown.map((m) => (
                 <Card key={m.id} variant="secondary" className="gap-3 p-4">
-                  <ModelName m={m} hidden={hidden.has(m.id)} />
+                  <ModelName m={m} hidden={hidden.has(m.id)} showTarget={multiProduct} />
                   <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                     <dt className="text-muted">状态</dt><dd><AvailabilityCell av={avail(m)} /></dd>
                     <dt className="text-muted">积分倍率</dt><dd><RateCell m={m} /></dd>

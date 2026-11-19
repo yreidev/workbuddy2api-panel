@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"io"
 	"net/http"
 	"strconv"
@@ -67,6 +68,15 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req, tool, query, ok := claudeCodeSearch(body); ok {
+		var peek struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &peek)
+		_, target, _ := h.targetModel(r.Context(), peek.Model)
+		if target != "" && (!targets.WorkBuddy(target) || !h.targetAllowed(r.Context(), target, nil, false)) {
+			writeBridgeError(w, sdktranslator.FormatClaude, 400, "search_not_supported", "该上游不提供网关联网搜索；请使用客户端搜索工具")
+			return
+		}
 		h.anthropicSearch(w, r, req, tool, query)
 		return
 	}
@@ -99,7 +109,37 @@ func (h *Handler) bridgeBody(w http.ResponseWriter, r *http.Request, format sdkt
 	}
 	// 先路由再判断：Claude Code / Codex 不配模型时发的官方默认名靠路由规则落到上游模型
 	model, routed := h.routeModel(r.Context(), peek.Model)
-	if msg := h.unknownModel(model, format); msg != "" {
+	model, target, _ := h.targetModel(r.Context(), model)
+	if target != "" && !targets.WorkBuddy(target) && format == sdktranslator.FormatClaude {
+		// 翻译器会丢弃 tool_result 内的文档；首期只允许文本结果，在翻译前拒绝其他内容。
+		var source struct {
+			Messages []struct {
+				Content any `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &source); err != nil {
+			writeBridgeError(w, format, http.StatusBadRequest, "invalid_request", "messages 格式错误："+err.Error())
+			return
+		}
+		for _, message := range source.Messages {
+			parts, _ := message.Content.([]any)
+			for _, part := range parts {
+				block, _ := part.(map[string]any)
+				if block["type"] != "tool_result" {
+					continue
+				}
+				results, _ := block["content"].([]any)
+				for _, result := range results {
+					item, _ := result.(map[string]any)
+					if item["type"] != "text" {
+						writeBridgeError(w, format, http.StatusBadRequest, "unsupported_content", "该平台首期仅支持文本工具结果，不支持图片、文档或其他多模态内容")
+						return
+					}
+				}
+			}
+		}
+	}
+	if msg := h.unknownModel(model, format); (target == "" || targets.WorkBuddy(target)) && msg != "" {
 		if routed {
 			// 规则命中了但目标写错：指给用户改哪条规则，而不是让他再加规则
 			msg = "model route " + peek.Model + " -> " + model + ": the target is not in the gateway model list (GET /v1/models); fix the route in the panel (模型与档位 → 模型路由)"

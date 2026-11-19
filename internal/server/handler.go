@@ -30,14 +30,17 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
 	"github.com/yreidev/workbuddy2api-panel/internal/prompt"
+	"github.com/yreidev/workbuddy2api-panel/internal/providers"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
 	"github.com/yreidev/workbuddy2api-panel/internal/session"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 	"github.com/yreidev/workbuddy2api-panel/internal/usage"
 )
 
 // Config handler 依赖。
 type Config struct {
+	Providers *providers.Manager
 	Pool      *pool.Pool
 	Upstream  *upstream.Client
 	APIKey    string         // 管理员密钥，空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
@@ -329,20 +332,49 @@ const (
 // 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型）。
 func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 	data := h.modelList()
-	// 客户端密钥只列白名单里的模型。id 带 cn: / global: 前缀，按裸名判。
-	if p := principalFrom(r.Context()); p.key != nil {
-		allowed := make([]map[string]any, 0, len(data))
-		for _, m := range data {
-			id, _ := m["id"].(string)
-			if _, bare := resolveModel(id); p.key.AllowsModel(bare) {
-				allowed = append(allowed, m)
-			}
+	data = append(data, h.cfg.Providers.Catalog(r.Context(), func(target string, groups []string) bool { return h.targetAllowed(r.Context(), target, groups, true) })...)
+	// 目录可能需要等待上游；返回前重新读取密钥，按当前权限过滤。
+	key := principalFrom(r.Context()).key
+	if key != nil {
+		now := time.Now()
+		current, ok := h.cfg.Keys.Get(key.ID, now)
+		switch {
+		case !ok:
+			writeOpenAIError(w, http.StatusUnauthorized, "key_deleted", "密钥已被删除")
+			return
+		case !current.Enabled:
+			writeOpenAIError(w, http.StatusUnauthorized, "key_disabled", "密钥已停用")
+			return
+		case current.Expired(now):
+			writeOpenAIError(w, http.StatusUnauthorized, "key_expired", "密钥已到期")
+			return
 		}
-		data = allowed
+		key = &current
+	}
+	live := h.loadLive()
+	allowed := make([]map[string]any, 0, len(data))
+	bareSources := []map[string]any{}
+	for _, model := range data {
+		id := model["id"].(string)
+		target, native, explicit := targets.Parse(id)
+		if _, hidden := live.HiddenModels[id]; hidden || !explicit {
+			continue
+		}
+		if key != nil && !key.AllowsTargetModel(target, native) {
+			continue
+		}
+		allowed = append(allowed, model)
+		if targets.WorkBuddy(target) && (key == nil || key.DefaultTarget == "" || key.DefaultTarget == target) {
+			bareSources = append(bareSources, model)
+		}
+	}
+	// 从可选地区重新生成裸名及元数据；新平台为默认上游时不列 WorkBuddy 裸名。
+	if h.cfg.GlobalEnabled && crossRealmOn(live.CrossRealm) {
+		allowed = append(bareModelEntries(bareSources), allowed...)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   data,
+		"data":   allowed,
 	})
 }
 
@@ -667,6 +699,20 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		peek.Model = routed
 	}
 
+	resolved, target, native := h.targetModel(r.Context(), peek.Model)
+	if target != "" {
+		if !h.targetAllowed(r.Context(), target, nil, false) {
+			writeOpenAIError(w, 403, "target_not_allowed", "密钥不允许使用该上游")
+			return
+		}
+		if !targets.WorkBuddy(target) {
+			h.providerChat(w, r, body, target, native, peek.Stream)
+			return
+		}
+		body = rewriteModel(body, resolved)
+		peek.Model = resolved
+	}
+
 	// 工具名名单：上游在没有 tools 的请求里会把工具调用吐成原生标记文本
 	// （见 upstream/dsml.go），修复层用它做严格判定。名单来自「本请求声明的 tools」
 	// 与「会话历史里出现过的工具名」两个来源——实测 tools 声明会在中转环节丢失，
@@ -731,7 +777,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		usageKey = livenessUsageKey
 	}
 	admitted := time.Now()
-	if status := h.admitKey(w, keyOwner, bareModel, admitted); status != 0 {
+	admitTarget := "workbuddy:cn"
+	if realm == "global" {
+		admitTarget = "workbuddy:global"
+	}
+	if status := h.admitKey(w, keyOwner, admitTarget, bareModel, admitted); status != 0 {
 		st.status, st.outcome = status, reqlog.OutcomeHTTPError
 		return
 	}
@@ -1037,6 +1087,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.model = acct.Realm() + ":" + bareModel
 		}
 		tried[acct.UID] = true
+		if !h.workbuddyAccountAllowed(r.Context(), acct.UID, bareModel) {
+			continue
+		}
 		woke := slot.woke
 		slot.woke = false
 
@@ -1100,15 +1153,16 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
-		attemptStarted := time.Now()
-		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
-		if isQueueWaiting(terr) {
-			// 6020 排进容量队列了：在这个号上照官方排队，到号了原样重发；不等了才拿着最后那次 6020
-			// 往下走，由下面回 503（见 capqueue.go）。
-			a := h.capacityQueue(r.Context(), acct, body, clientIP, chatMeta, bareModel,
-				chatAttempt{rc: rc, status: status, body: respBody, err: terr, started: attemptStarted})
-			rc, status, respBody, terr, attemptStarted = a.rc, a.status, a.body, a.err, a.started
+		attempt := h.dispatchWorkBuddy(r.Context(), acct, body, clientIP, chatMeta, bareModel)
+		if isQueueWaiting(attempt.err) {
+			attempt = h.capacityQueue(r.Context(), acct, body, clientIP, chatMeta, bareModel, attempt)
 		}
+		if errors.Is(attempt.err, errDispatchDenied) {
+			st.status, st.outcome = http.StatusForbidden, reqlog.OutcomeHTTPError
+			writeOpenAIError(w, st.status, "target_not_allowed", errDispatchDenied.Error())
+			return
+		}
+		rc, status, respBody, terr, attemptStarted := attempt.rc, attempt.status, attempt.body, attempt.err, attempt.started
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
 		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支
 		// （terr 为 nil 但 status>=400，如 ErrNone 兜底）回落本地 Classify，双保险。

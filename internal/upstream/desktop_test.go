@@ -20,7 +20,7 @@ import (
 )
 
 // testDesktopUA 任务中心桌面端请求的 UA：国内版桌面端 5.9.3、内置 CLI 2.165.0（跟随网关其余请求）。
-const testDesktopUA = "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"
+const testDesktopUA = "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0"
 
 // TestReportDesktopEventFingerprint 断言桌面指纹上报：走 chatBase、UA 为桌面形状、
 // 事件数组自动注入 workbuddy-desktop 公共指纹（覆盖同名业务键）。
@@ -817,7 +817,7 @@ func TestDesktopChatWithExpert(t *testing.T) {
 			"X-Agent-Type":        "main",
 			"X-IDE-Name":          "WorkBuddy",
 			"X-IDE-Type":          "WorkBuddy",
-			"X-IDE-Version":       "5.9.3",
+			"X-IDE-Version":       "5.11.3",
 			"X-Expert-Id":         "ex_1",
 			"X-Expert-Team-Task":  "",
 			"X-Moderation-Type":   "",
@@ -1028,7 +1028,7 @@ func TestDesktopFingerprintFollowsClientVersion(t *testing.T) {
 		name, domain, ver, commit string
 		released                  int64
 	}{
-		{"国内版", "", "5.9.3", "d46924219e79332f49c37ccebf27292f87001b19", 1793093023713},
+		{"国内版", "", "5.11.3", "ecace0f7028166695994300182295329b8b95449", 1794501984587},
 		{"国际版", "www.workbuddy.ai", "5.9.4", "fa0a0901906addaa1a4259f6df347388a5563ded", 1793290653510},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

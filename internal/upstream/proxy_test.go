@@ -171,6 +171,7 @@ type fakeConnectProxy struct {
 	status  int
 	hangup  bool
 	silent  bool
+	pause   *proxyUploadPause
 
 	mu   sync.Mutex
 	reqs []*http.Request
@@ -185,14 +186,19 @@ func (fp *fakeConnectProxy) start(t *testing.T, tlsCfg *tls.Config) string {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	addr := ln.Addr().String()
-	if tlsCfg != nil {
-		ln = tls.NewListener(ln, tlsCfg)
-	}
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
+			}
+			if err := fp.pause.limitReceiveBuffer(c.(*net.TCPConn)); err != nil {
+				t.Error(err)
+				_ = c.Close()
+				continue
+			}
+			if tlsCfg != nil {
+				c = tls.Server(c, tlsCfg)
 			}
 			go fp.serve(c)
 		}
@@ -220,7 +226,7 @@ func (fp *fakeConnectProxy) serve(c net.Conn) {
 		_, _ = fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\n\r\n", fp.status, http.StatusText(fp.status))
 		return
 	}
-	relayTo(c, br, fp.backend, []byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+	relayTo(c, fp.pause.source(br), fp.backend, []byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 }
 
 func (fp *fakeConnectProxy) seen() []*http.Request {
@@ -235,6 +241,7 @@ type fakeSOCKS5 struct {
 	backend    string
 	user, pass string
 	fail       bool
+	pause      *proxyUploadPause
 
 	mu      sync.Mutex
 	targets []string
@@ -252,6 +259,11 @@ func (sp *fakeSOCKS5) start(t *testing.T) string {
 			c, err := ln.Accept()
 			if err != nil {
 				return
+			}
+			if err := sp.pause.limitReceiveBuffer(c.(*net.TCPConn)); err != nil {
+				t.Error(err)
+				_ = c.Close()
+				continue
 			}
 			go sp.serve(c)
 		}
@@ -314,7 +326,7 @@ func (sp *fakeSOCKS5) serve(c net.Conn) {
 		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
 	}
-	relayTo(c, br, sp.backend, []byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	relayTo(c, sp.pause.source(br), sp.backend, []byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 }
 
 func (sp *fakeSOCKS5) seen() []string {
@@ -323,8 +335,41 @@ func (sp *fakeSOCKS5) seen() []string {
 	return append([]string(nil), sp.targets...)
 }
 
+// proxyUploadPause 只暂停上传转发，仍允许服务端控制帧通过隧道。
+type proxyUploadPause struct {
+	after   int64
+	onPause func()
+	resume  <-chan struct{}
+}
+
+func (p *proxyUploadPause) limitReceiveBuffer(conn *net.TCPConn) error {
+	if p == nil {
+		return nil
+	}
+	return conn.SetReadBuffer(32768)
+}
+
+func (p *proxyUploadPause) source(r io.Reader) io.Reader {
+	if p == nil {
+		return r
+	}
+	return io.MultiReader(io.LimitReader(r, p.after), proxyPausedReader{conn: r, onPause: p.onPause, resume: p.resume})
+}
+
+type proxyPausedReader struct {
+	conn    io.Reader
+	onPause func()
+	resume  <-chan struct{}
+}
+
+func (r proxyPausedReader) Read(p []byte) (int, error) {
+	r.onPause()
+	<-r.resume
+	return r.conn.Read(p)
+}
+
 // relayTo 连上 backend，先给客户端回 reply，再双向转发到任一方断开。
-func relayTo(c net.Conn, br *bufio.Reader, backend string, reply []byte) {
+func relayTo(c net.Conn, source io.Reader, backend string, reply []byte) {
 	up, err := net.Dial("tcp", backend)
 	if err != nil {
 		return
@@ -334,7 +379,7 @@ func relayTo(c net.Conn, br *bufio.Reader, backend string, reply []byte) {
 		return
 	}
 	go func() {
-		_, _ = io.Copy(up, br)
+		_, _ = io.Copy(up, source)
 		_ = up.Close()
 	}()
 	_, _ = io.Copy(c, up)
@@ -652,4 +697,59 @@ func TestConfigFetchProxiedSkipsFallbackIP(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDialProxyContextAlwaysUsesSelectedProxy(t *testing.T) {
+	for _, scheme := range []string{"http", "socks5", "socks5h"} {
+		t.Run(scheme, func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "fixture-through-proxy") }))
+			defer backend.Close()
+			// 即使目标为 localhost 且 NO_PROXY=*，外部组件选择的线路也不可变成直连。
+			t.Setenv("NO_PROXY", "*")
+			addr := strings.TrimPrefix(backend.URL, "http://")
+			var raw string
+			var fp *fakeConnectProxy
+			var sp *fakeSOCKS5
+			if scheme == "http" {
+				fp = &fakeConnectProxy{backend: addr}
+				raw = "http://u:pw@" + fp.start(t, nil)
+			} else {
+				sp = &fakeSOCKS5{backend: addr, user: "u", pass: "pw"}
+				raw = scheme + "://u:pw@" + sp.start(t)
+			}
+			conn, err := DialProxyContext(t.Context(), raw, "tcp", "localhost:443")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+			if _, err := io.WriteString(conn, "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if err != nil || string(body) != "fixture-through-proxy" {
+				t.Fatal("隧道数据不完整", err)
+			}
+			if fp != nil {
+				reqs := fp.seen()
+				if len(reqs) != 1 || reqs[0].Host != "localhost:443" || reqs[0].Header.Get("Proxy-Authorization") == "" {
+					t.Fatal("未使用指定 CONNECT 或认证")
+				}
+			}
+			if sp != nil && !reflect.DeepEqual(sp.seen(), []string{"localhost:443"}) {
+				t.Fatal("未使用指定 SOCKS5 或远端域名")
+			}
+		})
+	}
+	t.Run("缺少代理时不直连", func(t *testing.T) {
+		if conn, err := DialProxyContext(t.Context(), "", "tcp", "localhost:443"); err == nil {
+			_ = conn.Close()
+			t.Fatal("缺少代理地址时回落直连")
+		}
+	})
 }

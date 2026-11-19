@@ -5,7 +5,16 @@
 // 用量时序图的数据整理（纯函数，见 usage.test.ts）。
 // x 轴是真实时间轴，不按序号等距：没请求的时段不产生桶，1 小时和 8 小时的间隔必须画得不一样宽，
 // 否则「什么时候用的」会失真。后端返回的是本地时区时间，这里按本地时间解析。
-import type { UsagePoint } from './types'
+import type { ProviderUsage, UsageAgg, UsagePoint } from './types'
+import { USAGE_KEY_NONE } from './keys'
+import { fmtTok } from './format'
+
+export function matchesUsageFilter(row: Pick<ProviderUsage, 'target' | 'key_id'>, target: string, key: string) {
+  return (!target || row.target === target) && (!key || (row.key_id ?? '') === (key === USAGE_KEY_NONE ? '' : key))
+}
+
+/** 全部尝试都缺 token 时显示未知；有已知样本时只展示其累计量。 */
+export const usageTokenText = (u: UsageAgg, value: number) => u.requests > 0 && u.unknown_tokens === u.requests ? '未知' : fmtTok(value)
 
 export interface ChartPoint {
   t: number

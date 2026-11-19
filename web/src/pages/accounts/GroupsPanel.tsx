@@ -26,6 +26,7 @@ export function GroupsPanel({ groups, onFilter }: { groups: Group[]; onFilter: (
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: qk.groups })
     void qc.invalidateQueries({ queryKey: qk.overview })
+    void qc.invalidateQueries({ queryKey: qk.providers })
   }
   const remove = (g: Group) => {
     if (g.keys.length > 0) {

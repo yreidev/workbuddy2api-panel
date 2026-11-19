@@ -27,9 +27,9 @@ func TestEventFingerprintMacOS(t *testing.T) {
 		"reportDelay": eventReportDelay, "timezone": "Asia/Shanghai",
 		"userId": "u-1", "username": "测试号", "userNickname": "测试号",
 		"product": "SaaS", "releaseDate": desktopReleaseDateCN, "commit": desktopCommitCN,
-		"ideName": "WorkBuddy", "ideType": "WorkBuddy", "ideVersion": "5.9.3",
+		"ideName": "WorkBuddy", "ideType": "WorkBuddy", "ideVersion": "5.11.3",
 		"machineId": desktopMachineID(a), "sessionId": "",
-		"extName": "workbuddy-desktop", "extVersion": "5.9.3",
+		"extName": "workbuddy-desktop", "extVersion": "5.11.3",
 		"os": "darwin", "arch": "arm64", "osVersion": "24.6.0",
 		"cpuModel": "Apple M2", "cpuCores": 8, "memorySize": 16,
 	}

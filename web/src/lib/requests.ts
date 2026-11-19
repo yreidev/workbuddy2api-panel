@@ -5,19 +5,21 @@
 // 请求指标（/panel/api/request_metrics、request_logs）的展示口径，与上游旧面板一致（见 requests.test.ts）。
 import { fmtMs, fmtTok } from './format'
 import type { RequestEvent } from './types'
+import { chargeText } from './billing'
 
 export const OUTCOME_LABEL: Record<string, string> = {
-  success: '成功', http_error: 'HTTP 错误', stream_error: '流错误', interrupted: '中断',
+  success: '成功', http_error: 'HTTP 错误', stream_error: '流错误', interrupted: '中断', ledger_pending: '上游已完成，账本待补写',
 }
 
 /** 结果的级别：HTTP 错误、流错误算错误，中断算警告 */
 export function outcomeLevel(outcome: string): 'error' | 'warn' | 'ok' {
-  if (outcome === 'http_error' || outcome === 'stream_error') return 'error'
+  if (outcome === 'http_error' || outcome === 'stream_error' || outcome === 'ledger_pending') return 'error'
   if (outcome === 'interrupted') return 'warn'
   return 'ok'
 }
 
-export function requestTokens(e: RequestEvent): number {
+export function requestTokens(e: RequestEvent): number | undefined {
+  if (e.target && !e.target.startsWith('workbuddy:') && !e.tokens_known) return undefined
   return Number(e.total_tokens || 0) || Number(e.prompt_tokens || 0) + Number(e.completion_tokens || 0)
 }
 
@@ -25,7 +27,8 @@ export function requestTokens(e: RequestEvent): number {
 export function requestCredit(e: RequestEvent): string {
   if (!e.credit_known) return 'credit —'
   const v = Number(e.credit ?? 0)
-  return Number.isFinite(v) ? String(Number(v.toFixed(2))) + ' credit' : 'credit —'
+  const unit = e.credit_unit || (e.target && !e.target.startsWith('workbuddy:') ? 'credits' : 'credit')
+  return Number.isFinite(v) && v >= 0 ? chargeText(v) + ' ' + unit : unit + ' —'
 }
 
 /** 缓存命中率 = 命中 / (命中 + 未命中)，百分数；上游没返回这一项时为 null */
@@ -60,7 +63,7 @@ export function requestLogText(e: RequestEvent): string {
     e.client_ip || '—',
     e.user_agent || '—',
     fmtMs(e.duration_ms),
-    fmtTok(requestTokens(e)) + ' tok',
+    requestTokens(e) == null ? 'token 未知' : fmtTok(requestTokens(e)) + ' tok',
     requestCredit(e),
     cache === '—' ? '' : '命中 ' + cache,
     e.request_id || '—',

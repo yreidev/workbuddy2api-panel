@@ -524,6 +524,52 @@ func TestSearchKeys(t *testing.T) {
 	}
 }
 
+// TestSearchKeysTargetScope 搜索只消耗密钥允许的 WorkBuddy 地区，仍不看模型白名单。
+func TestSearchKeysTargetScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, target, model string
+		status              int
+	}{
+		{"国际版裸名", "workbuddy:global", "glm-5.2", 200},
+		{"国际版前缀", "workbuddy:global", "global:glm-5.2", 200},
+		{"国际版禁止国内", "workbuddy:global", "cn:glm-5.2", 400},
+		{"国内版裸名", "workbuddy:cn", "glm-5.2", 200},
+		{"国内版禁止国际", "workbuddy:cn", "global:glm-5.2", 400},
+		{"新平台不能搜索", "qoder:global", "qoder:global:model", 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := &searchRig{}
+			h, accounts := newSearchHandler(t, rig, func(cfg *Config) { cfg.GlobalEnabled = true })
+			accounts.Add(&auth.Auth{UID: "g", AccessToken: "at-g", ExpiresAt: 9999999999, Domain: "www.workbuddy.ai"})
+			store, err := apikeys.Open("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.cfg.Keys = store
+			k := createKey(t, store, apikeys.Input{Name: "搜", Enabled: true, AllowedTargets: []string{tc.target}, Models: []string{"only-this"}})
+			body := strings.Replace(searchMessagesBody, `"model":"glm-5.2"`, `"model":"`+tc.model+`"`, 1)
+			rec := post(h, "/v1/search/messages", body, "x-api-key", k.Secret)
+			if rec.Code != tc.status {
+				t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+			}
+			got, _ := store.Get(k.ID, time.Now())
+			if tc.status != 200 {
+				if len(rig.searches()) != 0 || got.Today.Requests != 0 {
+					t.Fatalf("拒绝搜索仍出站或计数: calls=%v used=%d", rig.searches(), got.Today.Requests)
+				}
+				return
+			}
+			want := "at-a"
+			if tc.target == "workbuddy:global" {
+				want = "at-g"
+			}
+			if calls := rig.searches(); len(calls) != 1 || calls[0] != want || got.Today.Requests != 1 {
+				t.Fatalf("搜索地区或计数错误: calls=%v used=%d", calls, got.Today.Requests)
+			}
+		})
+	}
+}
+
 // TestSearchMessagesBadRequests 没声明搜索工具、读不出搜索词、不是 JSON 都回 400，不发上游。
 func TestSearchMessagesBadRequests(t *testing.T) {
 	rig := &searchRig{}

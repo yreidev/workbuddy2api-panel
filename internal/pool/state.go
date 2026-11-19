@@ -463,6 +463,13 @@ func (p *Pool) PickByUID(uid string) *auth.Auth {
 	return e.a
 }
 
+// HasAccounts 判断是否已配置 WorkBuddy 账号，停用及冷却的账号也算在内。
+func (p *Pool) HasAccounts() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.byUID) > 0
+}
+
 // CountsDetailed 返回 total/healthy/cooling/disabled/inFlightFull 五类计数。
 // cooling 含常规冷却（until）与熔断期（breakerUntil）。
 // 注意：healthy 口径不含 inFlight 维度（是状态机权威判定，只看 disabled/until/breakerUntil）；

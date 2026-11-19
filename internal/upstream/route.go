@@ -98,16 +98,20 @@ type routeTable struct {
 	// base 默认线路（环境变量里的代理或直连）；别的线路从它克隆，超时、连接池参数一样。
 	base *http.Transport
 
-	mu     sync.Mutex
-	router Router
-	cache  map[routeKey]*routeEntry
+	mu              sync.Mutex
+	router          Router
+	cache           map[routeKey]*routeEntry
+	sessionPressure sessionMemoryPressure
 }
 
 // routeKey 一条线路：代理地址（空为直连）和钉的 IP（空为不钉）。
-type routeKey struct{ proxy, ip string }
+type routeKey struct {
+	proxy, ip string
+	profile   ClientProfile
+}
 
 type routeEntry struct {
-	tr   *http.Transport
+	tr   http.RoundTripper
 	used time.Time
 }
 
@@ -215,7 +219,7 @@ func (rt routedTransport) CloseIdleConnections() {
 	rt.t.mu.Lock()
 	defer rt.t.mu.Unlock()
 	for _, e := range rt.t.cache {
-		e.tr.CloseIdleConnections()
+		roundTripCloseIdle(e.tr)
 	}
 }
 
@@ -237,7 +241,8 @@ func (t *routeTable) roundTrip(req *http.Request, ip string) (*http.Response, er
 	if err != nil {
 		return nil, &RouteError{Proxy: name, Blocked: true, Err: err}
 	}
-	tr, err := t.transport(proxyURL, ip)
+	profile := ClientProfileFromContext(req.Context())
+	tr, err := t.transportForProfile(proxyURL, ip, profile)
 	if err != nil {
 		return nil, &RouteError{Proxy: name, Blocked: true, Err: err}
 	}
@@ -276,19 +281,29 @@ func (t *routeTable) resolve(ctx context.Context) (id, name, url string, err err
 
 // transport 一条线路的 Transport，建过的复用；建新的时顺手清掉一小时没用过的。
 func (t *routeTable) transport(proxyURL, ip string) (*http.Transport, error) {
-	if proxyURL == "" && ip == "" {
+	rt, err := t.transportForProfile(proxyURL, ip, ProfileWorkBuddy)
+	if err != nil {
+		return nil, err
+	}
+	return rt.(*http.Transport), nil
+}
+
+func (t *routeTable) transportForProfile(proxyURL, ip string, profile ClientProfile) (http.RoundTripper, error) {
+	if proxyURL == "" && ip == "" && profile == ProfileWorkBuddy {
 		return t.base, nil
 	}
 	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := routeKey{proxyURL, ip}
+	key := routeKey{proxy: proxyURL, ip: ip, profile: profile}
 	if e := t.cache[key]; e != nil {
 		e.used = now
 		return e.tr, nil
 	}
 	var tr *http.Transport
-	if proxyURL == "" {
+	if proxyURL == "" && ip == "" {
+		tr = t.base.Clone()
+	} else if proxyURL == "" {
 		tr = pinTransport(t.base, ip)
 	} else {
 		u, err := parseProxyURL(proxyURL)
@@ -299,12 +314,23 @@ func (t *routeTable) transport(proxyURL, ip string) (*http.Transport, error) {
 	}
 	for k, e := range t.cache {
 		if now.Sub(e.used) > routeIdle {
-			e.tr.CloseIdleConnections()
+			roundTripCloseIdle(e.tr)
 			delete(t.cache, k)
 		}
 	}
-	t.cache[key] = &routeEntry{tr: tr, used: now}
-	return tr, nil
+	var rt http.RoundTripper = tr
+	if profile != ProfileWorkBuddy {
+		tr.DialTLSContext = dialTLSProfile(tr.DialContext, tr.TLSClientConfig, profile)
+		if profile == ProfileQoder || profile == ProfileTraeCode || profile == ProfileTraeWork || profile == ProfileTraeAuth {
+			profileTransport := newProfileHTTP2(tr, profile)
+			if profileTransport.sessions != nil && t.sessionPressure != sessionPressureNormal {
+				profileTransport.sessions.applyPressure(profile, t.sessionPressure)
+			}
+			rt = profileTransport
+		}
+	}
+	t.cache[key] = &routeEntry{tr: rt, used: now}
+	return rt, nil
 }
 
 // proxyTransport 号的代理的 Transport：从 base 克隆，拨号经代理 px（本机地址照 applies 直连）；ip 非空时
@@ -331,4 +357,9 @@ func proxyTransport(base *http.Transport, px *outboundProxy, ip string) *http.Tr
 	}
 	tr.DialTLSContext = dialTLSMimic(tr.DialContext, tr.TLSClientConfig)
 	return tr
+}
+
+// WithProxy 为新平台请求选择已存在的代理线路；调用方先检查账号绑定与 require_bound 策略。
+func WithProxy(ctx context.Context, proxyID string) context.Context {
+	return withLoginRoute(ctx, proxyID)
 }

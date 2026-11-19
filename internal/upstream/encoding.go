@@ -30,6 +30,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
@@ -102,6 +103,84 @@ func DecodeBody(contentEncoding string, raw io.ReadCloser) (io.ReadCloser, bool)
 	return &decodedBody{raw: raw, open: open}, true
 }
 
+// DecodeProfileBody 按出站平台的规则解压单层响应编码。
+func DecodeProfileBody(profile ClientProfile, contentEncoding string, raw io.ReadCloser) (io.ReadCloser, bool) {
+	switch profile {
+	case ProfileTraeWork, ProfileTraeAuth, ProfileTraeCode:
+		switch strings.ToLower(strings.TrimSpace(contentEncoding)) {
+		case "gzip", "x-gzip":
+			return &decodedBody{raw: raw, open: openResponseGzip}, true
+		}
+	}
+	return DecodeBody(contentEncoding, raw)
+}
+
+func openResponseGzip(r *bufio.Reader) (io.ReadCloser, error) {
+	head, err := r.Peek(2)
+	if err == nil && (head[0] != 0x1f || head[1] != 0x8b) {
+		return nil, gzip.ErrHeader
+	}
+	zr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, err
+	}
+	zr.Multistream(false)
+	return &responseGzipReader{Reader: zr, wire: r}, nil
+}
+
+// responseGzipReader 校验每个成员并接受最后一个成员后的零填充。
+type responseGzipReader struct {
+	*gzip.Reader
+	wire        *bufio.Reader
+	memberEnded bool
+	err         error
+}
+
+func (r *responseGzipReader) Read(p []byte) (int, error) {
+	for r.err == nil {
+		if r.memberEnded {
+			r.err = r.nextMember()
+			if r.err != nil {
+				break
+			}
+			r.memberEnded = false
+		}
+		n, err := r.Reader.Read(p)
+		if err != io.EOF {
+			return n, err
+		}
+		r.memberEnded = true
+		if n != 0 {
+			// 先交付已解出的正文，下一次 Read 再等后续数据。
+			return n, nil
+		}
+	}
+	return 0, r.err
+}
+
+func (r *responseGzipReader) nextMember() error {
+	head, err := r.wire.Peek(1)
+	if err != nil {
+		return err
+	}
+	if head[0] != 0 {
+		if err := r.Reset(r.wire); err != nil {
+			return err
+		}
+		r.Multistream(false)
+		return nil
+	}
+	for {
+		b, err := r.wire.ReadByte()
+		if err != nil {
+			return err
+		}
+		if b != 0 {
+			return gzip.ErrHeader
+		}
+	}
+}
+
 // openGzipOrZlib axios 对 gzip / compress 用 zlib.createUnzip：按头部自动分辨 gzip（1f 8b）
 // 与 zlib。
 func openGzipOrZlib(r *bufio.Reader) (io.ReadCloser, error) {
@@ -127,11 +206,14 @@ func openDeflate(r *bufio.Reader) (io.ReadCloser, error) {
 type decodedBody struct {
 	raw  io.ReadCloser
 	open func(*bufio.Reader) (io.ReadCloser, error)
+	mu   sync.Mutex
 	dec  io.ReadCloser
 	err  error
 }
 
 func (b *decodedBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.dec == nil && b.err == nil {
 		br := bufio.NewReader(b.raw)
 		if _, err := br.Peek(1); err != nil {
@@ -142,7 +224,12 @@ func (b *decodedBody) Read(p []byte) (int, error) {
 			}
 			return 0, b.err
 		}
-		b.dec, b.err = b.open(br)
+		dec, err := b.open(br)
+		if err != nil {
+			b.err = err
+			return 0, err
+		}
+		b.dec = dec
 	}
 	if b.err != nil {
 		return 0, b.err
@@ -151,8 +238,14 @@ func (b *decodedBody) Read(p []byte) (int, error) {
 }
 
 func (b *decodedBody) Close() error {
+	// 原响应体先解除挂起的读取，再关闭解压器。Zstandard 关闭时会等待读取缓冲排空。
+	err := b.raw.Close()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.dec != nil {
 		_ = b.dec.Close()
+		b.dec = nil
 	}
-	return b.raw.Close()
+	b.err = http.ErrBodyReadAfterClose
+	return err
 }

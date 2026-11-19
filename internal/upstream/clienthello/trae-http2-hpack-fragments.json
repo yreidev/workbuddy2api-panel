@@ -1,0 +1,107 @@
+{
+  "source": "2026-11-18 三套官方 Trae 运行时的隔离回环半帧样本；prefix 为未收齐的物理帧，非法前缀须在其余 payload 到达前拒绝；合法对照须等待 padding 与 CONTINUATION。",
+  "cases": [
+    {
+      "name": "invalid-headers",
+      "goaway": {
+        "last": 0,
+        "code": 9,
+        "debug": "Framer error: 19 (HPACK_INVALID_INDEX)."
+      },
+      "healthy": false,
+      "input_hex": "00004101000000000180",
+      "partial": true
+    },
+    {
+      "name": "invalid-continuation",
+      "goaway": {
+        "last": 0,
+        "code": 9,
+        "debug": "Framer error: 19 (HPACK_INVALID_INDEX)."
+      },
+      "healthy": false,
+      "input_hex": "00000001000000000100004109000000000180",
+      "partial": true
+    },
+    {
+      "name": "invalid-padded",
+      "goaway": {
+        "last": 0,
+        "code": 9,
+        "debug": "Framer error: 19 (HPACK_INVALID_INDEX)."
+      },
+      "healthy": false,
+      "input_hex": "0000220108000000012080",
+      "partial": true
+    },
+    {
+      "name": "invalid-priority",
+      "goaway": {
+        "last": 0,
+        "code": 9,
+        "debug": "Framer error: 19 (HPACK_INVALID_INDEX)."
+      },
+      "healthy": false,
+      "input_hex": "000046012000000001800000001080",
+      "partial": true
+    },
+    {
+      "name": "invalid-huffman",
+      "goaway": {
+        "last": 0,
+        "code": 9,
+        "debug": "Framer error: 16 (HPACK_NAME_HUFFMAN_ERROR)."
+      },
+      "healthy": false,
+      "input_hex": "0000460100000000010084ffffffff",
+      "partial": true
+    },
+    {
+      "name": "invalid-long-huffman",
+      "goaway": {
+        "last": 0,
+        "code": 9,
+        "debug": "Framer error: 16 (HPACK_NAME_HUFFMAN_ERROR)."
+      },
+      "healthy": false,
+      "input_hex": "00004601000000000100e4ffffffff",
+      "partial": true
+    },
+    {
+      "name": "valid-headers",
+      "goaway": null,
+      "healthy": true,
+      "input_hex": "0000450101000000010001780176",
+      "partial": true,
+      "tail_hex": "00017800000178000001780000017800000178000001780000017800000178000001780000017800000178000001780000017800000178000001780000017800000000090400000001",
+      "empty_body": true
+    },
+    {
+      "name": "valid-continuation",
+      "goaway": null,
+      "healthy": true,
+      "input_hex": "0000000101000000010000450900000000010001780176",
+      "partial": true,
+      "tail_hex": "00017800000178000001780000017800000178000001780000017800000178000001780000017800000178000001780000017800000178000001780000017800000000090400000001",
+      "empty_body": true
+    },
+    {
+      "name": "valid-padded",
+      "goaway": null,
+      "healthy": true,
+      "input_hex": "000026010900000001200001780176",
+      "partial": true,
+      "tail_hex": "0000000000000000000000000000000000000000000000000000000000000000000000090400000001",
+      "empty_body": true
+    },
+    {
+      "name": "valid-priority",
+      "goaway": null,
+      "healthy": true,
+      "input_hex": "00004a01210000000180000000100001780176",
+      "partial": true,
+      "tail_hex": "00017800000178000001780000017800000178000001780000017800000178000001780000017800000178000001780000017800000178000001780000017800000000090400000001",
+      "empty_body": true
+    }
+  ]
+}

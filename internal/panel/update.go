@@ -53,29 +53,28 @@ func (p *Panel) updateCheckEnabled() bool {
 	return p.cfg.Live != nil && p.cfg.Live.Load().UpdateCheck
 }
 
-// updateCheckTick 更新检查看开关的周期；测试调短以便断言到期即检查。
-var updateCheckTick = time.Minute
-
 // StartUpdateCheck 启动后台更新检查，ctx 结束时退出。每分钟看一次开关，开着且距上次尝试满 6 小时
 // 就读一次：启动后约一分钟读第一次，面板里刚打开开关也在一分钟内读到。
 func (p *Panel) StartUpdateCheck(ctx context.Context) {
-	go func() {
-		t := time.NewTicker(updateCheckTick)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-			p.upd.mu.Lock()
-			due := time.Since(p.upd.attempted) >= updateInterval
-			p.upd.mu.Unlock()
-			if due && p.updateCheckEnabled() {
-				p.checkUpdate(ctx)
-			}
+	go p.runUpdateCheck(ctx, time.Minute)
+}
+
+func (p *Panel) runUpdateCheck(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
-	}()
+		p.upd.mu.Lock()
+		due := time.Since(p.upd.attempted) >= updateInterval
+		p.upd.mu.Unlock()
+		if due && p.updateCheckEnabled() {
+			p.checkUpdate(ctx)
+		}
+	}
 }
 
 // checkUpdate 读一次远端更新日志并记下结果。
@@ -266,7 +265,7 @@ func (p *Panel) selfUpdateRollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func updaterErrStatus(err error) int {
-	if errors.Is(err, selfupdate.ErrBusy) {
+	if errors.Is(err, selfupdate.ErrBusy) || errors.Is(err, selfupdate.ErrKeyDowngrade) {
 		return http.StatusConflict
 	}
 	return http.StatusBadRequest

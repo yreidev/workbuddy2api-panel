@@ -28,7 +28,7 @@ export function ModelRoutes() {
       desc="客户端发来的模型名不在上游目录里时（比如 Claude Code、Codex 的默认模型名），从上往下找第一条匹配的规则，改用它的目标模型。"
       actions={
         <InfoTip label="匹配规则">
-          {'只认 * 通配（任意长度），不区分大小写。\n目录里有的名字直通，不会被规则改动；带 cn: / global: 前缀的名字也不改。\n目标模型可以带前缀指定域。保存后立即生效，三个入口（chat/completions、messages、responses）都按这张表改写。'}
+          {'只认 * 通配（任意长度），不区分大小写。\nWorkBuddy 目录中的裸名直通；带产品／地区前缀的模型也不改。\n目标可选择全部平台的完整模型名，例如 qoder:cn:模型名。保存后立即生效，三个入口（chat/completions、messages、responses）都按这张表改写；客户端密钥的上游与分组限制仍然生效。'}
         </InfoTip>
       }
       contentClassName="flex flex-col gap-3"
@@ -158,7 +158,7 @@ function Verdict({ v, catalogReady }: { v: RouteVerdict; catalogReady: boolean }
   if (v.kind === 'empty') return null
   const text = (() => {
     switch (v.kind) {
-      case 'prefixed': return '带域前缀，原样发给指定的域，不走路由。'
+      case 'prefixed': return '带产品／地区前缀，原样发给指定上游，不走路由。'
       case 'catalog': return '上游目录里有这个模型，直通，不走路由。'
       case 'route': return `命中第 ${v.index + 1} 条，改用 ${v.target || '（目标还没填）'}。`
       case 'none': return catalogReady ? '目录里没有，也没有规则命中：会报「模型不存在」。' : '模型目录还没取到，判断不了是否在目录里；没有规则命中。'

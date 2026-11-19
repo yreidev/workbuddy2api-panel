@@ -11,7 +11,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { BATCH_ACTIONS, MAX_PRIORITY, batchParam, batchSummary, type BatchAction, type BatchResp } from '../../lib/accounts'
 import { post } from '../../lib/api'
 import { toastError, useLast, useStartedToast } from '../../lib/hooks'
-import { qk, useGroups } from '../../lib/queries'
+import { qk, useGroups, useProxies } from '../../lib/queries'
+import { TargetSelect } from '../../components/TargetSelect'
 import type { Group } from '../../lib/types'
 import { ModelPatternInput } from '../../components/ModelPatternInput'
 import { useConfirm } from '../../components/useConfirm'
@@ -20,10 +21,13 @@ import { useConfirm } from '../../components/useConfirm'
 interface BatchParams { models?: string[]; group?: string; priority?: number }
 
 /** selected 已选并且在当前筛选结果里的 uid；onRemoved 移除完成后调用（清掉选择） */
-export function BatchMenu({ selected, nameOf, onRemoved }: { selected: string[]; nameOf: (uid: string) => string; onRemoved: () => void }) {
+export function BatchMenu({ selected, nameOf, onRemoved, provider = false }: { selected: string[]; nameOf: (uid: string) => string; onRemoved: () => void; provider?: boolean }) {
   const qc = useQueryClient()
   const started = useStartedToast()
   const groups = useGroups().data ?? []
+  const proxies = useProxies().data?.view.proxies ?? []
+  const [binding, setBinding] = useState(false)
+  const [proxyID, setProxyID] = useState('default')
   const [busy, setBusy] = useState(false)
   const [paramAction, setParamAction] = useState<BatchAction | null>(null)
   const [confirmEl, ask] = useConfirm()
@@ -34,12 +38,12 @@ export function BatchMenu({ selected, nameOf, onRemoved }: { selected: string[];
     if (params?.group) label += '「' + (groups.find((g) => g.id === params.group)?.name ?? params.group) + '」'
     setBusy(true)
     try {
-      if (action === 'liveness') {
+      if (action === 'liveness' && !provider) {
         const r = await post<{ total: number }>('accounts/batch', { action, uids: selected })
         started(`已开始测活 ${r.total} 个号，结果会显示在各号卡片上`)
         return
       }
-      const r = await post<BatchResp>('accounts/batch', { action, uids: selected, ...params })
+      const r = await post<BatchResp>(provider ? 'providers/batch' : 'accounts/batch', { action, ...(provider ? { ids: selected } : { uids: selected }), ...params })
       const { title, lines } = batchSummary(label, r, nameOf)
       if (lines.length === 0) toast.success(title)
       else toast.warning(title, { description: lines.map((l) => <div key={l}>{l}</div>), timeout: 8000 })
@@ -49,6 +53,7 @@ export function BatchMenu({ selected, nameOf, onRemoved }: { selected: string[];
     } finally {
       setBusy(false)
       void qc.invalidateQueries({ queryKey: qk.overview })
+      if (provider) void qc.invalidateQueries({ queryKey: qk.providers })
       if (batchParam(action) === 'group' || action === 'remove') void qc.invalidateQueries({ queryKey: qk.groups })
     }
   }
@@ -59,7 +64,7 @@ export function BatchMenu({ selected, nameOf, onRemoved }: { selected: string[];
     if (action === 'remove') {
       return ask({
         title: `移除选中的 ${n} 个账号？`,
-        body: '移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。',
+        body: provider ? '移除账号会删除其本地凭证与全部产品通道，历史用量保留。' : '移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。',
         confirmLabel: '移除',
         onConfirm: () => void exec(action),
       })
@@ -77,6 +82,7 @@ export function BatchMenu({ selected, nameOf, onRemoved }: { selected: string[];
 
   return (
     <>
+      {provider && <Button size="sm" variant="secondary" onPress={() => setBinding(true)}>绑定代理</Button>}
       <Dropdown>
         <Button size="sm" variant="secondary" isPending={busy}>批量操作</Button>
         <Dropdown.Popover placement="bottom end">
@@ -90,7 +96,9 @@ export function BatchMenu({ selected, nameOf, onRemoved }: { selected: string[];
         </Dropdown.Popover>
       </Dropdown>
       {confirmEl}
+      <Modal.Backdrop isOpen={binding} onOpenChange={setBinding}><Modal.Container><Modal.Dialog><Modal.CloseTrigger /><Modal.Header><Modal.Heading>为 {selected.length} 个平台账号绑定代理</Modal.Heading></Modal.Header><Modal.Body><TargetSelect label="出站代理" value={proxyID} onChange={setProxyID} targets={[{ id: 'default', name: '默认线路' }, ...proxies.map((p) => ({ id: p.id, name: p.name }))]} /></Modal.Body><Modal.Footer><Button variant="tertiary" onPress={() => setBinding(false)}>取消</Button><Button onPress={() => { setBinding(false); setBusy(true); void post<BatchResp>('providers/batch', { ids: selected, action: 'proxy', proxy_id: proxyID === 'default' ? '' : proxyID }).then((r) => { const result = batchSummary('绑定代理', r, nameOf); if (result.lines.length) toast.warning(result.title, { description: result.lines.join('；') }); else toast.success(result.title) }).catch((e: unknown) => toastError(e)).finally(() => { setBusy(false); void qc.invalidateQueries({ queryKey: qk.providers }); void qc.invalidateQueries({ queryKey: qk.proxies }) }) }}>保存</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop>
       <ParamModal
+        provider={provider}
         action={paramAction}
         n={selected.length}
         groups={groups}
@@ -113,7 +121,8 @@ const PARAM_TITLE: Partial<Record<BatchAction, (n: number) => string>> = {
 }
 
 /** 要先填参数的批量操作：选分组、填优先级或模型名，再执行 */
-function ParamModal({ action, n, groups, onClose, onSubmit }: {
+function ParamModal({ action, n, groups, onClose, onSubmit, provider }: {
+  provider: boolean
   action: BatchAction | null
   n: number
   groups: Group[]
@@ -132,7 +141,7 @@ function ParamModal({ action, n, groups, onClose, onSubmit }: {
           </Modal.Header>
           {/* 每次打开都从空的开始填：关闭时卸载内容 */}
           {action != null && kind === 'models' && (
-            <ModelsForm adding={action === 'block_models'} onClose={onClose} onSubmit={(models) => onSubmit(action, { models })} />
+            <ModelsForm provider={provider} adding={action === 'block_models'} onClose={onClose} onSubmit={(models) => onSubmit(action, { models })} />
           )}
           {action != null && kind === 'group' && (
             <GroupForm leaving={action === 'leave_group'} groups={groups} onClose={onClose} onSubmit={(group) => onSubmit(action, { group })} />
@@ -144,13 +153,13 @@ function ParamModal({ action, n, groups, onClose, onSubmit }: {
   )
 }
 
-function ModelsForm({ adding, onClose, onSubmit }: { adding: boolean; onClose: () => void; onSubmit: (models: string[]) => void }) {
+function ModelsForm({ adding, onClose, onSubmit, provider }: { adding: boolean; onClose: () => void; onSubmit: (models: string[]) => void; provider: boolean }) {
   const [models, setModels] = useState<string[]>([])
   return (
     <>
       <Modal.Body className="flex flex-col gap-2">
         <p className="text-sm text-muted">
-          {adding
+          {provider ? '按完整产品／地区模型名匹配，支持 * 通配，例如 qoder:cn:gpt-*。删除时按名单原文精确删除。' : adding
             ? '选号时不再把这些模型派给选中的号。按不带 cn: / global: 前缀的模型名匹配，支持 * 通配。'
             : '从选中的号的名单里删掉同名的项，上游拒绝后自动加的也一样删（以后会再试这个模型）。要和名单里写的一字不差，比如删 gpt-* 不会删掉 gpt-5。'}
         </p>
@@ -161,7 +170,7 @@ function ModelsForm({ adding, onClose, onSubmit }: { adding: boolean; onClose: (
             </TagGroup.List>
           </TagGroup>
         )}
-        <ModelPatternInput value={models} onChange={setModels} />
+        <ModelPatternInput value={models} onChange={setModels} workbuddyOnly={!provider} />
       </Modal.Body>
       <Modal.Footer>
         <Button variant="tertiary" onPress={onClose}>取消</Button>

@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,33 +49,35 @@ const (
 )
 
 // fileVersion 是 usage.json 的当前格式版本。版本 2 增加积分观测字段，版本 3
-// 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计，版本 5 增加密钥维度；
+// 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计，版本 5 增加密钥维度，版本 6 增加与 Token 配对的扣费累计；
 // 旧版本缺失字段按零值加载，旧数据不会丢弃。
-const fileVersion = 5
+const fileVersion = 6
 
 // bucket 一个 (时间片, realm, uid, model, rate, 密钥) 的累计量。
 // JSON 字段名刻意取短，因为桶数量会随时间增长。
 type bucket struct {
-	Scope string  `json:"s"`            // "h:2006-01-02T15" 或 "d:2006-01-02"
-	Realm string  `json:"r"`            // cn / global
-	UID   string  `json:"u"`            // 账号 uid
-	Model string  `json:"m"`            // 上游裸模型名
-	Rate  string  `json:"x,omitempty"`  // 请求时生效积分倍率（规范化数值；旧桶为空）
-	Key   string  `json:"k,omitempty"`  // 请求带的密钥：客户端密钥的 id、管理员密钥 admin；没开鉴权和旧桶为空
-	Req   int64   `json:"q"`            // 请求数（含失败）
-	Err   int64   `json:"e"`            // 失败数
-	PT    int64   `json:"p"`            // prompt tokens
-	CT    int64   `json:"c"`            // completion tokens
-	TT    int64   `json:"t"`            // total tokens（上游给什么用什么的合计）
-	LatMs int64   `json:"l"`            // 延迟累计（ms）
-	LatN  int64   `json:"ln"`           // 延迟样本数
-	TPS   float64 `json:"v"`            // 吐字速率累计
-	TPSN  int64   `json:"vn"`           // 速率样本数
-	CR    float64 `json:"cr,omitempty"` // usage.credit 累计（仅明确存在的观测）
-	CRN   int64   `json:"cn,omitempty"` // usage.credit 样本数（区分缺字段与真实 0）
-	CRT   int64   `json:"ct,omitempty"` // 同时具备 credit 与 token 的 Token 合计
-	CH    int64   `json:"ch,omitempty"` // 前缀缓存命中 token 累计（上游回该维度才累计）
-	CM    int64   `json:"cm,omitempty"` // 前缀缓存未命中 token 累计
+	Scope         string  `json:"s"`            // "h:2006-01-02T15" 或 "d:2006-01-02"
+	Realm         string  `json:"r"`            // cn / global
+	UID           string  `json:"u"`            // 账号 uid
+	Model         string  `json:"m"`            // 上游裸模型名
+	Rate          string  `json:"x,omitempty"`  // 请求时生效积分倍率（规范化数值；旧桶为空）
+	Key           string  `json:"k,omitempty"`  // 请求带的密钥：客户端密钥的 id、管理员密钥 admin；没开鉴权和旧桶为空
+	Req           int64   `json:"q"`            // 请求数（含失败）
+	Err           int64   `json:"e"`            // 失败数
+	PT            int64   `json:"p"`            // prompt tokens
+	CT            int64   `json:"c"`            // completion tokens
+	TT            int64   `json:"t"`            // total tokens（上游给什么用什么的合计）
+	LatMs         int64   `json:"l"`            // 延迟累计（ms）
+	LatN          int64   `json:"ln"`           // 延迟样本数
+	TPS           float64 `json:"v"`            // 吐字速率累计
+	TPSN          int64   `json:"vn"`           // 速率样本数
+	CR            float64 `json:"cr,omitempty"` // usage.credit 累计（仅明确存在的观测）
+	CRN           int64   `json:"cn,omitempty"` // usage.credit 样本数（区分缺字段与真实 0）
+	CRT           int64   `json:"ct,omitempty"` // 同时具备 credit 与 token 的 Token 合计
+	CRP           float64 `json:"cp,omitempty"` // 与非零 token 同时观测到的扣费，避免仅扣费样本污染比例
+	CH            int64   `json:"ch,omitempty"` // 前缀缓存命中 token 累计（上游回该维度才累计）
+	CM            int64   `json:"cm,omitempty"` // 前缀缓存未命中 token 累计
+	UnknownTokens int64   `json:"ut,omitempty"` // 新平台未返回完整 token 的尝试数
 }
 
 // file 落盘结构。
@@ -86,11 +89,13 @@ type file struct {
 
 // Recorder 并发安全的用量记录器。
 type Recorder struct {
-	mu      sync.Mutex
-	path    string
-	buckets map[string]*bucket // key: scope|realm|uid|model|rate
-	dirty   bool
-	started time.Time
+	mu            sync.Mutex
+	path          string
+	buckets       map[string]*bucket // key: scope|realm|uid|model|rate
+	flushMu       sync.Mutex         // 串行化周期、手动和停机写入。
+	revision      uint64
+	savedRevision uint64
+	started       time.Time
 	// retentionDays 保留天数，0 = 永久保留（见 SetRetentionDays）。
 	retentionDays int
 
@@ -149,6 +154,7 @@ func (r *Recorder) Stop() {
 
 // Delta 一次请求尝试的用量增量（与 pool.TokenUsageDelta 同形，避免包间依赖）。
 type Delta struct {
+	TokensUnknown    bool
 	PromptTokens     int64
 	HasPromptTokens  bool
 	CompletionTokens int64
@@ -205,6 +211,9 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 		r.buckets[key] = b
 	}
 	b.Req++
+	if d.TokensUnknown {
+		b.UnknownTokens++
+	}
 	if !ok {
 		b.Err++
 	}
@@ -227,8 +236,14 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 		// 仅 token 的旧记录或仅 credit 的观测混进分母。
 		if d.HasTotal {
 			b.CRT += d.TotalTokens
+			if d.TotalTokens > 0 {
+				b.CRP += d.Credit
+			}
 		} else if d.HasPromptTokens || d.HasCompletion {
 			b.CRT += d.PromptTokens + d.CompletionTokens
+			if d.PromptTokens+d.CompletionTokens > 0 {
+				b.CRP += d.Credit
+			}
 		}
 	}
 	if d.HasCacheTokens {
@@ -243,7 +258,7 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 		b.TPS += d.TokensPerSecond
 		b.TPSN++
 	}
-	r.dirty = true
+	r.revision++
 }
 
 // Rollup 把超出 hourlyKeep 的小时桶折叠为日桶（按本地日历日）。
@@ -283,6 +298,7 @@ func (r *Recorder) Rollup(now time.Time) {
 			r.buckets[m.to] = dst
 		} else {
 			dst.Req += src.Req
+			dst.UnknownTokens += src.UnknownTokens
 			dst.Err += src.Err
 			dst.PT += src.PT
 			dst.CT += src.CT
@@ -294,13 +310,14 @@ func (r *Recorder) Rollup(now time.Time) {
 			dst.CR += src.CR
 			dst.CRN += src.CRN
 			dst.CRT += src.CRT
+			dst.CRP += src.CRP
 			dst.CH += src.CH
 			dst.CM += src.CM
 		}
 		delete(r.buckets, m.from)
 	}
 	if len(moves) > 0 {
-		r.dirty = true
+		r.revision++
 		log.Printf("[usage] 折叠 %d 个小时桶为日桶（保留 %v 细粒度）", len(moves), hourlyKeep)
 	}
 }
@@ -321,6 +338,10 @@ func (r *Recorder) load() error {
 	}
 	for i := range f.Buckets {
 		b := f.Buckets[i]
+		if f.Version < 6 && b.CRT > 0 {
+			// 旧格式没有配对扣费，保留旧比例；不回填不存在的单次观测。
+			b.CRP = b.CR
+		}
 		r.buckets[bucketKey(b.Scope, b.Realm, b.UID, b.Model, b.Rate, b.Key)] = &b
 	}
 	log.Printf("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
@@ -331,8 +352,11 @@ func (r *Recorder) flush(force bool) error {
 	if r == nil || r.path == "" {
 		return nil
 	}
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
 	r.mu.Lock()
-	if !r.dirty && !force {
+	revision := r.revision
+	if revision == r.savedRevision && !force {
 		r.mu.Unlock()
 		return nil
 	}
@@ -340,7 +364,6 @@ func (r *Recorder) flush(force bool) error {
 	for _, b := range r.buckets {
 		snap.Buckets = append(snap.Buckets, *b)
 	}
-	r.dirty = false
 	r.mu.Unlock()
 
 	raw, err := json.Marshal(snap)
@@ -361,6 +384,9 @@ func (r *Recorder) flush(force bool) error {
 		log.Printf("[usage] 原子替换失败: %v", err)
 		return err
 	}
+	r.mu.Lock()
+	r.savedRevision = revision
+	r.mu.Unlock()
 	return nil
 }
 
@@ -398,7 +424,7 @@ func (r *Recorder) pruneExpired(now time.Time) {
 		}
 		if !end.After(cutoff) {
 			delete(r.buckets, k)
-			r.dirty = true
+			r.revision++
 		}
 	}
 }
@@ -444,46 +470,52 @@ func (r *Recorder) Clear() error {
 	}
 	r.mu.Lock()
 	r.buckets = make(map[string]*bucket)
-	r.dirty = true
+	r.revision++
 	r.mu.Unlock()
 	return r.flush(true)
 }
 
 // Save 立即落盘（面板「刷新」或关闭前调用）。
-func (r *Recorder) Save() { r.flush(true) }
+func (r *Recorder) Save() error { return r.flush(true) }
 
 // ---------------------------------------------------------------- 聚合 ----
 
 // Agg 一组累计量。
 type Agg struct {
-	Requests           int64   `json:"requests"`
-	Errors             int64   `json:"errors"`
-	PromptTokens       int64   `json:"prompt_tokens"`
-	CompletionTok      int64   `json:"completion_tokens"`
-	TotalTokens        int64   `json:"total_tokens"`
-	Credits            float64 `json:"credits"`
-	CreditSamples      int64   `json:"credit_samples"`
-	CreditTokens       int64   `json:"credit_tokens"`
-	CreditsPer1MTokens float64 `json:"credits_per_1m_tokens"`
-	CacheHitTokens     int64   `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens    int64   `json:"cache_miss_tokens,omitempty"`
-	CacheHitRate       float64 `json:"cache_hit_rate,omitempty"`
-	AvgLatencyMs       float64 `json:"avg_latency_ms"`
-	AvgTPS             float64 `json:"avg_tokens_per_second"`
+	CreditUnit         string      `json:"credit_unit,omitempty"`
+	CreditByUnit       []CreditAgg `json:"credit_by_unit,omitempty"`
+	UnknownTokens      int64       `json:"unknown_tokens,omitempty"`
+	Requests           int64       `json:"requests"`
+	Errors             int64       `json:"errors"`
+	PromptTokens       int64       `json:"prompt_tokens"`
+	CompletionTok      int64       `json:"completion_tokens"`
+	TotalTokens        int64       `json:"total_tokens"`
+	Credits            float64     `json:"credits"`
+	CreditSamples      int64       `json:"credit_samples"`
+	CreditTokens       int64       `json:"credit_tokens"`
+	CreditsPer1MTokens float64     `json:"credits_per_1m_tokens"`
+	CacheHitTokens     int64       `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens    int64       `json:"cache_miss_tokens,omitempty"`
+	CacheHitRate       float64     `json:"cache_hit_rate,omitempty"`
+	AvgLatencyMs       float64     `json:"avg_latency_ms"`
+	AvgTPS             float64     `json:"avg_tokens_per_second"`
 }
 
 // aggAcc 是聚合过程中的累加器：Agg 只放已算好的结果，均值需要样本数才能
 // 正确加权（不能对每桶的均值再取平均），所以样本数留在这里。
 type aggAcc struct {
 	Agg
-	latSum     int64
-	latSamples int64
-	tpsSum     float64
-	tpsSamples int64
+	units        map[string]*creditAcc
+	creditPaired float64
+	latSum       int64
+	latSamples   int64
+	tpsSum       float64
+	tpsSamples   int64
 }
 
 func (g *aggAcc) add(b *bucket) {
 	g.Requests += b.Req
+	g.UnknownTokens += b.UnknownTokens
 	g.Errors += b.Err
 	g.PromptTokens += b.PT
 	g.CompletionTok += b.CT
@@ -491,6 +523,17 @@ func (g *aggAcc) add(b *bucket) {
 	g.Credits += b.CR
 	g.CreditSamples += b.CRN
 	g.CreditTokens += b.CRT
+	g.creditPaired += b.CRP
+	if b.CRN > 0 {
+		if g.units == nil {
+			g.units = map[string]*creditAcc{}
+		}
+		unit := creditUnit(b.Realm)
+		if g.units[unit] == nil {
+			g.units[unit] = &creditAcc{CreditAgg: CreditAgg{Key: unit, Unit: unit}}
+		}
+		g.units[unit].add(b)
+	}
 	g.CacheHitTokens += b.CH
 	g.CacheMissTokens += b.CM
 	g.latSum += b.LatMs
@@ -508,7 +551,14 @@ func (g *aggAcc) finish() Agg {
 		a.AvgTPS = g.tpsSum / float64(g.tpsSamples)
 	}
 	if g.CreditTokens > 0 {
-		a.CreditsPer1MTokens = g.Credits / float64(g.CreditTokens) * 1_000_000
+		a.CreditsPer1MTokens = g.creditPaired / float64(g.CreditTokens) * 1_000_000
+	}
+	a.CreditByUnit = creditKeyed(g.units)
+	if len(a.CreditByUnit) == 1 {
+		a.CreditUnit = a.CreditByUnit[0].Unit
+	} else if len(a.CreditByUnit) > 1 {
+		// 不同平台的积分不可相加或折算；兼容字段仅在单一单位时有值。
+		a.Credits, a.CreditSamples, a.CreditTokens, a.CreditsPer1MTokens = 0, 0, 0, 0
 	}
 	if total := g.CacheHitTokens + g.CacheMissTokens; total > 0 {
 		a.CacheHitRate = float64(g.CacheHitTokens) / float64(total) * 100
@@ -518,9 +568,10 @@ func (g *aggAcc) finish() Agg {
 
 // KeyedAgg 按某个维度聚合的一行。
 type KeyedAgg struct {
-	Key   string `json:"key"`
-	Realm string `json:"realm,omitempty"`
-	Extra string `json:"extra,omitempty"` // 账号行放昵称
+	Key    string   `json:"key"`
+	Realm  string   `json:"realm,omitempty"`
+	Realms []string `json:"realms,omitempty"` // 跨上游的账号行列出实际范围
+	Extra  string   `json:"extra,omitempty"`  // 账号行放昵称
 	Agg
 }
 
@@ -534,6 +585,7 @@ type Point struct {
 // CreditAgg 积分扣除统计的一行。Key 在账号维度是 UID，在模型维度是裸模型名；
 // Rate 仅模型维度使用；比例分母只统计与 credit 同时存在的 Token 样本。
 type CreditAgg struct {
+	Unit               string  `json:"unit,omitempty"`
 	Key                string  `json:"key"`
 	Realm              string  `json:"realm,omitempty"`
 	Nickname           string  `json:"nickname,omitempty"`
@@ -550,6 +602,14 @@ type CreditAgg struct {
 
 type creditAcc struct {
 	CreditAgg
+	paired float64
+}
+
+func creditUnit(realm string) string {
+	if realm == "cn" || realm == "global" || strings.HasPrefix(realm, "workbuddy:") {
+		return "workbuddy:credits"
+	}
+	return realm + ":credits"
 }
 
 func (a *creditAcc) add(b *bucket) {
@@ -557,6 +617,7 @@ func (a *creditAcc) add(b *bucket) {
 	a.Credits += b.CR
 	a.CreditSamples += b.CRN
 	a.CreditTokens += b.CRT
+	a.paired += b.CRP
 	a.CacheHitTokens += b.CH
 	a.CacheMissTokens += b.CM
 }
@@ -564,7 +625,7 @@ func (a *creditAcc) add(b *bucket) {
 func (a *creditAcc) finish() CreditAgg {
 	out := a.CreditAgg
 	if a.CreditTokens > 0 {
-		out.CreditsPer1MTokens = a.Credits / float64(a.CreditTokens) * 1_000_000
+		out.CreditsPer1MTokens = a.paired / float64(a.CreditTokens) * 1_000_000
 	}
 	if total := a.CacheHitTokens + a.CacheMissTokens; total > 0 {
 		out.CacheHitRate = float64(a.CacheHitTokens) / float64(total) * 100
@@ -602,9 +663,11 @@ type Snapshot struct {
 // 就是一小时，用户选到 14:00 时把 14:00 这一小时的桶算进来符合直觉；同时这也
 // 让 Hours 口径与历史行为逐位一致（原实现就是 ts.Before(from) 即跳过）。
 type Window struct {
-	Hours int
-	From  time.Time
-	To    time.Time
+	// Target 为空统计所有平台；WorkBuddy 兼容原 cn/global 桶。
+	Target string
+	Hours  int
+	From   time.Time
+	To     time.Time
 	// Key 只统计这个密钥（bucket.Key 的值，空串 = 没开鉴权和旧数据）；KeySet=false 时不按密钥筛。
 	Key    string
 	KeySet bool
@@ -680,7 +743,7 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 	var total aggAcc
 	realmAgg := map[string]*aggAcc{}
 	acctAgg := map[string]*aggAcc{}
-	acctRealm := map[string]string{}
+	acctRealms := map[string][]string{}
 	modelAgg := map[string]*aggAcc{}
 	keyAgg := map[string]*aggAcc{}
 	hourSeries := map[string]*aggAcc{}
@@ -695,6 +758,9 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 	matched := 0
 	for i := range bs {
 		b := &bs[i]
+		if w.Target != "" && b.Realm != w.Target && "workbuddy:"+b.Realm != w.Target {
+			continue
+		}
 		if b.Scope < since || since == "" {
 			since = b.Scope
 		}
@@ -726,10 +792,8 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 			acctAgg[b.UID] = &aggAcc{}
 		}
 		acctAgg[b.UID].add(b)
-		// 一个账号只属于一个 realm，这里记下来供前端展示「域」列；
-		// keyed() 的 Realm 字段默认是空的（它按 key 分组，不知道 realm）。
-		if acctRealm[b.UID] == "" {
-			acctRealm[b.UID] = b.Realm
+		if !slices.Contains(acctRealms[b.UID], b.Realm) {
+			acctRealms[b.UID] = append(acctRealms[b.UID], b.Realm)
 		}
 
 		if modelAgg[b.Model] == nil {
@@ -756,20 +820,23 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 			daySeries[scope].add(b)
 		}
 		if b.CRN > 0 {
-			ca := creditAcctAgg[b.UID]
+			unit := creditUnit(b.Realm)
+			accountKey := b.UID + "\x00" + unit
+			ca := creditAcctAgg[accountKey]
 			if ca == nil {
 				ca = &creditAcc{CreditAgg: CreditAgg{
 					Key:      b.UID,
+					Unit:     unit,
 					Realm:    b.Realm,
 					Nickname: nicks[b.UID],
 				}}
-				creditAcctAgg[b.UID] = ca
+				creditAcctAgg[accountKey] = ca
 			}
 			ca.add(b)
 
 			model := canonicalUsageModel(b.Model)
 			rate := b.Rate
-			if rate == "" && currentRate != nil {
+			if rate == "" && currentRate != nil && unit == "workbuddy:credits" {
 				cacheKey := b.Realm + "\x00" + model
 				if cached, ok := rateCache[cacheKey]; ok {
 					rate = cached
@@ -778,10 +845,10 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 					rateCache[cacheKey] = rate
 				}
 			}
-			modelKey := model + "\x00" + rate
+			modelKey := model + "\x00" + rate + "\x00" + unit
 			cm := creditModelAgg[modelKey]
 			if cm == nil {
-				cm = &creditAcc{CreditAgg: CreditAgg{Key: model, Rate: rate}}
+				cm = &creditAcc{CreditAgg: CreditAgg{Key: model, Rate: rate, Unit: unit}}
 				creditModelAgg[modelKey] = cm
 			}
 			cm.add(b)
@@ -804,7 +871,14 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 		Generated:       time.Now().Format(time.RFC3339),
 	}
 	for i := range snap.ByAccount {
-		snap.ByAccount[i].Realm = acctRealm[snap.ByAccount[i].Key]
+		row := &snap.ByAccount[i]
+		realms := acctRealms[row.Key]
+		if len(realms) == 1 {
+			row.Realm = realms[0]
+		} else {
+			slices.Sort(realms)
+			row.Realms = realms
+		}
 	}
 
 	// 日点（升序）+ 小时点（升序）拼成一条连续时序。

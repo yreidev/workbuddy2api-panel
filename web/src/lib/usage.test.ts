@@ -3,7 +3,7 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 import { describe, expect, it } from 'vitest'
-import { chartPoints, chartStats, dayBoundaries, minGap, nearestTicks, parsePointTime, share } from './usage'
+import { chartPoints, chartStats, dayBoundaries, matchesUsageFilter, minGap, nearestTicks, parsePointTime, share, usageTokenText } from './usage'
 import type { UsagePoint } from './types'
 
 const pt = (t: string, scope: 'hour' | 'day', p: number, c: number): UsagePoint => ({
@@ -11,6 +11,12 @@ const pt = (t: string, scope: 'hour' | 'day', p: number, c: number): UsagePoint 
 })
 
 describe('usage chart', () => {
+  it('全部 token 未知时不显示零，有已知样本时展示已知合计', () => {
+    const row = pt('2026-11-16T20', 'hour', 0, 0)
+    expect(usageTokenText({ ...row, unknown_tokens: 1 }, 0)).toBe('未知')
+    expect(usageTokenText({ ...row, requests: 2, unknown_tokens: 1 }, 5)).toBe('5')
+    expect(usageTokenText(row, 0)).toBe('0')
+  })
   it('小时桶与日桶解析到同一条连续时间轴，坏点丢弃', () => {
     expect(parsePointTime('2026-09-16T13')).toBe(new Date('2026-09-16T13:00:00').getTime())
     expect(parsePointTime('2026-09-16')).toBe(new Date('2026-09-16T00:00:00').getTime())
@@ -40,4 +46,12 @@ describe('usage chart', () => {
     expect(share(1, 4)).toBe(25)
     expect(share(1, 0)).toBeNull()
   })
+})
+
+it('未区分包含缺少或为空的历史密钥，保留上游筛选', () => {
+  const row = { target: 'qoder:cn' }
+  expect(matchesUsageFilter(row, row.target, '-')).toBe(true)
+  expect(matchesUsageFilter({ ...row, key_id: '' }, '', '-')).toBe(true)
+  expect(matchesUsageFilter({ ...row, key_id: 'admin' }, '', '-')).toBe(false)
+  expect(matchesUsageFilter(row, 'traecode:cn', '-')).toBe(false)
 })

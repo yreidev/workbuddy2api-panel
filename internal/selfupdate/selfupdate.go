@@ -62,6 +62,9 @@ const (
 // ErrBusy 已经在更新或重启。
 var ErrBusy = errors.New("正在更新或重启，请稍候")
 
+// ErrKeyDowngrade 自带版本不能读取新版密钥权限，须先停机恢复兼容的备份。
+var ErrKeyDowngrade = errors.New("自带版本无法读取新版密钥权限。请按多平台文档停机并恢复旧版密钥备份后手动降级。")
+
 // Manifest 数据目录里 current.json 的内容：面板装进来的是哪一版、启动情况如何。
 type Manifest struct {
 	Version     string    `json:"version"`
@@ -278,6 +281,12 @@ func (u *Updater) setPhase(phase string) {
 	u.mu.Unlock()
 }
 
+// NeedsLegacyKeyRecovery 表示自动回退会启动仅识别 v1 密钥的自带程序。
+func (u *Updater) NeedsLegacyKeyRecovery() bool {
+	const firstV2 = "1.14.0-rc.1"
+	return u.override && changelog.Compare(u.version, firstV2) >= 0 && changelog.Compare(u.baseVersion, firstV2) < 0
+}
+
 // Rollback 删掉数据目录里的版本。正跑着它时重启回自带版本（返回 true）；没跑着（如自动退回后
 // 留下的那份）就只删文件。
 func (u *Updater) Rollback() (restarting bool, err error) {
@@ -295,6 +304,10 @@ func (u *Updater) Rollback() (restarting bool, err error) {
 			return false, errors.New("没有面板安装的版本可以删除")
 		}
 		return false, u.removeOverride()
+	}
+	if u.NeedsLegacyKeyRecovery() {
+		u.mu.Unlock()
+		return false, ErrKeyDowngrade
 	}
 	u.phase, u.target, u.err = PhaseRestarting, u.baseVersion, ""
 	u.mu.Unlock()

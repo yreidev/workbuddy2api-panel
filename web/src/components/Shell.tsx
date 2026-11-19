@@ -16,8 +16,8 @@ import { Outlet, useLocation, useMatches, useRouter } from '@tanstack/react-rout
 import { post } from '../lib/api'
 import { uptime } from '../lib/format'
 import { isExternalHref } from '../lib/links'
-import { toastError } from '../lib/hooks'
-import { qk, useOverview } from '../lib/queries'
+import { toastError, useNow } from '../lib/hooks'
+import { qk, useHasProviderData, useOverview, useProviders } from '../lib/queries'
 import { AddAccountModal } from './AddAccountModal'
 import { BusyButton } from './Feedback'
 import { KeyGate } from './KeyGate'
@@ -83,7 +83,7 @@ export function Shell() {
             {overview.data && <span className="hidden truncate text-sm text-muted md:inline">{uptime(overview.data.uptime_sec)}</span>}
             <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
               <ThemeSwitch />
-              <RefreshBalance compact={!isDesktop} />
+              {overview.data != null && overview.data.total > 0 && <RefreshBalance compact={!isDesktop} />}
               <Button variant="primary" isIconOnly={!isDesktop} aria-label="添加账号" onPress={() => setAdding(true)}>
                 <Plus />{isDesktop && '添加账号'}
               </Button>
@@ -105,9 +105,15 @@ export function Shell() {
 function Sidebar({ onNavigate, onShow }: { onNavigate?: () => void; onShow: (m: ManualPanel) => void }) {
   const { pathname } = useLocation()
   const { data } = useOverview()
+  const providers = useProviders()
+  const now = useNow(30_000)
+  const newAccounts = providers.data?.accounts ?? []
   const state = !data ? { text: '连接中', dot: 'bg-default' }
     : data.healthy > 0 ? { text: '服务正常', dot: 'bg-success' }
-    : data.total ? { text: '无可用账号', dot: 'bg-warning' }
+    : newAccounts.some((a) => !a.disabled && !a.paused && !a.error && !(a.cool_until && Date.parse(a.cool_until) > now)) ? { text: '账号已接入', dot: 'bg-success' }
+    : providers.isError ? { text: '平台账号读取失败', dot: 'bg-warning' }
+    : !providers.data ? { text: '读取账号中', dot: 'bg-default' }
+    : data.total || newAccounts.length ? { text: '无可用账号', dot: 'bg-warning' }
     : { text: '待添加账号', dot: 'bg-danger' }
 
   return (
@@ -176,8 +182,9 @@ function ThemeSwitch() {
   )
 }
 
-/** 从上游刷新全部账号余额，顺带同步昵称（改名后点一下即可，免重新登录；5 秒轮询只读内存，不打上游） */
+/** 从上游刷新全部 WorkBuddy 账号余额，顺带同步昵称。 */
 function RefreshBalance({ compact }: { compact: boolean }) {
+  const multiPlatform = useHasProviderData()
   const qc = useQueryClient()
   const [busy, setBusy] = useState(false)
   const run = async () => {
@@ -194,8 +201,8 @@ function RefreshBalance({ compact }: { compact: boolean }) {
     }
   }
   return (
-    <BusyButton variant="secondary" busy={busy} isIconOnly={compact} aria-label="刷新余额与昵称" onPress={() => void run()}>
-      {!busy && <ArrowsRotateRight />}{!compact && '刷新余额'}
+    <BusyButton variant="secondary" busy={busy} isIconOnly={compact} aria-label={multiPlatform ? '刷新 WorkBuddy 余额与昵称' : '刷新余额与昵称'} onPress={() => void run()}>
+      {!busy && <ArrowsRotateRight />}{!compact && (multiPlatform ? '刷新 WorkBuddy 余额' : '刷新余额')}
     </BusyButton>
   )
 }

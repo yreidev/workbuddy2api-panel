@@ -159,13 +159,13 @@ func TestFetchModelsUsesConfiguredUA(t *testing.T) {
 
 // --- A 段：UA 对齐官方 WorkBuddy 三段式 ---
 
-// 国内版桌面端 5.9.3 内置 CLI 2.165.0；国内版后台服务的 UA 两段同名，与 CLI 的一样。
+// 国内版桌面端 5.11.3 内置 CLI 2.176.0；国内版后台服务的 UA 两段同名，与 CLI 的一样。
 const (
-	defaultUAString      = "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"
+	defaultUAString      = "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0"
 	explicitString       = "MyCustomAgent/3.1"
-	clientVerUAString    = "WorkBuddy/6.0.0 WorkBuddy/6.0.0 CLI/2.165.0"
-	billingUAWorkBuddy   = "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"
-	billingUACustomVer   = "WorkBuddy/6.0.0 WorkBuddy/6.0.0 CLI/2.165.0"
+	clientVerUAString    = "WorkBuddy/6.0.0 WorkBuddy/6.0.0 CLI/2.176.0"
+	billingUAWorkBuddy   = "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0"
+	billingUACustomVer   = "WorkBuddy/6.0.0 WorkBuddy/6.0.0 CLI/2.176.0"
 	billingUAAgentString = "BillingAgent/1"
 )
 
@@ -254,7 +254,7 @@ func TestUserAgentClientVersionOverride(t *testing.T) {
 // 不随 client_version 变；显式 user_agent 仍优先。
 func TestBillingUA_WhenClientNameSet(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
-	// 默认 client_version → 5.9.3
+	// 默认 client_version → 5.11.3
 	c := &Client{
 		HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			if got := r.Header.Get("User-Agent"); got != axiosUserAgent {

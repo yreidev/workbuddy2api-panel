@@ -10,14 +10,17 @@ import { Bar, BarChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Toolt
 import { fmtMs, fmtRate, fmtTok } from '../../lib/format'
 import type { TipProps } from '../../lib/chart'
 import { USAGE_KEY_ADMIN, USAGE_KEY_ALL, USAGE_KEY_NONE } from '../../lib/keys'
-import { useAccountNames, useKeys, useUsage } from '../../lib/queries'
+import { hasProviderData, useAccountNames, useKeys, useProviders, useUsage } from '../../lib/queries'
+import { TARGETS, targetName } from '../../lib/targets'
 import { initialRange, rangeLabel } from '../../lib/timerange'
 import type { KeyedUsage, UsagePoint, UsageResp } from '../../lib/types'
-import { chartPoints, chartStats, dayBoundaries, minGap, nearestTicks, share, tickLabel, type ChartPoint } from '../../lib/usage'
+import { chartPoints, chartStats, dayBoundaries, matchesUsageFilter, minGap, nearestTicks, share, tickLabel, usageTokenText, type ChartPoint } from '../../lib/usage'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { MixBar, Panel, Stat } from '../../components/Panel'
 import { TimeRangePicker } from '../../components/TimeRangePicker'
 import { CreditHistory } from './CreditHistory'
+import { TargetSelect } from '../../components/TargetSelect'
+import { ProviderUsagePanel } from '../accounts/ProviderAccounts'
 
 const pct = (v: number | null) => (v == null ? '—' : v.toFixed(1) + '%')
 /** 服务端回显的时刻（本地时间 RFC3339）→ 「2026-09-30 09:00」 */
@@ -26,8 +29,11 @@ const echo = (iso: string) => iso.replace('T', ' ').slice(0, 16)
 export function UsagePage() {
   const [range, setRange] = useState(() => initialRange('72'))
   const [key, setKey] = useState(USAGE_KEY_ALL)
-  const query = useUsage(range, key)
+  const [target, setTarget] = useState('')
+  const providers = useProviders()
+  const query = useUsage(range, key, target)
   const d = query.data
+  const showTarget = !!target || hasProviderData(providers.data) || (d?.by_realm?.length ?? 0) > 1 || !!d?.by_realm?.some((r) => r.key.includes(':') && !r.key.startsWith('workbuddy:'))
   // 显式区间（今天 / 自定义）以服务端回显的实际区间为准；滚动窗口没有回显，用控件自己的标签
   const windowText = d?.window_from ? echo(d.window_from) + ' → ' + (d.window_to ? echo(d.window_to) : '现在') : rangeLabel(range)
 
@@ -43,7 +49,8 @@ export function UsagePage() {
         ].filter(Boolean).join(' · ')}
         actions={
           <>
-            <KeyFilter value={key} onChange={setKey} />
+            {showTarget && <TargetSelect compact label="按上游筛选" value={target || 'all'} onChange={(v) => setTarget(v === 'all' ? '' : v)} targets={[{ id: 'all', name: '全部上游' }, ...TARGETS]} />}
+            <KeyFilter value={key} onChange={setKey} showSources={hasProviderData(providers.data) || !!d?.by_key?.some((r) => r.key === 'liveness')} />
             <TimeRangePicker value={range} onChange={setRange} />
             <BusyButton size="sm" variant="secondary" busy={query.isFetching} onPress={() => void query.refetch()}>刷新</BusyButton>
           </>
@@ -54,6 +61,7 @@ export function UsagePage() {
           {(u) => (
             <>
               <Totals u={u} />
+              {!!u.totals.unknown_tokens && <p className="text-sm text-warning">其中 {u.totals.unknown_tokens} 次尝试未返回完整 token；下列 token 合计与图表仅包含已知部分。</p>}
               <UsageChart series={u.series || []} />
             </>
           )}
@@ -66,19 +74,21 @@ export function UsagePage() {
           <CreditHistory data={d} />
         </>
       )}
+      {!!providers.data?.usage.length && <ProviderUsagePanel usage={providers.data.usage.filter((u) => matchesUsageFilter(u, target, key))} />}
     </>
   )
 }
 
 /** 按密钥筛：全部 / 管理员 / 各客户端密钥 / 未区分（没开鉴权或加密钥维度之前的数据） */
-function KeyFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function KeyFilter({ value, onChange, showSources }: { value: string; onChange: (v: string) => void; showSources: boolean }) {
   const keys = useKeys()
   const list = keys.data?.keys || []
-  // 没建过客户端密钥时不显示：只有管理员和未区分两种，按密钥明细里已经看得到
-  if (!list.length && value === USAGE_KEY_ALL) return null
+  // 纯 WorkBuddy 没有客户端密钥或测活用量时，沿用原来的精简工具栏。
+  if (!list.length && !showSources && value === USAGE_KEY_ALL) return null
   const options = [
     { id: USAGE_KEY_ALL, label: '全部密钥' },
     { id: USAGE_KEY_ADMIN, label: '管理员' },
+    { id: 'liveness', label: '测活' },
     ...list.map((k) => ({ id: k.id, label: k.name })),
     { id: USAGE_KEY_NONE, label: '未区分' },
   ]
@@ -102,11 +112,11 @@ function Totals({ u }: { u: UsageResp }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
       <Stat label="请求数" value={fmtTok(reqs)} sub={errs ? `其中失败 ${errs} 次` : '全部成功'} />
-      <Stat label="总 token" value={fmtTok(t.total_tokens)} sub={`prompt ${pct(pp)} · completion ${pct(cp)}`}>
+      <Stat label="总 token" value={usageTokenText(t, t.total_tokens)} sub={`prompt ${pct(pp)} · completion ${pct(cp)}`}>
         <MixBar prompt={t.prompt_tokens} completion={t.completion_tokens} total={t.total_tokens} className="mt-1" />
       </Stat>
-      <Stat label="prompt" value={fmtTok(t.prompt_tokens)} sub={'占比 ' + pct(pp)} />
-      <Stat label="completion" value={fmtTok(t.completion_tokens)} sub={'占比 ' + pct(cp)} />
+      <Stat label="prompt" value={usageTokenText(t, t.prompt_tokens)} sub={'占比 ' + pct(pp)} />
+      <Stat label="completion" value={usageTokenText(t, t.completion_tokens)} sub={'占比 ' + pct(cp)} />
       <Stat
         label="失败尝试" value={errs} tone={errs ? 'warning' : undefined}
         sub={reqs ? '成功率 ' + pct((reqs - errs) / reqs * 100) : '—'}
@@ -141,7 +151,7 @@ function UsageChart({ series }: { series: UsagePoint[] }) {
   return (
     <div className="rounded-2xl border border-separator p-3">
       <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        <span className="font-medium">Token 时序</span>
+        <span className="font-medium">已知 Token 时序</span>
         <span className="text-muted tabular-nums">
           {pts.length} 个点 · 峰值 {fmtTok(stats.peak.total)} @ {tickLabel(stats.peak)} · 均值 {fmtTok(stats.avg)}
         </span>
@@ -180,7 +190,7 @@ type NumKey = 'requests' | 'errors' | 'prompt_tokens' | 'completion_tokens' | 't
 const KINDS: { id: UsageKind; label: string; key: 'by_account' | 'by_model' | 'by_realm' | 'by_key' }[] = [
   { id: 'account', label: '按账号', key: 'by_account' },
   { id: 'model', label: '按模型', key: 'by_model' },
-  { id: 'realm', label: '按域', key: 'by_realm' },
+  { id: 'realm', label: '按上游', key: 'by_realm' },
   { id: 'key', label: '按密钥', key: 'by_key' },
 ]
 
@@ -196,9 +206,9 @@ function UsageBreakdown({ data }: { data: UsageResp }) {
         <ToggleButtonGroup aria-label="明细维度" size="sm" selectionMode="single" disallowEmptySelection
           selectedKeys={[kind]} onSelectionChange={(k) => setKind([...k][0] as UsageKind)}>
           {KINDS.map((k, i) => (
-            <ToggleButton key={k.id} id={k.id}>
+            <ToggleButton key={k.id} id={k.id} className="max-sm:h-auto max-sm:flex-col max-sm:gap-0.5 max-sm:px-2 max-sm:py-1">
               {i > 0 && <ToggleButtonGroup.Separator />}{k.label}
-              <Chip size="sm" variant="soft" className="ml-1">{(data[k.key] || []).length}</Chip>
+              <Chip size="sm" variant="soft" className="sm:ml-1">{(data[k.key] || []).length}</Chip>
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
@@ -210,18 +220,18 @@ function UsageBreakdown({ data }: { data: UsageResp }) {
   )
 }
 
-const KEY_COL: Record<UsageKind, string> = { account: '账号', model: '模型', realm: 'realm', key: '密钥' }
+const KEY_COL: Record<UsageKind, string> = { account: '账号', model: '模型', realm: '上游', key: '密钥' }
 
 const NUM_COLS: { id: NumKey; label: string; fmt: (r: KeyedUsage) => ReactNode; perf?: boolean }[] = [
   { id: 'requests', label: '请求', fmt: (r) => fmtTok(r.requests) },
   { id: 'errors', label: '失败', fmt: (r) => (r.errors ? <span className="text-warning">{fmtTok(r.errors)}</span> : '—') },
-  { id: 'prompt_tokens', label: 'Prompt', fmt: (r) => fmtTok(r.prompt_tokens) },
-  { id: 'completion_tokens', label: 'Completion', fmt: (r) => fmtTok(r.completion_tokens) },
+  { id: 'prompt_tokens', label: 'Prompt', fmt: (r) => usageTokenText(r, r.prompt_tokens) },
+  { id: 'completion_tokens', label: 'Completion', fmt: (r) => usageTokenText(r, r.completion_tokens) },
   {
     id: 'total_tokens', label: '合计',
     fmt: (r) => (
       <span className="inline-flex min-w-16 flex-col items-end gap-1">
-        {fmtTok(r.total_tokens)}
+        {usageTokenText(r, r.total_tokens)}
         <MixBar prompt={r.prompt_tokens} completion={r.completion_tokens} total={r.total_tokens} />
       </span>
     ),
@@ -251,7 +261,7 @@ function UsageTable({ kind, rows }: { kind: UsageKind; rows: KeyedUsage[] }) {
         <Table.Content aria-label={label} className="min-w-[640px]" sortDescriptor={sort} onSortChange={setSort}>
           <Table.Header>
             <Table.Column id="key" isRowHeader>{KEY_COL[kind]}</Table.Column>
-            {kind === 'account' ? <Table.Column id="realm">域</Table.Column> : null}
+            {kind === 'account' ? <Table.Column id="realm">上游</Table.Column> : null}
             {cols.map((c) => (
               <Table.Column key={c.id} id={c.id} allowsSorting className="text-right">
                 {({ sortDirection }) => <Table.SortableColumnHeader sortDirection={sortDirection} className="justify-end gap-1">{c.label}</Table.SortableColumnHeader>}
@@ -272,9 +282,9 @@ function UsageTable({ kind, rows }: { kind: UsageKind; rows: KeyedUsage[] }) {
                       <span className="font-medium">{r.extra || r.key || '未区分'}</span>
                       {/^k[0-9a-f]+$/.test(r.key) && <span className="font-mono text-xs text-muted">{r.key}</span>}
                     </div>
-                  ) : <span className="break-all">{r.key}</span>}
+                  ) : <span className="break-all">{kind === 'realm' ? targetName(r.key.includes(':') ? r.key : 'workbuddy:' + r.key) : r.key}</span>}
                 </Table.Cell>
-                {kind === 'account' ? <Table.Cell className="text-muted">{r.realm || '—'}</Table.Cell> : null}
+                {kind === 'account' ? <Table.Cell className="text-muted">{(r.realms ?? (r.realm ? [r.realm] : [])).map((v) => targetName(v.includes(':') ? v : 'workbuddy:' + v)).join('、') || '—'}</Table.Cell> : null}
                 {cols.map((c) => <Table.Cell key={c.id} className="text-right font-mono tabular-nums">{c.fmt(r)}</Table.Cell>)}
               </Table.Row>
             ))}

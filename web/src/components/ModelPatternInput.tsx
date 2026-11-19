@@ -7,12 +7,13 @@ import { useMemo, useState } from 'react'
 import { Button } from '@heroui/react'
 import { addModelPattern, bareModelIds } from '../lib/keys'
 import { useModels } from '../lib/queries'
+import { parseModelTarget } from '../lib/targets'
 import { ModelComboBox } from './ModelComboBox'
 
 /** value 现有的名单；onChange 收加了一项以后的新名单（重复的不加）；isDisabled 保存中等情况不让加 */
-export function ModelPatternInput({ value, onChange, isDisabled }: { value: string[]; onChange: (v: string[]) => void; isDisabled?: boolean }) {
+export function ModelPatternInput({ value, onChange, isDisabled, workbuddyOnly = false }: { value: string[]; onChange: (v: string[]) => void; isDisabled?: boolean; workbuddyOnly?: boolean }) {
   const models = useModels()
-  const catalog = useMemo(() => bareModelIds((models.data?.models || []).map((m) => m.id)), [models.data])
+  const catalog = useMemo(() => bareModelIds((models.data?.models || []).filter((m) => !workbuddyOnly || parseModelTarget(m.id).product === 'workbuddy').map((m) => m.id)), [models.data, workbuddyOnly])
   const [text, setText] = useState('')
   const [hint, setHint] = useState('')
   const add = (raw: string) => {

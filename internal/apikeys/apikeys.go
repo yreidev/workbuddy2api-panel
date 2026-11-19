@@ -13,6 +13,7 @@
 package apikeys
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -25,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,6 +35,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/glob"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 )
 
 // flushInterval 用量计数的防抖落盘间隔（var 供测试缩短）。
@@ -45,7 +48,7 @@ var randRead = rand.Read
 var cst = time.FixedZone("CST", 8*60*60)
 
 const (
-	fileVersion = 1
+	fileVersion = `"2"` // v1 将 version 解为整数，字符串使其在加载密钥时安全停止
 	maxName     = 64
 	maxNote     = 500
 	maxModels   = 100
@@ -80,7 +83,9 @@ type Key struct {
 	TotalLimit Limits    `json:"total_limit"`
 	// Models 模型白名单（只认 * 通配，不区分大小写），按经模型路由改写后实际发往上游的模型名匹配，
 	// 不带 cn: / global: 前缀。空 = 不限。
-	Models []string `json:"models,omitempty"`
+	Models         []string `json:"models,omitempty"`
+	AllowedTargets []string `json:"allowed_targets,omitempty"`
+	DefaultTarget  string   `json:"default_target,omitempty"`
 	// Groups 只用这些账号分组里的号（pool.Group 的 id）。空 = 不限。分组存不存在由面板在保存时查。
 	Groups     []string  `json:"groups,omitempty"`
 	LastUsedAt time.Time `json:"last_used_at,omitzero"`
@@ -109,14 +114,16 @@ func (k Key) Expired(now time.Time) bool {
 
 // Input 新建、修改密钥时可设的字段。
 type Input struct {
-	Name       string    `json:"name"`
-	Note       string    `json:"note"`
-	Enabled    bool      `json:"enabled"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	DailyLimit Limits    `json:"daily_limit"`
-	TotalLimit Limits    `json:"total_limit"`
-	Models     []string  `json:"models"`
-	Groups     []string  `json:"groups"`
+	Name           string    `json:"name"`
+	Note           string    `json:"note"`
+	Enabled        bool      `json:"enabled"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	DailyLimit     Limits    `json:"daily_limit"`
+	TotalLimit     Limits    `json:"total_limit"`
+	Models         []string  `json:"models"`
+	Groups         []string  `json:"groups"`
+	AllowedTargets []string  `json:"allowed_targets"`
+	DefaultTarget  string    `json:"default_target"`
 }
 
 // Denied 密钥这次不能用：停用、过期、删了，或者用量到了上限。
@@ -153,27 +160,60 @@ type Store struct {
 }
 
 type file struct {
-	Version int    `json:"version"`
-	Keys    []*Key `json:"keys"`
+	Version json.RawMessage `json:"version"`
+	Keys    []*Key          `json:"keys"`
 }
 
 // Open 读取 path 下的密钥文件；文件不存在时从空开始，读不了或格式不对时报错（不能当成没有密钥，
 // 否则「建过密钥就必须带」的规则会悄悄失效）。path 为空时只存在内存里（测试用）。
 func Open(path string) (*Store, error) {
+	return open(path, false)
+}
+
+// OpenWithLegacyRecovery 为自带程序仍按 v1 读取密钥的一键更新保留管理面板恢复入口。
+func OpenWithLegacyRecovery(path string) (*Store, error) { return open(path, true) }
+
+const recoveryIDPrefix = "v2-recovery-"
+
+func open(path string, legacyRecovery bool) (*Store, error) {
 	s := &Store{path: path, bySecret: map[string]*Key{}, stop: make(chan struct{}), done: make(chan struct{})}
 	if path == "" {
 		return s, nil
 	}
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
+	if errors.Is(err, os.ErrNotExist) {
+		if legacyRecovery {
+			if err := s.publishRecovery(path); err != nil {
+				return nil, err
+			}
 		}
+		return s, nil
+	}
+	if err != nil {
 		return nil, fmt.Errorf("读取密钥文件 %s: %w", path, err)
 	}
 	var f file
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("解析密钥文件 %s: %w", path, err)
+	}
+	// 旧版保存用量时会丢弃未知 JSON 字段，故通过它原生保留的密钥 ID 关联新版文件。
+	if string(f.Version) == "1" {
+		for i, k := range f.Keys {
+			if k == nil || !strings.HasPrefix(k.ID, recoveryIDPrefix) {
+				continue
+			}
+			side := recoveryPath(path, k.ID)
+			legacy := slices.Delete(f.Keys, i, i+1)
+			f, err = readRecovery(side, legacy)
+			if err != nil {
+				return nil, err
+			}
+			legacyRecovery = len(legacy) > 0
+			if !legacyRecovery {
+				s.path = side
+			}
+			break
+		}
 	}
 	for _, k := range f.Keys {
 		if k == nil || k.ID == "" || k.Secret == "" {
@@ -182,7 +222,176 @@ func Open(path string) (*Store, error) {
 		s.keys = append(s.keys, k)
 		s.bySecret[digest(k.Secret)] = k
 	}
+	switch string(f.Version) {
+	case fileVersion:
+		if !legacyRecovery {
+			return s, nil
+		}
+	case "1":
+		if err := prepareV1Backup(path, raw); err != nil {
+			return nil, fmt.Errorf("备份旧版密钥文件: %w", err)
+		}
+	case "2":
+		// 早期 v2 已完成过迁移，补记首次 v1 备份的摘要。
+		backup, err := os.ReadFile(path + ".v1.bak")
+		if err == nil {
+			var old file
+			if err := json.Unmarshal(backup, &old); err != nil || string(old.Version) != "1" {
+				return nil, fmt.Errorf("旧版密钥备份 %s.v1.bak 无法解析为 v1", path)
+			}
+			if err := publishBackup(path+".v1.bak.sha256", []byte(digest(string(backup)))); err != nil {
+				return nil, fmt.Errorf("校验旧版密钥备份: %w", err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("读取旧版密钥备份: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("密钥文件 %s 的版本不支持", path)
+	}
+	if legacyRecovery {
+		err = s.publishRecovery(path)
+	} else {
+		err = s.saveLocked()
+	}
+	if err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+func recoveryPath(path, id string) string {
+	// 旧面板能修改密钥数据，文件名只使用 ID 的摘要。
+	return path + "." + digest(id) + ".v2"
+}
+
+func readRecovery(path string, legacy []*Key) (file, error) {
+	var active file
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return active, fmt.Errorf("读取新版密钥库 %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &active); err != nil {
+		return active, fmt.Errorf("解析新版密钥库 %s: %w", path, err)
+	}
+	if string(active.Version) != fileVersion {
+		return active, fmt.Errorf("新版密钥库 %s 版本不支持", path)
+	}
+	// 旧面板新增的密钥保留 v1 权限。由调用方先发布合并后的新文件，再切换恢复入口。
+	for _, added := range legacy {
+		if added == nil || strings.HasPrefix(added.ID, recoveryIDPrefix) || slices.ContainsFunc(active.Keys, func(k *Key) bool {
+			return k != nil && (k.ID == added.ID || k.Secret == added.Secret)
+		}) {
+			return active, fmt.Errorf("回退后的密钥与 %s 中的记录冲突", path)
+		}
+		active.Keys = append(active.Keys, added)
+	}
+	return active, nil
+}
+
+// 先完整发布 v2 数据再原子切换入口。两次发布之间退出时，旧版仍读本次升级前的活跃文件。
+func (s *Store) publishRecovery(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	secret, err := newSecret()
+	if err != nil {
+		return err
+	}
+	marker := &Key{ID: recoveryIDPrefix + digest(secret), Name: "新版密钥库（回退保护）", Secret: secret, Note: "请保留此停用记录。恢复新版后会重新载入客户端密钥。", ExpiresAt: time.Unix(1, 0).UTC()}
+	side := recoveryPath(path, marker.ID)
+	raw, err := json.MarshalIndent(file{Version: json.RawMessage(fileVersion), Keys: s.keys}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := publishBackup(side, raw); err != nil {
+		return fmt.Errorf("发布新版密钥库: %w", err)
+	}
+	entry, err := json.MarshalIndent(file{Version: json.RawMessage("1"), Keys: []*Key{marker}}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(path, entry); err != nil {
+		return fmt.Errorf("发布旧版恢复入口: %w", err)
+	}
+	if err := syncParent(path); err != nil {
+		return fmt.Errorf("同步密钥恢复入口: %w", err)
+	}
+	s.path = side
+	return nil
+}
+
+// 首次逐字节核对并封存原件。降级后旧版可以继续写入，新快照按摘要另存。
+func prepareV1Backup(path string, raw []byte) error {
+	first := path + ".v1.bak"
+	receipt, err := os.ReadFile(first + ".sha256")
+	if errors.Is(err, os.ErrNotExist) {
+		if err := publishBackup(first, raw); err != nil {
+			return err
+		}
+		return publishBackup(first+".sha256", []byte(digest(string(raw))))
+	}
+	if err != nil {
+		return err
+	}
+	backup, err := os.ReadFile(first)
+	if err != nil {
+		return err
+	}
+	if digest(string(backup)) != string(receipt) {
+		return fmt.Errorf("首次备份 %s 与校验记录不符", first)
+	}
+	if bytes.Equal(raw, backup) {
+		return nil
+	}
+	return publishBackup(path+".v1."+digest(string(raw))+".bak", raw)
+}
+
+// 发布前同步完整内容，已有同名文件必须逐字节相同。
+func publishBackup(path string, raw []byte) error {
+	saved, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		tmp, err := os.CreateTemp(filepath.Dir(path), ".keys-v1-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmp.Name())
+		if _, err = tmp.Write(raw); err == nil {
+			err = tmp.Sync()
+		}
+		closeErr := tmp.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		// 不覆盖另一迁移进程刚创建的备份。
+		if err = publishNoReplace(tmp.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		saved, err = os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if !bytes.Equal(saved, raw) {
+		return fmt.Errorf("%s 与原 v1 文件不一致，已停止迁移", path)
+	}
+	return syncParent(path)
+}
+
+func syncParent(path string) error {
+	if runtime.GOOS != "windows" {
+		dir, err := os.Open(filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		defer dir.Close()
+		return dir.Sync()
+	}
+	return nil
 }
 
 // Start 启动用量计数的防抖落盘，Stop 前一直运行。
@@ -380,21 +589,37 @@ func (s *Store) Check(id string, now time.Time) *Denied {
 // Admit 放行一个对话请求：先查 Check 的几项，再查每天和总量的上限，都没到就计一次请求、记下
 // 最后使用时间。token、积分要等上游回了才知道（见 Record），所以并发的请求可能让用量略超上限。
 func (s *Store) Admit(id string, now time.Time) *Denied {
+	return s.AdmitTarget(id, "workbuddy:cn", "", now)
+}
+
+// AdmitTarget 在同一锁内检查平台权限、模型白名单与用量，避免设置变更绕过限制。
+func (s *Store) AdmitTarget(id, target, model string, now time.Time) *Denied {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := s.findLocked(id)
 	if d := s.checkLocked(k, now); d != nil {
 		return d
 	}
+	if !k.AllowsTarget(target) {
+		return &Denied{Status: 403, Code: "target_not_allowed", Message: "密钥不允许使用该上游"}
+	}
+	if model != "" && !k.AllowsTargetModel(target, model) {
+		return &Denied{Status: 403, Code: "model_not_allowed", Message: fmt.Sprintf("密钥「%s」不能用模型 %s，允许的模型：%s", k.Name, model, strings.Join(k.Models, "、"))}
+	}
 	rollDay(k, now)
-	if what, ok := over(k.Today, k.DailyLimit); ok {
+	daily, total := k.DailyLimit, k.TotalLimit
+	if !targets.WorkBuddy(target) {
+		daily.Credits = 0
+		total.Credits = 0
+	}
+	if what, ok := over(k.Today, daily); ok {
 		return &Denied{
 			Status: http.StatusTooManyRequests, Code: "key_quota_exceeded",
 			Message:    fmt.Sprintf("密钥「%s」今天的用量已到上限（%s），北京时间 00:00 重置", k.Name, what),
 			RetryAfter: nextCSTMidnight(now).Sub(now),
 		}
 	}
-	if what, ok := over(k.Used, k.TotalLimit); ok {
+	if what, ok := over(k.Used, total); ok {
 		return &Denied{
 			Status: http.StatusTooManyRequests, Code: "key_quota_exceeded",
 			Message: fmt.Sprintf("密钥「%s」的总用量已到上限（%s），请联系管理员调高", k.Name, what),
@@ -516,7 +741,7 @@ func normalize(in Input) (Input, error) {
 		switch {
 		case m == "":
 			continue
-		case strings.Contains(m, ":"):
+		case strings.Contains(m, ":") && !validQualifiedPattern(m):
 			return in, fmt.Errorf("模型白名单按模型名匹配，不带 cn: / global: 前缀：%s", m)
 		case len(m) > maxPattern:
 			return in, fmt.Errorf("模型白名单的一项最长 %d 个字符", maxPattern)
@@ -536,6 +761,19 @@ func normalize(in Input) (Input, error) {
 		}
 	}
 	in.Groups = groups
+	var allowed []string
+	for _, t := range in.AllowedTargets {
+		if !targets.Valid(t) {
+			return in, fmt.Errorf("未知上游：%s", t)
+		}
+		if !slices.Contains(allowed, t) {
+			allowed = append(allowed, t)
+		}
+	}
+	in.AllowedTargets = allowed
+	if in.DefaultTarget != "" && (!targets.Valid(in.DefaultTarget) || !allowsTarget(allowed, in.DefaultTarget)) {
+		return in, errors.New("默认上游必须在允许的上游中")
+	}
 	return in, nil
 }
 
@@ -545,6 +783,8 @@ func apply(k *Key, in Input) {
 	k.DailyLimit, k.TotalLimit = in.DailyLimit, in.TotalLimit
 	k.Models = in.Models
 	k.Groups = in.Groups
+	k.AllowedTargets = in.AllowedTargets
+	k.DefaultTarget = in.DefaultTarget
 }
 
 // saveLocked 写盘（原子替换）。成功后清掉 dirty；失败只记日志并返回错误，计数留到下次再写。
@@ -553,7 +793,7 @@ func (s *Store) saveLocked() error {
 		s.dirty = false
 		return nil
 	}
-	raw, _ := json.MarshalIndent(file{Version: fileVersion, Keys: s.keys}, "", "  ") // 字段都是可序列化的基本类型
+	raw, _ := json.MarshalIndent(file{Version: json.RawMessage(fileVersion), Keys: s.keys}, "", "  ") // 字段都是可序列化的基本类型
 	if err := writeAtomic(s.path, raw); err != nil {
 		log.Printf("[apikeys] 写 %s 失败: %v", s.path, err)
 		return fmt.Errorf("%w：%v", ErrSave, err)
@@ -568,7 +808,17 @@ func writeAtomic(path string, raw []byte) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -605,6 +855,7 @@ func cloneKey(k *Key) Key {
 	c := *k
 	c.Models = slices.Clone(k.Models)
 	c.Groups = slices.Clone(k.Groups)
+	c.AllowedTargets = slices.Clone(k.AllowedTargets)
 	return c
 }
 
@@ -633,4 +884,36 @@ func newSecret() (string, error) {
 func digest(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// AllowsTarget 旧密钥缺少平台字段时只放行 WorkBuddy，新增账号不会扩大历史权限。
+func (k Key) AllowsTarget(target string) bool { return allowsTarget(k.AllowedTargets, target) }
+func allowsTarget(allowed []string, target string) bool {
+	if len(allowed) == 0 {
+		return targets.WorkBuddy(target)
+	}
+	return slices.Contains(allowed, target)
+}
+func validQualifiedPattern(pattern string) bool {
+	target, native, explicit := targets.Parse(pattern)
+	return explicit && !targets.WorkBuddy(target) && native != ""
+}
+
+// AllowsTargetModel 新平台只用完整模型名匹配，裸白名单仍属于 WorkBuddy。
+func (k Key) AllowsTargetModel(target, model string) bool {
+	if !k.AllowsTarget(target) {
+		return false
+	}
+	if targets.WorkBuddy(target) {
+		return k.AllowsModel(model)
+	}
+	if len(k.Models) == 0 {
+		return true
+	}
+	for _, p := range k.Models {
+		if validQualifiedPattern(p) && glob.Match(p, targets.Public(target, model)) {
+			return true
+		}
+	}
+	return false
 }

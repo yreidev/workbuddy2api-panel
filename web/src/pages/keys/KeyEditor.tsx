@@ -6,18 +6,20 @@
 import { useMemo, useState } from 'react'
 import { Copy } from '@gravity-ui/icons'
 import {
-  Button, Checkbox, CheckboxGroup, Description, Input, Label, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
+  Button, Checkbox, CheckboxGroup, Description, Disclosure, Input, Label, Modal, NumberField, Surface, Switch, Tag, TagGroup, TextArea, TextField, toast,
 } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { copyText } from '../../lib/clipboard'
 import { toastError, useLast } from '../../lib/hooks'
 import {
-  LIMIT_KINDS, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, validateKeyForm,
+  LIMIT_KINDS, allowedModels, emptyKeyForm, keyFormFrom, keyInput, validateKeyForm,
   type KeyForm, type LimitForm,
 } from '../../lib/keys'
 import { qk, useGroups, useModels } from '../../lib/queries'
 import type { ApiKey } from '../../lib/types'
+import { TARGETS, targetName } from '../../lib/targets'
+import { TargetSelect } from '../../components/TargetSelect'
 import { ExpiryField } from '../../components/ExpiryField'
 import { BusyButton } from '../../components/Feedback'
 import { ModelPatternInput } from '../../components/ModelPatternInput'
@@ -113,9 +115,23 @@ function EditorBody({ editing, onClose, onCreated }: { editing: ApiKey | null; o
           <LimitRow title="总量" value={form.total} onChange={(total) => set({ total })} />
         </fieldset>
 
-        <ModelsField value={form.models} onChange={(models) => set({ models })} />
+        <ModelsField allowedTargets={form.allowedTargets} value={form.models} onChange={(models) => set({ models })} />
 
         <GroupsField value={form.groups} onChange={(groups) => set({ groups })} />
+        <Disclosure defaultExpanded={!!editing?.default_target || !!editing?.allowed_targets?.some((t) => !t.startsWith('workbuddy:'))}>
+          <Disclosure.Heading><Disclosure.Trigger className="inline-flex items-center gap-2 text-sm font-medium">
+            上游权限<Disclosure.Indicator />
+          </Disclosure.Trigger></Disclosure.Heading>
+          <p className="mt-1 text-xs text-muted">{form.allowedTargets.map(targetName).join('、') || '尚未选择上游'}{form.defaultTarget && ' · 默认 ' + targetName(form.defaultTarget)}</p>
+          <Disclosure.Content><div className="flex flex-col gap-3 pt-3">
+            <CheckboxGroup value={form.allowedTargets} onChange={(allowedTargets) => set({ allowedTargets, defaultTarget: allowedTargets.includes(form.defaultTarget) ? form.defaultTarget : '' })}>
+              <Label>允许的上游</Label>
+              {TARGETS.map((t) => <Checkbox key={t.id} value={t.id}><Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>{t.name}</Checkbox.Content></Checkbox>)}
+            </CheckboxGroup>
+            <TargetSelect label="裸模型名的默认上游" value={form.defaultTarget || 'legacy'} onChange={(v) => set({ defaultTarget: v === 'legacy' ? '' : v })} targets={[{ id: 'legacy', name: '沿用 WorkBuddy 国内／国际选路' }, ...TARGETS.filter((t) => form.allowedTargets.includes(t.id))]} />
+            <p className="text-xs text-muted">请求次数和 token 上限跨平台合计；积分上限仅用于 WorkBuddy。新平台的模型白名单填写完整名称，如 qoder:global:模型名。</p>
+          </div></Disclosure.Content>
+        </Disclosure>
       </Modal.Body>
       <Modal.Footer>
         {error && form.name.trim() !== '' && <span className="mr-auto text-sm text-danger">{error}</span>}
@@ -154,15 +170,15 @@ function LimitRow({ title, value, onChange }: { title: string; value: LimitForm;
 }
 
 /** 模型白名单：从目录选或手填（支持 * 通配），下面列出放行了目录里的哪些模型 */
-function ModelsField({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+function ModelsField({ value, allowedTargets, onChange }: { value: string[]; allowedTargets: string[]; onChange: (v: string[]) => void }) {
   const models = useModels()
-  const catalog = useMemo(() => bareModelIds((models.data?.models || []).map((m) => m.id)), [models.data])
-  const allowed = allowedModels(value, catalog)
+  const catalog = useMemo(() => (models.data?.models || []).map((m) => m.id), [models.data])
+  const allowed = allowedModels(value, catalog, allowedTargets)
   return (
     <div className="flex flex-col gap-2">
       <span className="text-sm font-medium">模型白名单</span>
       <p className="-mt-1 text-xs text-muted">
-        按经模型路由改写后、实际发给上游的模型名匹配，不带 cn: / global: 前缀，只认 * 通配（如 glm-*）。不加 = 不限。
+        按实际发给上游的模型名匹配。WorkBuddy 不带 cn: / global: 前缀，其他平台保留完整前缀，只认 * 通配（如 glm-*）。不加 = 不限。
         客户端发 claude-sonnet 这类名字、被路由改成 glm-5.2 时，白名单里要有 glm-5.2。
       </p>
       {value.length > 0 && (

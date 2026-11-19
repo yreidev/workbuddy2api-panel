@@ -63,9 +63,28 @@ type job struct {
 	exitRes *Exit
 }
 
+// SetProviderHosts 接入平台账号显式绑定的推理入口。
+func (r *Registry) SetProviderHosts(snapshot func() map[string][]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providerHosts = snapshot
+}
+
+// 查询平台账号时不持有代理锁，避免和平台选路的加锁顺序相反。
+func (r *Registry) boundProviderHosts() map[string][]string {
+	r.mu.Lock()
+	snapshot := r.providerHosts
+	r.mu.Unlock()
+	if snapshot == nil {
+		return nil
+	}
+	return snapshot()
+}
+
 // tick 查一轮：挑出到点的代理（锁外测），再把结果、到期、改绑、补位一次写进去。
 func (r *Registry) tick(ctx context.Context) {
 	now := r.now()
+	platform := r.boundProviderHosts()
 	r.mu.Lock()
 	s, tester, urls, defProxy := r.settings, r.tester, slices.Clone(r.settings.ExitIPURLs), r.defaultProxy
 	var jobs []*job
@@ -74,7 +93,7 @@ func (r *Registry) tick(ctx context.Context) {
 			continue // 到期的不测，续费改了日期再测
 		}
 		due := r.due[px.ID]
-		j := &job{id: px.ID, url: px.URL, hosts: r.hostsLocked(px)}
+		j := &job{id: px.ID, url: px.URL, hosts: r.hostsLocked(px, platform[px.ID])}
 		testDue := due || now.Sub(px.Health.CheckedAt) >= time.Duration(s.HealthMinutes)*time.Minute
 		j.exit = due || px.Health.Exit == nil || now.Sub(px.Health.Exit.CheckedAt) >= time.Duration(s.ExitMinutes)*time.Minute
 		if (testDue && tester != nil) || j.exit {
@@ -167,23 +186,24 @@ func testHosts(ctx context.Context, tester Tester, url string, hosts []string) (
 
 // hostsLocked 测这个代理要连哪些官方入口：绑在上面的号是哪个域就测哪个，没有号按池的默认域，再没有
 // 测国内版。
-func (r *Registry) hostsLocked(px *Proxy) []string {
+func (r *Registry) hostsLocked(px *Proxy, bound []string) []string {
 	var realms []string
 	for _, acc := range r.accounts {
 		if acc.b.ID == px.ID && !slices.Contains(realms, acc.realm) {
 			realms = append(realms, acc.realm)
 		}
 	}
-	if len(realms) == 0 {
+	if len(realms) == 0 && len(bound) == 0 {
 		if pl := r.poolLocked(px.Pool); pl != nil {
 			realms = slices.Clone(pl.DefaultFor)
 		}
 	}
-	if len(realms) == 0 {
+	if len(realms) == 0 && len(bound) == 0 {
 		realms = []string{"cn"}
 	}
 	slices.Sort(realms)
-	hosts := make([]string, 0, len(realms))
+	hosts := slices.Clone(bound)
+	slices.Sort(hosts)
 	for _, realm := range realms {
 		h := r.hosts[realm]
 		if h == "" {
@@ -198,13 +218,14 @@ func (r *Registry) hostsLocked(px *Proxy) []string {
 
 // TestNow 马上测一个代理（面板里点「测试」），等测完再返回。
 func (r *Registry) TestNow(ctx context.Context, id string) error {
+	platform := r.boundProviderHosts()
 	r.mu.Lock()
 	px := r.proxyLocked(id)
 	if px == nil {
 		r.mu.Unlock()
 		return fmt.Errorf("代理 %s %w", id, ErrNotFound)
 	}
-	j := &job{id: id, url: px.URL, hosts: r.hostsLocked(px), exit: true, tested: r.tester != nil}
+	j := &job{id: id, url: px.URL, hosts: r.hostsLocked(px, platform[px.ID]), exit: true, tested: r.tester != nil}
 	tester, urls := r.tester, slices.Clone(r.settings.ExitIPURLs)
 	r.mu.Unlock()
 	r.runJobs(ctx, []*job{j}, tester, urls)

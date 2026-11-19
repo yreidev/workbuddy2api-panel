@@ -39,10 +39,11 @@ func NewRequestID() string {
 }
 
 const (
-	OutcomeSuccess     = "success"
-	OutcomeHTTPError   = "http_error"
-	OutcomeStreamError = "stream_error"
-	OutcomeInterrupted = "interrupted"
+	OutcomeSuccess       = "success"
+	OutcomeHTTPError     = "http_error"
+	OutcomeStreamError   = "stream_error"
+	OutcomeLedgerPending = "ledger_pending"
+	OutcomeInterrupted   = "interrupted"
 )
 
 // Config 归档参数。Enabled=false 时仍保留内存指标。RetentionDays=0 = 永久保留（仍受 MaxBytes 限制），
@@ -63,10 +64,14 @@ type Config struct {
 // 归档里不会出现来源字段）——来源信息比 token 计数敏感，运营可自行决定是否落盘。
 // 仍然不写提示词、响应正文、Authorization 或其它凭证。
 type Event struct {
-	Time      time.Time `json:"time"`
-	RequestID string    `json:"request_id"`
-	Path      string    `json:"path"`
-	Account   string    `json:"account,omitempty"`
+	Target string `json:"target,omitempty"`
+	// AccountID 仅用于新增平台的派生账号 ID；WorkBuddy 不写完整上游 UID。
+	AccountID   string    `json:"account_id,omitempty"`
+	TokensKnown bool      `json:"tokens_known"`
+	Time        time.Time `json:"time"`
+	RequestID   string    `json:"request_id"`
+	Path        string    `json:"path"`
+	Account     string    `json:"account,omitempty"`
 	// Proxy 最后选的号走的代理（代理名，没绑代理为空）。
 	Proxy            string  `json:"proxy,omitempty"`
 	Model            string  `json:"model,omitempty"`
@@ -81,6 +86,7 @@ type Event struct {
 	TotalTokens      int64   `json:"total_tokens,omitempty"`
 	Credit           float64 `json:"credit,omitempty"`
 	HasCredit        bool    `json:"credit_known"`
+	CreditUnit       string  `json:"credit_unit,omitempty"`
 	// CacheHitTokens / CacheMissTokens 上游前缀缓存命中/未命中 token（issue #92）。
 	// 上游未回该维度时两者皆零值省略；hit=0 + miss>0 即整段未命中。
 	CacheHitTokens  int64  `json:"cache_hit_tokens,omitempty"`

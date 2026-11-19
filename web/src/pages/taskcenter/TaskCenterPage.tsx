@@ -10,7 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { timeMs } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
-import { qk, useAccountNames, useQueue } from '../../lib/queries'
+import { useHasProviderData, qk, useAccountNames, useQueue } from '../../lib/queries'
 import { growthTitles } from '../../lib/tasks'
 import type { QueueItem, QueueState, RunQueueResp, ScanAccount } from '../../lib/types'
 import { BusyButton, Empty } from '../../components/Feedback'
@@ -60,6 +60,7 @@ const STATUS: Record<string, { label: string; color: 'success' | 'accent' | 'dan
 }
 
 export function TaskCenterPage() {
+  const multiPlatform = useHasProviderData()
   const qc = useQueryClient()
   const names = useAccountNames()
   const queue = useQueue()
@@ -122,7 +123,7 @@ export function TaskCenterPage() {
   return (
     <>
       <Panel
-        title={<>成长任务队列{total > 0 && <span className="ml-2 text-sm font-normal text-muted">{total} 项</span>}</>}
+        title={<>{multiPlatform && 'WorkBuddy '}成长任务队列{total > 0 && <span className="ml-2 text-sm font-normal text-muted">{total} 项</span>}</>}
         actions={
           <>
             <Button size="sm" variant="ghost" onPress={() => setCompensation(true)}>积分补偿</Button>

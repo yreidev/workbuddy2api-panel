@@ -38,6 +38,11 @@ func (p *Panel) groupsList(w http.ResponseWriter, _ *http.Request) {
 	groups := p.cfg.Pool.Groups()
 	out := make([]groupView, 0, len(groups))
 	for _, g := range groups {
+		for _, account := range p.cfg.Providers.List() {
+			if slices.Contains(account.Groups, g.ID) {
+				g.Accounts++
+			}
+		}
 		out = append(out, groupView{GroupView: g, Keys: p.keysUsingGroup(g.ID)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"groups": out})
@@ -83,6 +88,12 @@ func (p *Panel) groupDelete(w http.ResponseWriter, r *http.Request) {
 	if keys := p.keysUsingGroup(id); len(keys) > 0 {
 		writeErr(w, http.StatusConflict, "这些密钥限定了这个分组，先在密钥里去掉它："+strings.Join(keys, "、"))
 		return
+	}
+	for _, account := range p.cfg.Providers.List() {
+		if slices.Contains(account.Groups, id) {
+			writeErr(w, 409, "平台账号仍在该分组，请先修改平台账号的分组")
+			return
+		}
 	}
 	if err := p.cfg.Pool.DeleteGroup(id); err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())

@@ -24,7 +24,7 @@ export function HiddenModels() {
       desc="这里的模型不出现在 /v1/models 里，点名调用回 400 model_unavailable。"
       actions={
         <InfoTip label="匹配规则">
-          {'带 cn: / global: 前缀的只藏那个域，不带前缀的两个域都藏。\n精确匹配、区分大小写，不认通配。\n按经模型路由改写后实际发给上游的模型判，和客户端密钥的模型白名单叠加。\n打开跨域负载均衡时，只藏了一个域的模型照样能用，只分到另一个域。\n加一项、删一项都立即保存生效。'}
+          {'完整产品／地区前缀只隐藏对应上游，例如 qoder:cn:模型名。cn: / global: 和不带前缀的名字继续只作用于 WorkBuddy；裸名同时隐藏其两个地区。\n精确匹配、区分大小写，不认通配。\n按模型路由改写后的完整模型名判断，和客户端密钥白名单叠加。\n加一项、删一项都立即保存生效。'}
         </InfoTip>
       }
       contentClassName="flex flex-col gap-3"
@@ -80,7 +80,7 @@ function HiddenForm({ saved }: { saved: string[] }) {
           ids={ids}
           inputValue={text}
           onInputChange={setText}
-          placeholder="从目录选（带域前缀），或手填不带前缀的名字"
+          placeholder="从目录选完整模型名，或手填 WorkBuddy 裸名"
           value={null}
           onChange={(k) => { if (k != null) add(String(k)) }}
           isDisabled={saving}

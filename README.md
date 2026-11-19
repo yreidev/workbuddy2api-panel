@@ -6,9 +6,9 @@
 
 **把腾讯 WorkBuddy 账号变成 OpenAI 兼容 API，Claude Code、Codex 直接接入，出站请求照官方客户端逐项对齐**
 
-Claude Code / Codex 直连 · 模型路由 · 请求头对齐官方桌面端 5.9.3 · 主备入口与 HTTPDNS 自动切换 · 国内 / 国际双域合池 · 企业号用上 Claude · 积分任务全自动 · 面板一键更新
+Claude Code / Codex 直连 · 模型路由 · 请求头对齐官方桌面端 5.11.3 · 主备入口与 HTTPDNS 自动切换 · 国内 / 国际双域合池 · 企业号用上 Claude · 积分任务全自动 · 面板一键更新
 
-[![构建](https://img.shields.io/github/actions/workflow/status/yreidev/workbuddy2api-panel/go-binaries.yml?branch=main&style=flat-square&label=build)](https://github.com/yreidev/workbuddy2api-panel/actions/workflows/go-binaries.yml)
+[![构建](https://img.shields.io/github/actions/workflow/status/yreidev/workbuddy2api-panel/main-release.yml?branch=main&style=flat-square&label=build)](https://github.com/yreidev/workbuddy2api-panel/actions/workflows/main-release.yml)
 [![版本](https://img.shields.io/github/v/release/yreidev/workbuddy2api-panel?style=flat-square&label=release)](https://github.com/yreidev/workbuddy2api-panel/releases/latest)
 [![测试覆盖率](https://img.shields.io/badge/coverage-98.8%25-brightgreen?style=flat-square)](docs/deployment.md#从源码构建)
 [![Docker 镜像](https://img.shields.io/badge/ghcr.io-latest-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/yreidev/workbuddy2api-panel/pkgs/container/workbuddy2api-panel)
@@ -38,7 +38,7 @@ GitHub 上叫 workbuddy2api-panel 的仓库有好几个。本仓库是在原版 
 | | 本仓库 | 原版 |
 |---|---|---|
 | **Claude Code / Codex** | 原生提供 Anthropic Messages（`/v1/messages`）和 Responses（`/v1/responses`），填地址和密钥就能用；模型路由把它们的默认模型名改到上游模型，客户端不用配模型；Claude Code 自带的 WebSearch 直接能用，Codex 接网关的 MCP 服务器也能联网搜索 | 对话只有 `/v1/chat/completions`；联网搜索只有给 DSH 这类客户端调的 `/v1/search/messages` |
-| **出站请求** | 照官方桌面端安装包（国内版 5.9.3、国际版 5.9.4）逐项对齐 UA、请求头、会话 id、链路头和 TLS 握手指纹，每一项的依据和还没对齐的地方都写在[官方客户端对照](docs/official-client.md) | UA 停在 WorkBuddy 5.5.4，还带着官方已经不发的 Origin、Referer 等旧请求头 |
+| **出站请求** | 照官方桌面端安装包（国内版 5.11.3、国际版 5.9.4）对齐 UA、请求头、会话 id、链路头和 TLS；新增平台使用各自的官方运行时握手样本，每一项的依据和还没对齐的地方都写在[官方客户端对照](docs/official-client.md) | UA 停在 WorkBuddy 5.5.4，还带着官方已经不发的 Origin、Referer 等旧请求头 |
 | **网络容错** | 主入口出错切备用入口，DNS 失败或网关错误换 HTTPDNS 候选 IP，按入口熔断，规则照官方 | 单一入口，没有失败切换 |
 | **对话隐私** | 默认告诉上游不许拿你的对话做模型优化（`X-Private-Data`），面板里可改 | 不发 |
 | **企业号** | 用官方企业目录接口按账号拉模型，企业开通的 Claude 等模型只派给有它的号 | 所有企业号探测同一个旧端点 |
@@ -242,6 +242,8 @@ flowchart LR
 | [Web 管理面板](docs/panel.md) | 各视图功能、时间范围、调用来源、更新提醒与一键更新、面板接口、安全响应头 |
 | [API 参考](docs/api.md) | 对外端点、Claude Code 与 Codex 入口、模型名与模型路由、健康检查、请求日志、上游接口 |
 | [官方客户端对照](docs/official-client.md) | 出站请求按官方桌面端对齐的依据、未对齐项、官方升级后怎么核对 |
+| [多平台上游（实验）](docs/multi-platform.md) | TraeWork／Trae Code／Qoder 账号、授权、上游范围、代理、用量与迁移边界 |
+| [同类产品与多平台接入调研](docs/competitor-research.md) | 90 仓库初筛、重点网关与平台适配源码、官方认证与额度来源、多平台设计建议 |
 | [安全与合规](docs/security.md) | 凭证保管、网络暴露、日志敏感度、使用边界 |
 | [常见问题](docs/faq.md) | 权限报错、6004 限额、内容审核误拦、账号恢复等 |
 | [项目来源与上游同步](docs/upstream.md) | 项目沿革、相对原始项目新增的能力、同步记录 |
@@ -253,7 +255,7 @@ flowchart LR
 
 ## 反馈问题
 
-在 [issue](https://github.com/yreidev/workbuddy2api-panel/issues/new/choose) 里选「问题反馈」「功能建议」或「使用求助」填表。问题反馈要填版本号、部署方式、出问题的账号类型，并贴报错原文和运行日志（文字，不要只发截图；面板整页出错时点出错页上的「复制错误信息」）；缺了机器人会留言提醒、打上「待补充」，14 天没补充自动关闭，之后补上信息回复一下会自动重新打开。贴出来之前先把 token、Cookie、手机号、邮箱、IP 打码。
+在 [issue](https://github.com/yreidev/workbuddy2api-panel/issues/new/choose) 里选「问题反馈」「功能建议」或「使用求助」填表。问题反馈要填包含预发布后缀的完整版本号、部署方式、出问题的平台和账号类型，并贴报错原文和运行日志（文字，不要只发截图；面板整页出错时点出错页上的「复制错误信息」）；缺了机器人会留言提醒、打上「待补充」，14 天没补充自动关闭，之后补上信息回复一下会自动重新打开。贴出来之前先把 token、Cookie、手机号、邮箱、IP 打码。
 
 ## 致谢
 
@@ -262,8 +264,10 @@ flowchart LR
 - **[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel)**：本仓库的直接上游，已于 2026-10-21 停止维护。Web 管理面板、积分任务体系、请求指标等大量能力都来自这里。
 - **[Sliverkiss](https://github.com/Sliverkiss)**：原始项目 workbuddy2api 的作者，奠定了网关、账号池调度、错误分类与提示词体系（原仓库已删除）。
 - **同类项目**：
+  - [EchoPing07/Qoder-2API-Go](https://github.com/EchoPing07/Qoder-2API-Go)：Qoder COSY 认证与编解码的原始来源，许可见 [NOTICE](internal/providers/cosy/NOTICE)。
+  - [autumnsentiment/Trae2api-cn](https://github.com/autumnsentiment/Trae2api-cn) 与 [Magpie plugins](https://github.com/magpie-community/plugins)：TraeWork 产品通道、文本事件和平台授权流程的公开协议分析。
   - [corrinehu](https://github.com/corrinehu) 的 dsh-workbuddy-connect：企业号拉模型目录必须带齐企业身份的实测（issue #123），企业版模型的支持据此实现（原仓库已删除）。
-  - [caigee-cmd/cli2api](https://github.com/caigee-cmd/cli2api)：每个账号各拉一份模型目录、按目录选号的做法，企业号的对话请求头，以及号没设代理时回落全局代理的做法。
+  - [caigee-cmd/cli2api](https://github.com/caigee-cmd/cli2api)：每个账号各拉一份模型目录、按目录选号的做法，企业号的对话请求头、默认代理线路，以及 Trae／Qoder 协议分析。COSY 编解码与签名代码改写自其 qauth，保留 MIT 许可与来源。
   - [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)：自我介绍句、DeepSeek Harness、OhMyOpenCode 这几类渠道指纹的清洗规则，国际版号成批被 11140 风控时整域暂停的做法（issue #629），以及每段对话记下用过的号、换号时先回到这些号的做法。
   - [ithtelab/workbuddy-manager](https://github.com/ithtelab/workbuddy-manager)、[mmqz/cpa-multi-plugins](https://github.com/mmqz/cpa-multi-plugins)：渠道指纹在助手历史和用户消息里同样会被拦的实测；cpa-multi-plugins 凭证文件里带 `proxy_url` 的写法，导入凭证时据此认出号的代理。
   - [sofs2005/w2a](https://github.com/sofs2005/w2a)：用原始字节确认上游回的是数字码 `11128`。

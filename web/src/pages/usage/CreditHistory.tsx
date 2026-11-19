@@ -7,10 +7,11 @@
 // 有积分和 token 的样本算。缓存命中率 = 上游前缀缓存命中 / (命中 + 未命中)，低命中意味着费用成倍放大。
 import { useMemo, useState, type ReactNode } from 'react'
 import { Chip, Table, ToggleButton, ToggleButtonGroup, type SortDescriptor } from '@heroui/react'
-import { fmtCredit, fmtCreditRatio, fmtModelRate, fmtTok } from '../../lib/format'
+import { fmtCreditRatio, fmtModelRate, fmtTok } from '../../lib/format'
+import { chargeText, creditUnitName } from '../../lib/billing'
 import { useAccountNames } from '../../lib/queries'
 import { cacheLevel, cacheRate, cacheRateText } from '../../lib/requests'
-import type { CreditUsage, UsageResp } from '../../lib/types'
+import type { CreditUsage, UsageAgg, UsageResp } from '../../lib/types'
 import { Empty } from '../../components/Feedback'
 import { Panel, Stat } from '../../components/Panel'
 
@@ -33,8 +34,8 @@ function CacheCell({ r }: { r: CreditUsage }) {
 }
 
 const NUM_COLS: { id: string; label: string; val: (r: CreditUsage) => number; fmt: (r: CreditUsage) => ReactNode }[] = [
-  { id: 'requests', label: '请求', val: (r) => r.requests, fmt: (r) => fmtTok(r.requests) },
-  { id: 'credits', label: '扣除积分', val: (r) => r.credits, fmt: (r) => fmtCredit(r.credits) },
+  { id: 'requests', label: '已知费用请求', val: (r) => r.credit_samples, fmt: (r) => fmtTok(r.credit_samples) },
+  { id: 'credits', label: '扣除积分', val: (r) => r.credits, fmt: (r) => chargeText(r.credits) },
   { id: 'credit_tokens', label: '有效样本 Token', val: (r) => r.credit_tokens, fmt: (r) => fmtTok(r.credit_tokens) },
   { id: 'credits_per_1m_tokens', label: '积分 / 1M Token', val: (r) => r.credits_per_1m_tokens, fmt: ratio },
   // 没有样本的行排在有样本的后面（-1），不和「命中 0%」混在一起
@@ -49,10 +50,14 @@ export function CreditHistory({ data }: { data: UsageResp }) {
   const accounts = data.credit_by_account || []
   const models = data.credit_by_model || []
   const rate = cacheRate(t.cache_hit_tokens, t.cache_miss_tokens)
+  const units = t.credit_by_unit || (t.credit_samples ? [{ ...t, key: t.credit_unit || 'workbuddy:credits', unit: t.credit_unit }] : [])
+  const single = units[0]
+  const cache = <Stat label="缓存命中率" value={cacheRateText(t.cache_hit_tokens, t.cache_miss_tokens)}
+    tone={rate == null ? undefined : LEVEL_TONE[cacheLevel(rate)]} sub="上游前缀缓存命中 / (命中 + 未命中)" />
   return (
     <Panel
       title="积分扣除历史"
-      desc={`${accounts.length} 个账号 · ${models.length} 个模型倍率分组 · 只统计与积分同时观测到的 Token`}
+      desc={`${accounts.length} 个账号 · ${models.length} 个模型倍率分组 · ${units.length > 1 ? '各平台费用分开统计' : '只统计与扣费同时观测到的 Token'}`}
       actions={
         <ToggleButtonGroup aria-label="积分扣除维度" size="sm" selectionMode="single" disallowEmptySelection
           selectedKeys={[kind]} onSelectionChange={(k) => setKind([...k][0] as Kind)}>
@@ -62,21 +67,31 @@ export function CreditHistory({ data }: { data: UsageResp }) {
       }
       contentClassName="flex flex-col gap-4"
     >
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Stat label="扣除积分" value={fmtCredit(t.credits)} sub="按上游 usage.credit 累计" />
-        <Stat label="匹配 Token" value={fmtTok(t.credit_tokens)} sub="与积分同时观测到的 Token" />
-        <Stat label="平均积分 / 1M Token" value={fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens)} sub="越低越划算" />
-        <Stat label="有效积分样本" value={t.credit_samples || 0} sub="缺字段的历史不参与折算" />
-        <Stat
-          label="缓存命中率" value={cacheRateText(t.cache_hit_tokens, t.cache_miss_tokens)}
-          tone={rate == null ? undefined : LEVEL_TONE[cacheLevel(rate)]}
-          className="col-span-2 lg:col-span-1"
-          sub="上游前缀缓存命中 / (命中 + 未命中)；低命中意味着费用成倍放大"
-        />
-      </div>
+      {units.length <= 1 ? <>
+        {single?.unit && single.unit !== 'workbuddy:credits' && <span className="text-sm font-medium">{creditUnitName(single.unit)}</span>}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <CreditStats data={single} workBuddy={!single?.unit || single.unit === 'workbuddy:credits'} />
+          {cache}
+        </div>
+      </> : <>
+        {units.map((u) => <div key={u.key} className="flex flex-col gap-2 rounded-lg border border-separator p-3">
+          <span className="text-sm font-medium">{creditUnitName(u.unit)}</span>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><CreditStats data={u} workBuddy={u.unit === 'workbuddy:credits'} /></div>
+        </div>)}
+        {cache}
+      </>}
       <CreditTable key={kind} kind={kind} rows={kind === 'account' ? accounts : models} />
     </Panel>
   )
+}
+
+function CreditStats({ data, workBuddy }: { data?: Pick<UsageAgg, 'credits' | 'credit_tokens' | 'credit_samples' | 'credits_per_1m_tokens'>; workBuddy: boolean }) {
+  return <>
+    <Stat label={workBuddy ? '扣除积分' : '已知扣费合计'} value={data?.credit_samples ? chargeText(data.credits ?? 0) : '未知'} sub="仅累计官方已返回的单次扣费" />
+    <Stat label="匹配 Token" value={fmtTok(data?.credit_tokens)} sub="与费用同时观测到的 Token" />
+    <Stat label={workBuddy ? '平均积分 / 1M Token' : 'credits / 1M Token'} value={fmtCreditRatio(data?.credits_per_1m_tokens, data?.credit_samples, data?.credit_tokens)} sub="仅使用费用与 Token 配对的样本" />
+    <Stat label={workBuddy ? '有效积分样本' : '有效费用样本'} value={data?.credit_samples || 0} sub="未知费用不参与合计" />
+  </>
 }
 
 function CreditTable({ kind, rows }: { kind: Kind; rows: CreditUsage[] }) {
@@ -88,12 +103,14 @@ function CreditTable({ kind, rows }: { kind: Kind; rows: CreditUsage[] }) {
     const out = [...rows].sort((a, b) => (col.val(a) || 0) - (col.val(b) || 0))
     return sort.direction === 'descending' ? out.reverse() : out
   }, [rows, sort])
+  const showUnit = rows.some((r) => !!r.unit && r.unit !== 'workbuddy:credits')
   if (!rows.length) return <Empty title="暂无数据">{EMPTY_LINE}</Empty>
   return (
     <Table variant="secondary">
       <Table.ScrollContainer>
         <Table.Content aria-label={kind === 'account' ? '积分扣除按账号' : '积分扣除按模型'} className="min-w-[720px]" sortDescriptor={sort} onSortChange={setSort}>
           <Table.Header>
+            {showUnit ? <Table.Column id="unit">计费单位</Table.Column> : null}
             <Table.Column id="key" isRowHeader>{kind === 'account' ? '账号' : '模型'}</Table.Column>
             {kind === 'model' ? <Table.Column id="rate">积分倍率</Table.Column> : null}
             {NUM_COLS.map((c) => (
@@ -105,7 +122,8 @@ function CreditTable({ kind, rows }: { kind: Kind; rows: CreditUsage[] }) {
           <Table.Body>
             {sorted.map((r) => (
               // 按模型的行：同一模型不同倍率各占一行，键要带上倍率
-              <Table.Row key={r.key + '|' + (r.rate || '')} id={r.key + '|' + (r.rate || '')}>
+              <Table.Row key={r.key + '|' + (r.rate || '') + '|' + (r.unit || '')} id={r.key + '|' + (r.rate || '') + '|' + (r.unit || '')}>
+                {showUnit ? <Table.Cell>{creditUnitName(r.unit)}</Table.Cell> : null}
                 <Table.Cell>
                   {kind === 'account' ? (
                     <div className="flex flex-col">

@@ -48,7 +48,7 @@ func TestEnterpriseCatalogRequest(t *testing.T) {
 	if r.header.Get("X-User-Id") != "u-1" || r.header.Get("X-Enterprise-Id") != "ent/1" || r.header.Get("X-Tenant-Id") != "ent/1" {
 		t.Errorf("企业身份头不全: %v", r.header)
 	}
-	if ua := r.header.Get("User-Agent"); !strings.Contains(ua, "CLI/2.165.0") {
+	if ua := r.header.Get("User-Agent"); !strings.Contains(ua, "CLI/2.176.0") {
 		t.Errorf("UA 应为内置 CLI: %q", ua)
 	}
 	if n := f.count(http.MethodGet, "/console/enterprises/personal/models"); n != 0 {

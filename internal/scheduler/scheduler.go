@@ -90,6 +90,7 @@ type Scheduler struct {
 	// （纳秒，0=暂停），rearmLiveness 是它的重算通知；livenessRunning 保证全部测活和定时测活同时只跑一批。
 	livenessMu       sync.Mutex
 	livenessFn       LivenessFunc
+	providerLiveness func()
 	livenessInterval atomic.Int64
 	rearmLiveness    chan struct{}
 	livenessRunning  atomic.Bool

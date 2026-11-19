@@ -18,14 +18,17 @@ import {
   pkDetailLimitValue, pkExpiryDateTime, pkExpiryText, pkSourceKey, PK_SORT_OPTIONS, summarizeCreditDays, VIZ_OTHER, type CreditDayRow,
   type PkSortMode,
 } from '../../lib/packages'
-import { useAccountNames, useConfig, usePackages } from '../../lib/queries'
+import { useAccountNames, useConfig, useOverview, usePackages, useProviders } from '../../lib/queries'
 import type { CreditPackage, PackageAccount } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { Hint } from '../../components/Hint'
 import { Panel } from '../../components/Panel'
+import { ProviderQuota } from '../../components/ProviderQuota'
 
 export function PackagesPage() {
   const query = usePackages()
+  const providers = useProviders()
+  const providersFirst = useOverview().data?.total === 0
   const cfg = useConfig()
   const limit = pkDetailLimit(cfg.data?.config)
   const names = useAccountNames()
@@ -35,9 +38,21 @@ export function PackagesPage() {
   const [sortMode, setSortMode] = useStoredChoice<PkSortMode>('wb2api.pkSort', PK_SORT_OPTIONS.map((o) => o.id), 'end_asc')
   const now = useNow(60_000)
   const age = query.dataUpdatedAt ? Math.floor((now - query.dataUpdatedAt) / 60_000) : 0
+  const quotaPanel = providers.data?.accounts.length || providers.isError ? (
+    <Panel title="Trae / Qoder 账号额度" desc="各账号独立展示官方余额、已用额度与原单位；首次查看自动查询，之后点「刷新额度」更新。">
+      <Loaded query={providers} rows={2}>{({ accounts }) => (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {accounts.map((a) => <Card key={a.account_id} variant="secondary" className="gap-2 p-4">
+            <Card.Title>{a.name}</Card.Title><ProviderQuota account={a} />
+          </Card>)}
+        </div>
+      )}</Loaded>
+    </Panel>
+  ) : null
   return (
     <>
-      <Panel title="积分到期分布" desc="按批次到期日聚合，颜色区分账号">
+      {providersFirst && quotaPanel}
+      <Panel title={providers.data?.accounts.length ? 'WorkBuddy 积分到期分布' : '积分到期分布'} desc="按批次到期日聚合，颜色区分账号">
         <Loaded query={query} rows={4}>{() => <ExpiryDistribution list={list} now={query.dataUpdatedAt} />}</Loaded>
       </Panel>
       <Panel
@@ -60,6 +75,7 @@ export function PackagesPage() {
       >
         <Loaded query={query} rows={3}>{() => <Compare list={list} now={query.dataUpdatedAt} />}</Loaded>
       </Panel>
+      {!providersFirst && quotaPanel}
       {query.data && list.filter((a) => !a.error).map((a) => <Detail key={a.uid} a={a} limit={limit} sortMode={sortMode} colorOf={colorOf} />)}
     </>
   )

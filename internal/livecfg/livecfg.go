@@ -13,6 +13,7 @@
 package livecfg
 
 import (
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -47,6 +48,10 @@ func NormalizeHiddenModels(hidden []string) map[string]struct{} {
 	for _, m := range hidden {
 		m = strings.TrimSpace(m)
 		if m == "" {
+			continue
+		}
+		if target, native, explicit := targets.Parse(m); explicit {
+			out[targets.Public(target, native)] = struct{}{}
 			continue
 		}
 		if prefix, bare, ok := strings.Cut(m, ":"); ok && (prefix == "cn" || prefix == "global") {

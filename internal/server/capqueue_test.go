@@ -11,11 +11,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/yreidev/workbuddy2api-panel/internal/apikeys"
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
@@ -38,15 +40,16 @@ type queueReply struct {
 // 取消回 cancel（没设回 code 0），别的路径回 code 0；记下每个请求。onStatus 不为 nil 时每次查询前调用；
 // ctxAware 为 true 时请求的 context 已取消就回传输错误（同真实的 Transport）。
 type queueUpstream struct {
-	mu       sync.Mutex
-	chats    []queueReply
-	statuses []queueReply
-	cancel   *queueReply
-	onStatus func()
-	ctxAware bool
-	reqs     []*http.Request
-	bodies   []string
-	ctxErrs  []error // 请求到达时它的 context 有没有被取消
+	mu        sync.Mutex
+	chats     []queueReply
+	statuses  []queueReply
+	cancel    *queueReply
+	onRefresh func()
+	onStatus  func()
+	ctxAware  bool
+	reqs      []*http.Request
+	bodies    []string
+	ctxErrs   []error // 请求到达时它的 context 有没有被取消
 }
 
 func (u *queueUpstream) client() *upstream.Client {
@@ -59,7 +62,10 @@ func (u *queueUpstream) client() *upstream.Client {
 	}
 	return &upstream.Client{
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			b, _ := io.ReadAll(r.Body)
+			var b []byte
+			if r.Body != nil {
+				b, _ = io.ReadAll(r.Body)
+			}
 			u.mu.Lock()
 			u.reqs, u.bodies, u.ctxErrs = append(u.reqs, r), append(u.bodies, string(b)), append(u.ctxErrs, r.Context().Err())
 			rep, hook := queueReply{200, `{"code":0}`}, func() {}
@@ -71,6 +77,13 @@ func (u *queueUpstream) client() *upstream.Client {
 				if u.onStatus != nil {
 					hook = u.onStatus
 				}
+			case "/v2/plugin/auth/token/refresh":
+				rep = queueReply{200, `{"code":0,"data":{"accessToken":"fixture-new","refreshToken":"fixture-new-refresh","expiresIn":3600}}`}
+				if u.onRefresh != nil {
+					hook = u.onRefresh
+				}
+			case "/v2/plugin/account":
+				rep = queueReply{200, `{"code":0,"data":{"uid":"a"}}`}
 			case "/v2/chat/queue/cancel":
 				if u.cancel != nil {
 					rep = *u.cancel
@@ -328,4 +341,47 @@ func TestChat6022Rotates(t *testing.T) {
 		t.Errorf("两个号各试一次，实际 %v", got)
 	}
 	notCooling(t, p)
+}
+
+func TestWorkBuddyRevocationBeforeDispatch(t *testing.T) {
+	for _, stage := range []string{"刷新", "排队"} {
+		t.Run(stage, func(t *testing.T) {
+			u := &queueUpstream{chats: []queueReply{{429, queued6020}, {200, sseOK}}, statuses: []queueReply{{200, queueReady}}}
+			h, p := queueHandler(t, u, 5*time.Second)
+			keys, err := apikeys.Open("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.cfg.Keys = keys
+			in := apikeys.Input{Name: "派发测试", Enabled: true, AllowedTargets: []string{"workbuddy:cn", "workbuddy:global"}}
+			key := createKey(t, keys, in)
+			revoke := func() {
+				in.AllowedTargets = []string{"workbuddy:global"}
+				if _, err := keys.Update(key.ID, in); err != nil {
+					t.Fatal(err)
+				}
+			}
+			chats, cancels := 1, 1
+			if stage == "排队" {
+				u.onStatus = revoke
+			} else {
+				u.onRefresh = revoke
+				a := p.AuthByUID("a")
+				a.ExpiresAt, a.RefreshToken, a.FilePath = 1, "fixture-refresh", filepath.Join(t.TempDir(), "a.json")
+				chats, cancels = 0, 0
+			}
+			rec := post(h, "/v1/chat/completions", chatBody, "Authorization", "Bearer "+key.Secret)
+			code, _ := openAIErr(t, rec)
+			if rec.Code != http.StatusForbidden || code != "target_not_allowed" {
+				t.Fatalf("撤权后响应: %d %s", rec.Code, code)
+			}
+			st, _ := p.Status("a")
+			after, _ := keys.Get(key.ID, time.Now())
+			canceled, _ := u.calls("/v2/chat/queue/cancel")
+			if len(u.chatAuths()) != chats || len(canceled) != cancels || st.InFlight != 0 || after.Used.Requests != 0 {
+				t.Fatalf("撤权后的派发、清理或退款错误: 生成=%d 取消=%d 在途=%d 次数=%d", len(u.chatAuths()), len(canceled), st.InFlight, after.Used.Requests)
+			}
+			notCooling(t, p)
+		})
+	}
 }

@@ -128,7 +128,7 @@ func TestRunURLCNAndGlobal(t *testing.T) {
 			t.Fatalf("不应 fatal: %s", errb)
 		}
 		// 授权页地址按官方 openAuthUrl 修饰：version 与国内版的登录观测参数。
-		if !strings.HasPrefix(strings.TrimSpace(out), "https://auth.example/authorize?x=1&version=5.9.3&traceparent=") {
+		if !strings.HasPrefix(strings.TrimSpace(out), "https://auth.example/authorize?x=1&version=5.11.3&traceparent=") {
 			t.Fatalf("stdout=%q", out)
 		}
 		raw, err := os.ReadFile(statePath)
@@ -158,7 +158,7 @@ func TestRunURLCNAndGlobal(t *testing.T) {
 			h.Get("X-No-Authorization") != "true" || h.Get("X-No-User-Id") != "true" {
 			t.Fatalf("发起授权的头不对: %v", h)
 		}
-		if ua := h.Get("User-Agent"); !strings.Contains(ua, "WorkBuddy/5.9.3") || !strings.Contains(ua, "CLI/") {
+		if ua := h.Get("User-Agent"); !strings.Contains(ua, "WorkBuddy/5.11.3") || !strings.Contains(ua, "CLI/") {
 			t.Fatalf("国内版 UA 不对: %q", ua)
 		}
 		if h.Get("X-Request-ID") == "" || len(h.Get("X-Request-ID")) != 32 {

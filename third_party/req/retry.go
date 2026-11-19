@@ -1,0 +1,72 @@
+// SPDX-FileCopyrightText: 2026 yreidev 与贡献者（见 NOTICE）
+// SPDX-License-Identifier: AGPL-3.0-only
+// 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
+
+package req
+
+import (
+	"math"
+	"math/rand"
+	"time"
+)
+
+func defaultGetRetryInterval(resp *Response, attempt int) time.Duration {
+	return 100 * time.Millisecond
+}
+
+// RetryConditionFunc is a retry condition, which determines
+// whether the request should retry.
+type RetryConditionFunc func(resp *Response, err error) bool
+
+// RetryHookFunc is a retry hook which will be executed before a retry.
+type RetryHookFunc func(resp *Response, err error)
+
+// GetRetryIntervalFunc is a function that determines how long should
+// sleep between retry attempts.
+type GetRetryIntervalFunc func(resp *Response, attempt int) time.Duration
+
+func backoffInterval(min, max time.Duration) GetRetryIntervalFunc {
+	base := float64(min)
+	capLevel := float64(max)
+	return func(resp *Response, attempt int) time.Duration {
+		temp := math.Min(capLevel, base*math.Exp2(float64(attempt)))
+		halfTemp := int64(temp / 2)
+		sleep := halfTemp + rand.Int63n(halfTemp)
+		return time.Duration(sleep)
+	}
+}
+
+func newDefaultRetryOption() *RetryOption {
+	return &RetryOption{
+		GetRetryInterval: defaultGetRetryInterval,
+	}
+}
+
+// RetryOption controls the retry behavior of a request.
+// It is typically configured via Client.SetCommonRetry* or Request.SetRetry*
+// methods and can be read from middleware with Request.GetRetryOption.
+//
+// MaxRetries is the maximum number of retries (not including the initial
+// attempt). A negative value means retry infinitely. Zero means no retries.
+// GetRetryOption may still return a non-nil option if only non-count setters
+// (interval, condition, or hook) were used while leaving MaxRetries at zero.
+type RetryOption struct {
+	MaxRetries       int
+	GetRetryInterval GetRetryIntervalFunc
+	RetryConditions  []RetryConditionFunc
+	RetryHooks       []RetryHookFunc
+}
+
+// Clone returns a deep copy of RetryOption.
+func (ro *RetryOption) Clone() *RetryOption {
+	if ro == nil {
+		return nil
+	}
+	o := &RetryOption{
+		MaxRetries:       ro.MaxRetries,
+		GetRetryInterval: ro.GetRetryInterval,
+	}
+	o.RetryConditions = append(o.RetryConditions, ro.RetryConditions...)
+	o.RetryHooks = append(o.RetryHooks, ro.RetryHooks...)
+	return o
+}

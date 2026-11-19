@@ -29,6 +29,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 	"github.com/yreidev/workbuddy2api-panel/internal/session"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
@@ -125,6 +126,12 @@ func searchPenalized(kind upstream.ErrKind) bool {
 
 // runSearch 换着号搜一次（规则见文件头）。st 记下用了哪个号、试了几次，交给请求记录和流水行。
 func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model string, meta upstream.ChatMeta, st *chatStat) (*upstream.SearchOutcome, *searchFailure) {
+	model, _ = h.routeModel(ctx, model)
+	resolved, target, _ := h.targetModel(ctx, model)
+	if target != "" && (!targets.WorkBuddy(target) || !h.targetAllowed(ctx, target, nil, false)) {
+		return nil, &searchFailure{status: 400, code: "search_not_supported", msg: "该上游不提供网关联网搜索"}
+	}
+	model = resolved
 	tried, _ := h.keyScope(ctx) // 客户端密钥绑了分组时只用组里的号
 	realm, cnFirst := h.searchRealm(model, tried)
 	var lastErr error
@@ -143,6 +150,9 @@ func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model s
 			break
 		}
 		tried[acct.UID] = true
+		if !h.workbuddyAccountAllowed(ctx, acct.UID, "") {
+			continue
+		}
 		st.uid, st.nick, st.model = acct.UID, acct.Nickname, searchModel
 		st.proxy = h.proxyName(acct.UID)
 		if acct.IsGlobal() {
@@ -180,6 +190,10 @@ func (h *Handler) runSearch(ctx context.Context, q upstream.SearchQuery, model s
 			if err := acct.SaveAtomic(); err != nil {
 				log.Printf("ERR: [server] search refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
+		}
+		if !h.workbuddyAccountAllowed(ctx, acct.UID, "") {
+			h.cfg.Pool.Release(acct.UID)
+			return nil, &searchFailure{status: http.StatusForbidden, code: "target_not_allowed", msg: errDispatchDenied.Error()}
 		}
 		st.attempts++
 		out, err := h.cfg.Upstream.Search(ctx, acct, q, meta)

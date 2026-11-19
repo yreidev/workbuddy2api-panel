@@ -222,9 +222,10 @@ type Registry struct {
 	onGate func(uid, reason string)
 	// tester 测连通；hosts 各域健康检查连的官方入口；defaultProxy 没绑代理的号走的代理（环境变量，
 	// 查服务器出口用），都由 main 装上（SetProbes）。
-	tester       Tester
-	hosts        map[string]string
-	defaultProxy string
+	providerHosts func() map[string][]string
+	tester        Tester
+	hosts         map[string]string
+	defaultProxy  string
 	// probe 查出口 IP，测试可换。
 	probe func(ctx context.Context, rawURL string, urls []string) *Exit
 	now   func() time.Time

@@ -10,7 +10,7 @@ import { Chip, Label, ListBox, Select, Table, useMediaQuery } from '@heroui/reac
 import { accountName } from '../../lib/accounts'
 import { EARN_LABEL, earnDetail, earnLabel } from '../../lib/credits'
 import { dayClock } from '../../lib/format'
-import { useAccountNames, useCreditLog, useLogStorage, useOverview } from '../../lib/queries'
+import { useHasProviderData, useAccountNames, useCreditLog, useLogStorage, useOverview } from '../../lib/queries'
 import { retentionText, storageProblem, storageSummary } from '../../lib/storage'
 import { initialRange } from '../../lib/timerange'
 import type { CreditEarning, CreditLogResp, CreditSum } from '../../lib/types'
@@ -44,6 +44,7 @@ function Pick<T extends string | number>({ label, value, options, onChange, clas
 }
 
 export function CreditLogPage() {
+  const multiPlatform = useHasProviderData()
   const overview = useOverview()
   const storage = useLogStorage(true)
   const [range, setRange] = useState(() => initialRange('720'))
@@ -61,7 +62,7 @@ export function CreditLogPage() {
   return (
     <>
       <Panel
-        title="积分获取"
+        title={multiPlatform ? 'WorkBuddy 积分获取' : '积分获取'}
         desc={['只记领到的积分，扣除见「用量 → 积分扣除历史」', st && retentionText(st.retention_days), st && storageSummary('credit', st), storageProblem(st)]
           .filter(Boolean).join(' · ')}
         actions={

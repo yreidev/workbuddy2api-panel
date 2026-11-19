@@ -4,6 +4,7 @@
 
 // 客户端密钥的展示与表单整理（纯函数，见 keys.test.ts）。口径与网关 internal/apikeys 一致：
 // 上限按「已用 ≥ 上限」拦，0 或不填 = 不限；白名单只认 * 通配，按实际发上游的模型名（不带域前缀）匹配。
+import { parseModelTarget, WORKBUDDY_TARGETS } from './targets'
 import { fmtCredit, fmtTok, timeMs } from './format'
 import { globMatch } from './routes'
 import type { ApiKey, KeyInput, KeyLimits, KeyUsage } from './types'
@@ -64,6 +65,8 @@ export function limitRows(limit: KeyLimits, used: KeyUsage): LimitRow[] {
 export type LimitForm = Record<LimitKind, number | null>
 
 export interface KeyForm {
+ allowedTargets: string[]
+ defaultTarget: string
   name: string
   note: string
   enabled: boolean
@@ -78,7 +81,7 @@ export interface KeyForm {
 
 const noLimits = (): LimitForm => ({ requests: null, tokens: null, credits: null })
 
-export const emptyKeyForm = (): KeyForm => ({ name: '', note: '', enabled: true, expires: null, daily: noLimits(), total: noLimits(), models: [], groups: [] })
+export const emptyKeyForm = (): KeyForm => ({ name: '', note: '', enabled: true, expires: null, daily: noLimits(), total: noLimits(), models: [], groups: [], allowedTargets: [...WORKBUDDY_TARGETS], defaultTarget: '' })
 
 function limitForm(l: KeyLimits): LimitForm {
   const f = noLimits()
@@ -88,6 +91,8 @@ function limitForm(l: KeyLimits): LimitForm {
 
 export function keyFormFrom(k: ApiKey): KeyForm {
   return {
+    allowedTargets: [...(k.allowed_targets?.length ? k.allowed_targets : WORKBUDDY_TARGETS)],
+    defaultTarget: k.default_target || '',
     name: k.name,
     note: k.note || '',
     enabled: k.enabled,
@@ -111,6 +116,8 @@ function limitsOut(f: LimitForm): KeyLimits {
 /** 提交给网关的整份设置（修改也是整份提交） */
 export function keyInput(f: KeyForm): KeyInput {
   return {
+    allowed_targets: f.allowedTargets,
+    default_target: f.defaultTarget,
     name: f.name.trim(),
     note: f.note.trim(),
     enabled: f.enabled,
@@ -131,6 +138,8 @@ export function validateKeyForm(f: KeyForm): string | null {
   for (const l of [f.daily, f.total]) {
     if (Object.values(l).some((v) => v != null && v < 0)) return '用量上限不能是负数'
   }
+  if (!f.allowedTargets.length) return '至少允许一个上游'
+  if (f.defaultTarget && !f.allowedTargets.includes(f.defaultTarget)) return '默认上游必须在允许的上游中'
   if (f.models.length > 100) return '模型白名单最多 100 项'
   return null
 }
@@ -140,7 +149,7 @@ export function validateKeyForm(f: KeyForm): string | null {
 export function addModelPattern(list: string[], raw: string): string[] | string {
   const p = raw.trim()
   if (!p) return list
-  if (p.includes(':')) return '按模型名填，不带 cn: / global: 前缀'
+  if (p.includes(':') && !/^(traework:cn|traecode:cn|qoder:cn|qoder:global):.+$/.test(p)) return '按模型名填，不带 cn: / global: 前缀'
   if (/\s/.test(p)) return '模型名里不能有空格'
   if (p.length > 128) return '一项最长 128 个字符'
   if (list.some((x) => x.toLowerCase() === p.toLowerCase())) return list
@@ -153,9 +162,17 @@ export function bareModelIds(ids: string[]): string[] {
 }
 
 /** 白名单放行目录里的哪些模型（空白名单 = 全部） */
-export function allowedModels(patterns: string[], catalog: string[]): string[] {
-  if (!patterns.length) return catalog
-  return catalog.filter((m) => patterns.some((p) => globMatch(p, m)))
+export function allowedModels(patterns: string[], catalog: string[], allowedTargets: string[]): string[] {
+  const visible = catalog.flatMap((id) => {
+    const { target, native } = parseModelTarget(id)
+    if (!allowedTargets.includes(target || 'workbuddy:cn')) return []
+    const workbuddy = !target || WORKBUDDY_TARGETS.includes(target)
+    const name = workbuddy ? native : id
+    if (patterns.length && !patterns.some((p) =>
+      (workbuddy || parseModelTarget(p).target === target) && globMatch(p, name))) return []
+    return [name]
+  })
+  return [...new Set(visible)].sort()
 }
 
 /** 用量页的密钥筛选：空串 = 全部，admin = 管理员密钥，- = 没开鉴权或加密钥维度之前的数据 */

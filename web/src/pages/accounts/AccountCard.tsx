@@ -3,14 +3,13 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 账号卡片：宽屏的卡片网格和窄屏列表共用。边框按状态着色（冷却、被代理拦着橙，禁用红），右上角箭头看详情。
-import { ChevronRight } from '@gravity-ui/icons'
-import { Button, Card, Separator, Surface } from '@heroui/react'
+import { Surface } from '@heroui/react'
 import { accountName, activeRateLimits, type Health } from '../../lib/accounts'
 import { ago } from '../../lib/format'
 import type { Account, ProxyAccount } from '../../lib/types'
 import { AccountButtons } from './AccountButtons'
 import { AccountName, CreditsCell, GroupLine, HealthChip, LivenessLine, ProxyLine, RateLimitList, UsageChips } from './AccountCells'
-import { SelectionCheckbox } from './ExportBar'
+import { AccountCardLayout } from './AccountCardLayout'
 import type { AccountAction } from './useAccountActions'
 
 const RING: Record<Health['state'], string> = {
@@ -41,18 +40,9 @@ export function AccountCard({ a, health, proxy, now, poolMax, selected, onSelect
   const fail = a.err_total || 0
   const rate = successRate(ok, fail)
   return (
-    <Card variant="secondary" className={`gap-3 p-4 ${RING[health.state]}`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-start gap-2">
-          <SelectionCheckbox label={'选择 ' + accountName(a)} isSelected={selected} onChange={onSelect} />
-          <AccountName a={a} />
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <HealthChip health={health} now={now} />
-          <Button isIconOnly size="sm" variant="ghost" aria-label="详情" onPress={onOpen}><ChevronRight /></Button>
-        </div>
-      </div>
-
+    <AccountCardLayout name={accountName(a)} heading={<AccountName a={a} />} status={<HealthChip health={health} now={now} />}
+      ring={RING[health.state]} selected={selected} onSelect={onSelect} onOpen={onOpen}
+      actions={<AccountButtons a={a} health={health} busy={busy} run={run} compact />}>
       {(a.proxy_blocked || a.reason || activeRateLimits(a).length > 0) && (
         <Surface className="flex flex-col gap-1 rounded-xl px-3 py-2">
           {a.proxy_blocked && <span className="line-clamp-2 break-all text-xs text-warning">{a.proxy_blocked}</span>}
@@ -78,12 +68,6 @@ export function AccountCard({ a, health, proxy, now, poolMax, selected, onSelect
       <ProxyLine v={proxy} />
       <LivenessLine a={a} now={now} />
 
-      <div className="mt-auto flex flex-col gap-2">
-        <Separator />
-        <div className="-mx-1">
-          <AccountButtons a={a} health={health} busy={busy} run={run} compact />
-        </div>
-      </div>
-    </Card>
+    </AccountCardLayout>
   )
 }
