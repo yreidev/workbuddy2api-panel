@@ -21,8 +21,8 @@ body:
     id: version
     attributes:
       label: 版本号
-      description: 面板左上角标题旁显示的版本，或者 `wb2api -version` 的输出。
-      placeholder: 1.13.0
+      description: 面板左上角标题旁显示的版本，或者 `wb2api -version` 的完整输出，包括预发布后缀。
+      placeholder: 例如 1.13.2 或 1.14.0-beta.2
     validations:
       required: true
 
@@ -39,11 +39,20 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: environment
+    attributes:
+      label: 系统与构建来源
+      description: 安装或启动问题请写操作系统和 CPU 架构。滚动包、源码或 PR 构建可附镜像标签或提交短 SHA。
+      placeholder: 例如 Windows amd64，GitHub Release 下载
+    validations:
+      required: false
+
   - type: textarea
     id: question
     attributes:
       label: 想做什么、卡在哪
-      description: 想达到什么效果，做到哪一步卡住了，看到的现象是什么。
+      description: 想达到什么效果，做到哪一步卡住了，看到的现象是什么。涉及账号或 API 时，请写产品、地区和客户端入口。
     validations:
       required: true
 

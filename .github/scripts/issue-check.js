@@ -21,14 +21,29 @@ const MAINTAINERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 /** 表单生成的正文按「### 标题」切成 {标题: 内容}：去掉 render 加的代码块，选填没填的 _No response_ 当空 */
 function parseForm(body) {
   const out = {}
-  const parts = (body || '').replace(/\r\n/g, '\n').split(/^### /m).slice(1)
-  for (const p of parts) {
-    const i = p.indexOf('\n')
-    const title = (i < 0 ? p : p.slice(0, i)).trim()
-    let value = (i < 0 ? '' : p.slice(i + 1)).trim()
-    value = value.replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '').trim()
+  let title
+  let lines = []
+  let fence = ''
+  const save = () => {
+    if (!title) return
+    let value = lines.join('\n').trim()
+    value = value.replace(/^(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1\s*$/, '$2').trim()
     out[title] = value === '_No response_' ? '' : value
   }
+  for (const line of (body || '').replace(/\r\n/g, '\n').split('\n')) {
+    if (!fence && line.startsWith('### ')) {
+      save()
+      title = line.slice(4).trim()
+      lines = []
+      continue
+    }
+    lines.push(line)
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (!marker) continue
+    if (!fence) fence = marker[1]
+    else if (marker[1].startsWith(fence) && !marker[2].trim()) fence = ''
+  }
+  save()
   return out
 }
 
@@ -39,7 +54,7 @@ const CHECKS = [
   {
     title: '版本号',
     ok: (v) => /\d+\.\d+\.\d+/.test(v),
-    hint: '**版本号**：面板左上角标题旁显示的版本（比如 1.13.0），或者 `wb2api -version` 的输出；填 latest 查不了',
+    hint: '**版本号**：面板左上角标题旁显示的版本（比如 1.13.2 或 1.14.0-rc.1，保留完整后缀），或者 `wb2api -version` 的输出；填 latest 查不了',
   },
   {
     title: '部署方式',
@@ -49,7 +64,7 @@ const CHECKS = [
   {
     title: '涉及的账号类型',
     ok: (v) => v !== '',
-    hint: '**涉及的账号类型**：出问题的号是国内版还是国际版、个人号还是企业号',
+    hint: '**涉及的账号类型**：写明产品、地区和账号类型；面板或安装问题可选「和账号无关」',
   },
   {
     title: '报错原文和运行日志',
@@ -87,7 +102,13 @@ module.exports = async ({ github, context, core }) => {
 
   if (context.eventName === 'issue_comment') {
     if (comment.user.login !== issue.user.login || !labels.includes(NEED_INFO)) return
-    if (issue.state === 'closed') await github.rest.issues.update({ ...ref, state: 'open' })
+    if (issue.state === 'closed') {
+      const { data: current } = await github.rest.issues.get(ref)
+      if (current.state !== 'closed' || current.state_reason !== 'not_planned' ||
+          current.closed_by?.login !== 'github-actions[bot]' ||
+          ![NEED_INFO, CLOSING].every((name) => current.labels.some((l) => l.name === name))) return
+      await github.rest.issues.update({ ...ref, state: 'open' })
+    }
     await removeLabels([NEED_INFO, CLOSING])
     core.info(`#${issue.number} 作者回复了，摘掉「${NEED_INFO}」${issue.state === 'closed' ? '并重新打开' : ''}`)
     return
@@ -98,7 +119,7 @@ module.exports = async ({ github, context, core }) => {
 
   const missing = missingFields(issue.body)
   const comments = await github.paginate(github.rest.issues.listComments, { ...ref, per_page: 100 })
-  const mine = comments.find((c) => c.user.type === 'Bot' && c.body.startsWith(MARKER))
+  const mine = comments.find((c) => c.user.login === 'github-actions[bot]' && c.body.startsWith(MARKER))
 
   if (missing.length) {
     const body = askBody(missing)

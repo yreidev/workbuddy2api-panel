@@ -1,0 +1,17 @@
+name: main-release
+
+on:
+  push:
+    branches: [main]
+
+# 每次推送的镜像和 Release 共用同一条队列，保留排队中的中间版本。
+concurrency:
+  group: main-publications
+  queue: max
+
+jobs:
+  release:
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/go-binaries.yml

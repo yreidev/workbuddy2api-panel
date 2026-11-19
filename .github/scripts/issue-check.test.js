@@ -27,7 +27,7 @@ test('parseForm 按标题切分，去掉代码块，_No response_ 当空', () =>
   const f = check.parseForm(formBody({ logs: 'line1\n### 不是标题吗' }))
   assert.equal(f['版本号'], '1.13.0')
   assert.equal(f['复现步骤'], '')
-  assert.equal(f['报错原文和运行日志'], 'line1')
+  assert.equal(f['报错原文和运行日志'], 'line1\n### 不是标题吗')
   assert.deepEqual(check.parseForm(''), {})
   assert.deepEqual(check.parseForm('### 只有标题'), { 只有标题: '' })
 })
@@ -48,7 +48,7 @@ test('missingFields', () => {
 })
 
 /** 假的 github 客户端：记下每次调用；comments 是 issue 已有的评论 */
-function fakeGitHub(comments = []) {
+function fakeGitHub(comments = [], closed = { state: 'closed', state_reason: 'not_planned', closed_by: { login: 'github-actions[bot]' }, labels: [{ name: '待补充' }, { name: '即将关闭' }] }) {
   const calls = []
   const rec = (name) => async (args) => { calls.push([name, args]) }
   const listComments = async () => { throw new Error('应走 paginate') }
@@ -58,6 +58,7 @@ function fakeGitHub(comments = []) {
     rest: {
       issues: {
         listComments,
+        get: async (ref) => { calls.push(['get', ref]); return { data: closed } },
         createComment: rec('createComment'),
         updateComment: rec('updateComment'),
         addLabels: rec('addLabels'),
@@ -84,7 +85,7 @@ function issuesEvent({ action = 'opened', body = formBody(), labels = ['bug'], a
 }
 
 const names = (calls) => calls.map(([n]) => n)
-const BOT = { id: 99, user: { type: 'Bot' }, body: '<!-- issue-check -->\n还差下面几项' }
+const BOT = { id: 99, user: { login: 'github-actions[bot]', type: 'Bot' }, body: '<!-- issue-check -->\n还差下面几项' }
 
 test('新开的缺信息：留评论、打待补充', async () => {
   const github = fakeGitHub([{ id: 1, user: { type: 'User' }, body: '<!-- issue-check --> 用户抄的' }])
@@ -151,8 +152,8 @@ test('作者回复：摘掉待补充（有即将关闭也摘）', async () => {
 test('因为没补充被关掉后作者回复：重新打开再摘标签', async () => {
   const github = fakeGitHub()
   await check({ github, context: commentEvent({ state: 'closed', labels: ['bug', '待补充', '即将关闭'] }), core })
-  assert.deepEqual(names(github.calls), ['update', 'removeLabel', 'removeLabel'])
-  assert.deepEqual(github.calls[0][1], { ...repo, issue_number: 6, state: 'open' })
+  assert.deepEqual(names(github.calls), ['get', 'update', 'removeLabel', 'removeLabel'])
+  assert.deepEqual(github.calls[1][1], { ...repo, issue_number: 6, state: 'open' })
 })
 
 test('别人回复、或者没打待补充：不动', async () => {
@@ -160,5 +161,26 @@ test('别人回复、或者没打待补充：不动', async () => {
     const github = fakeGitHub()
     await check({ github, context, core })
     assert.deepEqual(github.calls, [])
+  }
+})
+
+test('维护者手动关闭的问题保持关闭', async () => {
+  for (const [reason, closer] of [['completed', 'github-actions[bot]'], ['not_planned', 'maintainer'], ['duplicate', 'maintainer']]) {
+    const github = fakeGitHub([], { state: 'closed', state_reason: reason, closed_by: { login: closer }, labels: [{ name: '待补充' }, { name: '即将关闭' }] })
+    await check({ github, context: commentEvent({ state: 'closed' }), core })
+    assert.deepEqual(names(github.calls), ['get'])
+  }
+})
+
+test('正式版和预发布的反馈兼容现有表单标题', () => {
+  const { readFileSync } = require('node:fs')
+  const { join } = require('node:path')
+  const form = readFileSync(join(__dirname, '../ISSUE_TEMPLATE/1-bug.yml'), 'utf8')
+  for (const hint of check.missingFields('')) {
+    const title = hint.match(/^\*\*(.*?)\*\*/)[1]
+    assert.ok(form.split('\n').some((line) => line.trim() === 'label: ' + title), title)
+  }
+  for (const version of ['1.14.0', 'v1.14.0-alpha.1', '1.14.0-beta.2', '1.14.0-rc.1']) {
+    assert.deepEqual(check.missingFields(formBody({ version, accounts: 'Qoder 国内（实验）' })), [])
   }
 })

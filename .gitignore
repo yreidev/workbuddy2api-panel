@@ -39,6 +39,7 @@ SPEC.md
 *.md
 !README.md
 !/docs/*.md
+!/.github/pull_request_template.md
 # 给 AI 编程工具看的仓库说明
 !/AGENTS.md
 !/CLAUDE.md

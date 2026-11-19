@@ -2,39 +2,21 @@ name: go-binaries
 
 # 可运行二进制与镜像的构建/发布：
 #   - 先构建面板前端（web/ → internal/panel/dist，含类型检查 / ESLint / 单元测试），产物供后续任务 go:embed；
-#     顺带跑 .github/scripts 的测试（issue 信息检查脚本）
+#   - 所有 PR 先检查提交信息和仓库自动化脚本，纯说明和反馈模板走轻量检查。
 #   - commits 按 docs/commits.md 检查这次推送的提交信息；test 跑 gofmt / go vet / golangci-lint / go test。
 #     二进制、Release 和镜像（docker-ghcr.yml）都排在这两项之后，检查没过不发布
 #   - PR        → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
-#   - push main → 同上 + 覆盖固定的「最新构建」Release（tag latest 跟随 main 移动）；
+#   - push main → 正式版本更新固定的「最新构建」Release，预发布只出带版本号的包；
 #                 这次推送升了版本号（appVersion 对应的 vX.Y.Z 标签还不存在）时，再打标签、建正式 Release
 # 版本号规则见 docs/releasing.md：有使用者看得到的改动就在推送前升版本号、写好 docs/CHANGELOG.md，
 # 不手动打 tag。发布纪律：-s -w 剥离、二进制必须带上这一版的更新日志与面板前端。
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
-    paths:
-      - "go.mod"
-      - "go.sum"
-      - "*.go"
-      - "cmd/**"
-      - "internal/**"
-      - "docs/CHANGELOG.md"
-      - "config.example.json"
-      - "web/**"
-      - "Dockerfile"
-      - ".dockerignore"
-      - "scripts/**"
-      - ".githooks/**"
-      - "*.sh"
-      - ".github/scripts/**"
-      - ".github/workflows/go-binaries.yml"
-      - ".github/workflows/docker-ghcr.yml"
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: validation-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -43,6 +25,8 @@ permissions:
 jobs:
   # 面板前端：构建一次，产物上传给 test / build 共用（dist 不进版本库）
   web:
+    needs: commits
+    if: needs.commits.outputs.full == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -56,7 +40,6 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run build   # 类型检查 + ESLint（零警告）+ 单元测试 + 构建到 ../internal/panel/dist
-      - run: node --test '../.github/scripts/*.test.js'   # issue 信息检查脚本（issue-check.yml 用）
       - uses: actions/upload-artifact@v4
         with:
           name: panel-dist
@@ -66,11 +49,37 @@ jobs:
   # 提交信息：只沿 main 的第一父提交查，合并进来的上游提交不查。强推后推送前的提交已不在历史里，
   # 就退到最近的版本标签之后再查；新建分支或找不到标签时只查最新一个
   commits:
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: node --test '.github/scripts/*.test.js'
+      - name: 判断 PR 是否需要构建发布产物
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          full=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            full=false
+            git diff --name-only --no-renames -z "$BASE...$HEAD" > "$RUNNER_TEMP/pr-paths"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                docs/CHANGELOG.md) ;;
+                docs/*|.github/ISSUE_TEMPLATE/*|.github/pull_request_template.md|.github/scripts/issue-check*.js|.github/workflows/issue-*.yml) continue ;;
+              esac
+              full=true
+              break
+            done < "$RUNNER_TEMP/pr-paths"
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
       - name: 检查提交信息
         env:
           BEFORE: ${{ github.event.before }}
@@ -93,8 +102,15 @@ jobs:
   test:
     needs: [web, commits]
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.v }}
     steps:
       - uses: actions/checkout@v4
+      - name: 取源码版本号
+        id: ver
+        run: |
+          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
+          echo "v=$V" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           name: panel-dist
@@ -118,17 +134,46 @@ jobs:
           version: v2.14.0
       # 前端产物已就位：面板包的 TestBuiltDistIsServable 会真实校验页面引用的每个资源
       - run: go test ./...
+      - name: 固定传输依赖的 HPACK 回归
+        working-directory: third_party/req
+        run: go test ./...
 
-  # 镜像：检查通过后才构建推送（PR 只构建不推送），见 docker-ghcr.yml
+  windows-persistence:
+    needs: commits
+    if: needs.commits.outputs.full == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 验证 Windows 平台账号导入、刷新与账本恢复
+        run: go test -count=1 -run '^(TestRefreshSingleFlightAndRecoveryGuard|TestActivityMigratesAndRetriesWithoutReplaying|TestConcurrentActivitySurvivesRestart)$' ./internal/providers
+      - name: 验证 Windows 密钥备份排他发布与回退恢复
+        run: go test -count=1 -run '^(TestBackupPublicationNeverReplacesWinner|TestDowngradedV1CanMigrateAgain|TestLegacyRecoveryDoesNotRestoreRevokedKeys)$' ./internal/apikeys
+
+  # 只有 main 推送在发布队列中取得 GHCR 写权限。PR 和手动运行验证相同 Dockerfile。
+  image-check:
+    if: github.event_name != 'push'
+    needs: [build, test]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docker-ghcr.yml
+    with:
+      version: ${{ needs.test.outputs.version }}
+
   image:
-    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, test]
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/docker-ghcr.yml
+    with:
+      version: ${{ needs.test.outputs.version }}
 
   build:
-    needs: [web, test]
+    needs: [web, test, windows-persistence]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -149,10 +194,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: 取源码版本号
-        id: ver
-        run: echo "v=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)" >> "$GITHUB_OUTPUT"
-
       - name: 构建（剥离符号，对齐本地发布口径）
         env:
           GOOS: ${{ matrix.goos }}
@@ -165,11 +206,11 @@ jobs:
       - name: 断言二进制版本
         run: |
           BIN="wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}"
-          if ! grep -qaF "## [${{ steps.ver.outputs.v }}]" "$BIN"; then
-            echo "::error::binary does not embed the changelog entry for ${{ steps.ver.outputs.v }}"
+          if ! grep -qaF "## [${{ needs.test.outputs.version }}]" "$BIN"; then
+            echo "::error::binary does not embed the changelog entry for ${{ needs.test.outputs.version }}"
             exit 1
           fi
-          echo "version assert OK: ${{ steps.ver.outputs.v }}"
+          echo "version assert OK: ${{ needs.test.outputs.version }}"
 
       # 面板断言：发布的二进制必须带面板前端（dist 为空时 go build 也能通过，只会显示「前端还没有构建」）
       - name: 断言二进制包含面板前端
@@ -183,15 +224,15 @@ jobs:
 
       - name: 打包（windows=zip，其余=tar.gz；许可证随包分发）
         run: |
-          V="${{ steps.ver.outputs.v }}"
+          V="${{ needs.test.outputs.version }}"
           case "${{ matrix.goos }}" in
             windows)
               NAME="wb2api-panel-v${V}-windows-amd64.zip"
-              zip -q "$NAME" wb2api.exe config.example.json README.md LICENSE NOTICE
+              zip -q "$NAME" wb2api.exe config.example.json README.md LICENSE NOTICE internal/providers/NOTICE internal/providers/cosy/NOTICE
               ;;
             *)
               NAME="wb2api-panel-v${V}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-              tar czf "$NAME" wb2api config.example.json README.md LICENSE NOTICE
+              tar czf "$NAME" wb2api config.example.json README.md LICENSE NOTICE internal/providers/NOTICE internal/providers/cosy/NOTICE
               ;;
           esac
           echo "name=$NAME" >> "$GITHUB_ENV"
@@ -206,51 +247,44 @@ jobs:
   # 文件名去掉版本号（wb2api-panel-linux-amd64.tar.gz），releases/download/latest/<文件名> 链接长期不变。
   # 「Latest」标记留给正式版本的 Release，这里不抢。
   rolling:
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [release, test]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(needs.test.outputs.version, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # 连续推送时排队执行，不并发改同一个 Release
-    concurrency:
-      group: rolling-release
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - name: 跳过已过时的构建
-        id: fresh
-        run: |
-          HEAD=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [[ "$HEAD" != "$GITHUB_SHA" ]]; then
-            echo "main 已前进到 $HEAD，本次（$GITHUB_SHA）不再覆盖，留给更新的运行"
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          fi
+        with:
+          fetch-depth: 0
+      - name: 核对滚动标签
+        id: policy
+        run: bash .github/scripts/release-policy.sh "${{ needs.test.outputs.version }}"
       - uses: actions/download-artifact@v4
-        if: steps.fresh.outputs.ok == 'true'
+        if: steps.policy.outputs.rolling == 'true'
         with:
           pattern: wb2api-panel-*
           path: dist
           merge-multiple: true
       - name: 去掉文件名里的版本号 + checksums
-        if: steps.fresh.outputs.ok == 'true'
+        if: steps.policy.outputs.rolling == 'true'
         run: |
           cd dist
-          for f in wb2api-panel-v*; do mv "$f" "wb2api-panel-${f#wb2api-panel-v*-}"; done
+          prefix="wb2api-panel-v${{ needs.test.outputs.version }}-"
+          for f in "$prefix"*; do mv "$f" "wb2api-panel-${f#"$prefix"}"; done
           sha256sum *.zip *.tar.gz > checksums.txt
           ls -la
       - name: 移动 latest 标签并覆盖 Release
-        if: steps.fresh.outputs.ok == 'true'
+        if: steps.policy.outputs.rolling == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
+          V="${{ needs.test.outputs.version }}"
           SHORT=${GITHUB_SHA::7}
           BUILT=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
           TITLE="最新构建 v${V}（${SHORT}）"
           NOTES=$(printf '%s\n' \
-            "随 main 分支自动更新的构建，与 Docker 镜像 \`latest\` 同步，下一次推送会覆盖这里的文件。正式版本见带版本号的 Release。" \
+            "随 main 分支正式版本自动更新的构建，与 Docker 镜像 \`latest\` 同步，下一次正式版本构建会覆盖这里的文件。正式版本见带版本号的 Release。" \
             "" \
             "- 版本：\`${V}\`" \
             "- 提交：https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
@@ -259,8 +293,8 @@ jobs:
           git tag -f latest "$GITHUB_SHA"
           git push -f origin refs/tags/latest
           if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "$TITLE" --notes "$NOTES" --prerelease=false --latest=false
             gh release upload latest dist/* --clobber
+            gh release edit latest --title "$TITLE" --notes "$NOTES" --draft=false --prerelease=false --latest=false
           else
             gh release create latest dist/* --title "$TITLE" --notes "$NOTES" --latest=false --verify-tag
           fi
@@ -268,42 +302,30 @@ jobs:
   # 仅 push main：appVersion 对应的 vX.Y.Z 标签还不存在（这次推送升了版本号）时，打标签并建正式 Release，
   # 说明取 docs/CHANGELOG.md 里这一版的条目，附五平台包（文件名带版本号）和 checksums。标签已在更早的提交上
   # （版本号没变）就跳过。不受 rolling 的「过时跳过」影响：每个版本都要有自己的 Release。
-  # 上一次发版中途失败、标签没打上时，下一次推送会补发（标签落在那次推送的提交上）。
+  # 同一提交的重跑可补齐产物；较早的重新运行不会把 Latest 指到旧版本。
   release:
-    needs: build
+    needs: [build, test, image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    concurrency:
-      group: version-release
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # 取已有的版本标签，算对比链接
-      - name: 判断是否新版本
-        id: ver
-        run: |
-          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
-          echo "v=$V" >> "$GITHUB_OUTPUT"
-          TAGGED=$(git ls-remote origin "refs/tags/v$V" "refs/tags/v$V^{}" | tail -1 | cut -f1)
-          if [[ -n "$TAGGED" && "$TAGGED" != "$GITHUB_SHA" ]]; then
-            echo "v$V 已在 $TAGGED 发布，这次推送没有升版本号，跳过"
-            echo "new=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "new=true" >> "$GITHUB_OUTPUT"
-          fi
+      - name: 核对版本标签与发布渠道
+        id: policy
+        run: bash .github/scripts/release-policy.sh "${{ needs.test.outputs.version }}"
       - uses: actions/download-artifact@v4
-        if: steps.ver.outputs.new == 'true'
+        if: steps.policy.outputs.versioned == 'true'
         with:
           pattern: wb2api-panel-*
           path: dist
           merge-multiple: true
       - name: 本版说明 + checksums
-        if: steps.ver.outputs.new == 'true'
+        if: steps.policy.outputs.versioned == 'true'
         run: |
-          V="${{ steps.ver.outputs.v }}"
+          V="${{ needs.test.outputs.version }}"
           # 取「## [V]」到下一个「## 」之间的内容；指向 docs/ 里其他文档的相对链接补成这一版标签下的地址
           awk -v h="## [$V]" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' docs/CHANGELOG.md \
             | sed -E "s#\]\(([^):]+\.md[^)]*)\)#](https://github.com/${GITHUB_REPOSITORY}/blob/v${V}/docs/\1)#g" > notes.md
@@ -312,12 +334,16 @@ jobs:
             exit 1
           fi
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          if [[ "$V" == *-* ]]; then
+          if [[ "${{ steps.policy.outputs.prerelease }}" == true ]]; then
             DOCKER="\`${IMAGE}:${V}\`"
-          else
+          elif [[ "${{ steps.policy.outputs.rolling }}" == true ]]; then
             DOCKER="\`${IMAGE}:${V}\`（同一镜像还有 \`${V%.*}\`、\`${V%%.*}\` 标签）"
+          else
+            DOCKER="\`${IMAGE}:${V}\`"
           fi
-          PREV=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "v$V" | head -1 || true)
+          match=(--match 'v[0-9]*')
+          if [[ "${{ steps.policy.outputs.prerelease }}" == false ]]; then match+=(--exclude '*-*'); fi
+          PREV=$(git describe --tags --first-parent --abbrev=0 "${match[@]}" "$GITHUB_SHA^" 2>/dev/null || true)
           {
             echo
             echo "---"
@@ -331,16 +357,9 @@ jobs:
           } >> notes.md
           cat notes.md
           cd dist && sha256sum *.zip *.tar.gz > checksums.txt && ls -la
-      - name: 打标签并建 Release
-        if: steps.ver.outputs.new == 'true'
+      - name: 发布版本或恢复未完成的上传
+        if: steps.policy.outputs.versioned == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          V="${{ steps.ver.outputs.v }}"
-          if gh release view "v$V" >/dev/null 2>&1; then
-            gh release upload "v$V" dist/* --clobber
-          elif [[ "$V" == *-* ]]; then
-            gh release create "v$V" dist/* --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md --prerelease --latest=false
-          else
-            gh release create "v$V" dist/* --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md --latest
-          fi
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/publish-version.sh "${{ needs.test.outputs.version }}" "${{ steps.policy.outputs.prerelease }}" "${{ steps.policy.outputs.rolling }}"

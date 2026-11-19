@@ -19,6 +19,10 @@
 | 功能建议 | `enhancement` | 想解决什么问题、希望怎么做 |
 | 使用求助 | `question` | 版本号、部署方式、想做什么卡在哪 |
 
+版本按 `wb2api -version` 的完整输出填写，包括 `-alpha.N`、`-beta.N`、`-rc.N`。问题反馈可以选择 WorkBuddy、Trae Work、Trae Code、Qoder 或「和账号无关」。安装问题可补操作系统与 CPU 架构，源码或滚动构建可附提交短 SHA。
+
+创建 PR 时，模板会提示填写改动、验证结果及升级影响。贡献者按实际验证范围填写，维护者据此核对 CI 和文档。[提交规则](commits.md)
+
 GitHub 只拦空着的必填项，填了 `latest`、`无` 这类等于没填的内容拦不住，由下面的信息检查补上。
 
 ## 标签
@@ -41,10 +45,10 @@ GitHub 只拦空着的必填项，填了 `latest`、`无` 这类等于没填的�
 
 - 带 `bug` 的 issue 新开或改了正文时，查版本号（要有 x.y.z，`latest` 不算）、部署方式、账号类型、报错原文和运行日志（只写「无」「没有」不算）。缺了就留一条机器人评论点名要补什么，打上「待补充」；之后再查只更新这一条评论，不重复留言。
 - 补齐后，那条评论改成「信息齐了」，摘掉「待补充」和「即将关闭」。
-- 作者在打着「待补充」的 issue 下回复：直接摘掉这两个标签，停止计时；issue 已经因为超期被关掉的，自动重新打开。
+- 作者在打着「待补充」的 issue 下回复：直接摘掉这两个标签，停止计时；GitHub Actions 因超期关闭、仍带两个等待标签的问题会自动重新打开。维护者手动关闭的问题保留关闭状态。
 - 维护者（仓库所有者、成员、协作者）自己开的 issue 不查，但手动打的「待补充」照样计时。
 
-**超期关闭**（`.github/workflows/issue-stale.yml`，每天 UTC 02:17 跑一次，也可以在 Actions 页手动触发）：
+**超期关闭**（`.github/workflows/issue-stale.yml`，每天台湾时间 10:17 跑一次，也可以在 Actions 页手动触发）：
 
 - 只管打着「待补充」的 issue。从最后一次有人回复或改动算起，11 天没动静打「即将关闭」并留言提醒，再过 3 天没动静就以「不计划」关闭，留言告诉对方补上信息回复一下会自动重新打开。
 - 期间任何人回复或改动都重新计时，下一次运行时摘掉「即将关闭」。
@@ -75,6 +79,6 @@ GitHub 只拦空着的必填项，填了 `latest`、`无` 这类等于没填的�
 
 ## 改规则要动哪些地方
 
-- **问题反馈的必填项**：`.github/ISSUE_TEMPLATE/1-bug.yml` 和 `.github/scripts/issue-check.js` 的 `CHECKS` 一起改，检查按表单里的标题文字找对应的项，两边的标题要一字不差；再改 `issue-check.test.js` 和 README 的[反馈问题](../README.md#反馈问题)。测试命令：`node --test '.github/scripts/*.test.js'`（CI 的前端任务也会跑）。
+- **问题反馈的必填项**：`.github/ISSUE_TEMPLATE/1-bug.yml` 和 `.github/scripts/issue-check.js` 的 `CHECKS` 一起改，检查按表单里的标题文字找对应的项，两边的标题要一字不差；再改 `issue-check.test.js` 和 README 的[反馈问题](../README.md#反馈问题)。测试命令：`node --test '.github/scripts/*.test.js'`（CI 的提交与仓库脚本检查也会跑）。
 - **天数**：`issue-stale.yml` 的 `days-before-issue-stale`（打「即将关闭」）与 `days-before-issue-close`（再过几天关），两者相加是总天数；同步改两条留言、机器人评论里的「14 天」、两个标签的说明、README 和本文。
 - **标签名**：「待补充」「即将关闭」写在 `issue-check.js` 开头和 `issue-stale.yml` 里，改名要连仓库里的标签一起改。

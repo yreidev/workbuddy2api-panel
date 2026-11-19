@@ -1,0 +1,6 @@
+# actionlint 1.7.12 的解析器尚未收录 GitHub 已支持的 concurrency.queue。
+# 仅豁免发布入口的这一条字段误报；队列值由仓库测试核对。
+paths:
+  .github/workflows/main-release.yml:
+    ignore:
+      - '^unexpected key "queue" for "concurrency" section\.'

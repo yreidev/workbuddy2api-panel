@@ -2,14 +2,18 @@ name: docker-ghcr
 
 # 镜像（只构建 linux/amd64）构建并发布到 ghcr.io。不单独触发，由 go-binaries 在 gofmt / go vet /
 # golangci-lint / go test 都通过后调用，检查没过的提交不出镜像；触发条件与并发组都跟随 go-binaries：
-#   - push 到 main / 手动触发 → 构建并推送
-#   - PR → 仅构建验证，不推送
-# 镜像标签：每次推送都有 latest + main + sha-xxxxxxx；这次推送升了版本号（见 docs/releasing.md）时
-# 再加 1.2.3 / 1.2 / 1（预发布版本只加 1.2.3-rc.1 这一个）
+#   - push 到 main → 按渠道构建发布
+#   - PR / 手动运行 → 仅构建验证
+# 正式版在默认分支更新 latest、main 和 sha 标签，升版本时再打完整版本、主次版本和主版本标签。
+# 预发布只推完整的候选版标签。
 # 只构建 amd64：部署机都是 x64；arm64 要在 QEMU 里模拟编译，曾占整次构建的大部分时间（约 5 分钟）。
 # 这里不设并发组：被调用的工作流里 github.workflow 是调用方的名字，和调用方同组会互相卡住。
 on:
   workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
 
 env:
   REGISTRY: ghcr.io
@@ -19,32 +23,19 @@ env:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # appVersion 对应的 vX.Y.Z 标签还不存在、或刚由 go-binaries 打在这次提交上，说明这次推送升了版本号，
-      # 镜像才打版本标签；版本号没变的推送不碰已发布版本的镜像标签。
-      - name: 版本标签
-        id: ver
-        if: github.event_name != 'pull_request'
-        run: |
-          V=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
-          TAGGED=$(git ls-remote origin "refs/tags/v$V" "refs/tags/v$V^{}" | tail -1 | cut -f1)
-          if [[ -z "$TAGGED" || "$TAGGED" == "$GITHUB_SHA" ]]; then
-            echo "v=$V" >> "$GITHUB_OUTPUT"
-          else
-            echo "v$V 已在 $TAGGED 发布，这次不打版本标签"
-          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 核对版本标签与发布渠道
+        id: policy
+        run: bash .github/scripts/release-policy.sh "${{ inputs.version }}"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
-        if: github.event_name != 'pull_request'
+        if: steps.policy.outputs.rolling == 'true' || steps.policy.outputs.versioned == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -56,20 +47,21 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=semver,pattern={{version}},value=${{ steps.ver.outputs.v }},enable=${{ steps.ver.outputs.v != '' }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.v }},enable=${{ steps.ver.outputs.v != '' }}
-            type=semver,pattern={{major}},value=${{ steps.ver.outputs.v }},enable=${{ steps.ver.outputs.v != '' }}
-            type=sha,format=short
+            type=raw,value=latest,enable=${{ steps.policy.outputs.rolling == 'true' }}
+            type=raw,value=main,enable=${{ steps.policy.outputs.rolling == 'true' }}
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ steps.policy.outputs.versioned == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ steps.policy.outputs.versioned == 'true' && steps.policy.outputs.rolling == 'true' }}
+            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ steps.policy.outputs.versioned == 'true' && steps.policy.outputs.rolling == 'true' }}
+            type=sha,format=short,enable=${{ steps.policy.outputs.rolling == 'true' || (steps.policy.outputs.versioned != 'true' && github.event_name != 'push') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ steps.policy.outputs.rolling == 'true' || steps.policy.outputs.versioned == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

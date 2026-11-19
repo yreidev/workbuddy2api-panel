@@ -19,7 +19,7 @@ body:
     id: scenario
     attributes:
       label: 想解决什么问题
-      description: 你在什么场景下、遇到了什么不方便。说清楚场景比直接给方案更有用。
+      description: 你在什么场景下、遇到了什么不方便。涉及特定产品、地区、客户端或发布渠道时，请注明。
     validations:
       required: true
 
