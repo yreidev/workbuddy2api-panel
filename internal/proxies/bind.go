@@ -492,6 +492,39 @@ func (r *Registry) ProxyName(uid string) string {
 	return ""
 }
 
+// CheckProxy 轻量检查单条代理的存在与可用性（平台账号热路径与排队重检用，避免全量构建 View）。
+// 不存在时 code="proxy_not_found"；已到期或测出不通时 code="proxy_not_available"；可用时 usable=true。
+func (r *Registry) CheckProxy(id string) (name, url string, usable bool, code string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	px := r.proxyLocked(id)
+	if px == nil {
+		return "", "", false, "proxy_not_found"
+	}
+	if !r.usableLocked(px, r.now()) {
+		return px.Name, px.URL, false, "proxy_not_available"
+	}
+	return px.Name, px.URL, true, ""
+}
+
+// MarkDue 将指定代理标记为尽快重测（例如新绑平台账号到曾因别域探测失败而标 down 的代理）。
+func (r *Registry) MarkDue(id string) {
+	if id == "" {
+		return
+	}
+	r.mu.Lock()
+	px := r.proxyLocked(id)
+	wake := false
+	if px != nil && !expired(px, r.now()) {
+		r.due[px.ID] = true
+		wake = true
+	}
+	r.mu.Unlock()
+	if wake {
+		r.wake()
+	}
+}
+
 // PoolByName 按名字或 ID 找池（命令行工具 -pool 参数用），找不到返回 ""。
 func (r *Registry) PoolByName(s string) string {
 	r.mu.Lock()

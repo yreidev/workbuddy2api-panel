@@ -18,12 +18,16 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
+
+// traeCallbackAddr 本地 Trae OAuth 回调监听地址；测试可替换为 127.0.0.1:0。
+var traeCallbackAddr = "127.0.0.1:1024"
 
 type Login struct {
 	ProxyID       string
@@ -36,9 +40,9 @@ type Login struct {
 	verifier      string
 	credential    Credential
 	lastPoll      time.Time
-	callback      *http.Server
 	localCallback bool
 	deviceToken   string
+	done          atomic.Bool
 }
 
 type LoginView struct {
@@ -83,52 +87,207 @@ func (m *Manager) StartLogin(target, proxyID string) (LoginView, error) {
 		q := url.Values{"login_version": {"1"}, "auth_from": {"trae"}, "login_channel": {"native_ide"}, "plugin_version": {traePluginVersion}, "auth_type": {"local"}, "client_id": {l.credential.ClientID}, "redirect": {"0"}, "login_trace_id": {l.State}, "auth_callback_url": {"http://127.0.0.1:1024/authorize"}, "machine_id": {l.credential.MachineID}, "device_id": {l.credential.DeviceID}, "x_device_id": {l.credential.DeviceID}, "x_machine_id": {l.credential.MachineID}, "x_device_brand": {""}, "x_device_type": {"PC"}, "x_os_version": {"Linux"}, "x_app_version": {traeVersion}, "x_app_type": {"stable"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
 		l.URL = "https://www.trae.cn/authorization?" + q.Encode()
 	}
+	var expired []*Login
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	now := time.Now()
 	for id, v := range m.logins {
-		if time.Now().After(v.ExpiresAt) {
+		if now.After(v.ExpiresAt) {
 			delete(m.logins, id)
+			expired = append(expired, v)
 		}
 	}
 	m.logins[l.State] = l
 	if !strings.HasPrefix(target, "qoder:") {
-		listener, err := net.Listen("tcp4", "127.0.0.1:1024")
-		if err == nil {
-			mux := http.NewServeMux()
-			server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-			l.callback = server
-			l.localCallback = true
-			mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
-				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-				defer cancel()
-				_, err := m.CompleteLogin(ctx, l.State, "http://127.0.0.1:1024"+r.URL.RequestURI())
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				if err != nil {
-					w.WriteHeader(400)
-					_, _ = w.Write([]byte("授权未完成，请回到面板检查授权结果。"))
-					return
-				}
-				_, _ = w.Write([]byte("授权已保存，请返回管理面板。"))
-			})
-			go func() {
-				if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Printf("[providers] 本地授权回调服务: %v", err)
-				}
-			}()
-			go func() {
-				timer := time.NewTimer(time.Until(l.ExpiresAt))
-				defer timer.Stop()
-				<-timer.C
-				if err := server.Close(); err != nil {
-					log.Printf("[providers] 关闭本地授权回调: %v", err)
-				}
-			}()
-		} else {
-			log.Printf("[providers] 本地授权端口 1024 不可用，使用面板粘贴回调")
+		l.localCallback = m.ensureTraeCallbackLocked()
+	}
+	view := loginView(l)
+	m.mu.Unlock()
+	for _, v := range expired {
+		zeroLogin(v)
+	}
+	return view, nil
+}
+
+func zeroLogin(l *Login) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.credential = Credential{}
+	l.verifier = ""
+	l.deviceToken = ""
+	l.mu.Unlock()
+}
+
+func extractTraeTrace(values url.Values) string {
+	for _, key := range []string{"loginTraceID", "loginTraceId", "login_trace_id", "state"} {
+		if v := values.Get(key); v != "" {
+			return v
 		}
 	}
-	return loginView(l), nil
+	return ""
 }
+
+// ensureTraeCallbackLocked 在 Manager 级复用单一本地 127.0.0.1:1024 回调服务，
+// 按 loginTraceID/state 分发到对应授权会话，避免连续发起登录冲突与 15m timer 泄漏。
+func (m *Manager) ensureTraeCallbackLocked() bool {
+	if m.callbackServer != nil {
+		return true
+	}
+	listener, err := net.Listen("tcp4", traeCallbackAddr)
+	if err != nil {
+		log.Printf("[providers] 本地授权端口 %s 不可用，使用面板粘贴回调", traeCallbackAddr)
+		return false
+	}
+	addr := listener.Addr().String()
+	mux := http.NewServeMux()
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	stop := make(chan struct{})
+	m.callbackServer = server
+	m.callbackStop = stop
+	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		state := extractTraeTrace(r.URL.Query())
+		_, err := m.CompleteLogin(ctx, state, "http://"+addr+r.URL.RequestURI())
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if err != nil {
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte("授权未完成，请回到面板检查授权结果。"))
+			return
+		}
+		_, _ = w.Write([]byte("授权已保存，请返回管理面板。"))
+	})
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[providers] 本地授权回调服务: %v", err)
+		}
+	}()
+	go m.watchTraeCallback(server, stop)
+	return true
+}
+
+func (m *Manager) watchTraeCallback(server *http.Server, stop <-chan struct{}) {
+	for {
+		var latest time.Time
+		var expired []*Login
+		m.mu.Lock()
+		if m.callbackServer != server {
+			m.mu.Unlock()
+			return
+		}
+		now := time.Now()
+		for id, v := range m.logins {
+			if now.After(v.ExpiresAt) {
+				delete(m.logins, id)
+				expired = append(expired, v)
+				continue
+			}
+			if !strings.HasPrefix(v.Target, "qoder:") && !v.done.Load() && v.ExpiresAt.After(latest) {
+				latest = v.ExpiresAt
+			}
+		}
+		if latest.IsZero() {
+			m.callbackServer = nil
+			m.callbackStop = nil
+			m.mu.Unlock()
+			for _, v := range expired {
+				zeroLogin(v)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("[providers] 关闭本地授权回调: %v", err)
+			}
+			return
+		}
+		m.mu.Unlock()
+		for _, v := range expired {
+			zeroLogin(v)
+		}
+		wait := time.Until(latest)
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-stop:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (m *Manager) detachIdleCallbackLocked() *http.Server {
+	if m.callbackServer == nil {
+		return nil
+	}
+	now := time.Now()
+	for _, v := range m.logins {
+		if !strings.HasPrefix(v.Target, "qoder:") && !v.done.Load() && !now.After(v.ExpiresAt) {
+			return nil
+		}
+	}
+	server := m.callbackServer
+	m.callbackServer = nil
+	if m.callbackStop != nil {
+		close(m.callbackStop)
+		m.callbackStop = nil
+	}
+	return server
+}
+
+func (m *Manager) finishLoginState(state string, remove bool) {
+	m.mu.Lock()
+	if remove {
+		delete(m.logins, state)
+	}
+	server := m.detachIdleCallbackLocked()
+	m.mu.Unlock()
+	if server != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("[providers] 停止本地授权回调: %v", err)
+			}
+		}()
+	}
+}
+
+// Close 优雅关闭本地授权回调服务并清理所有进行中的授权敏感状态。
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pending := make([]*Login, 0, len(m.logins))
+	for id, v := range m.logins {
+		pending = append(pending, v)
+		delete(m.logins, id)
+	}
+	server := m.callbackServer
+	m.callbackServer = nil
+	if m.callbackStop != nil {
+		close(m.callbackStop)
+		m.callbackStop = nil
+	}
+	m.mu.Unlock()
+	for _, v := range pending {
+		zeroLogin(v)
+	}
+	if server == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) CompleteLogin(ctx context.Context, state, callback string) (LoginView, error) {
 	m.mu.Lock()
 	l := m.logins[state]
@@ -136,6 +295,12 @@ func (m *Manager) CompleteLogin(ctx context.Context, state, callback string) (Lo
 	if l == nil {
 		return LoginView{}, errors.New("授权会话不存在或已过期")
 	}
+	var releaseCallback, removeState bool
+	defer func() {
+		if releaseCallback {
+			m.finishLoginState(state, removeState)
+		}
+	}()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	defer func() {
@@ -145,19 +310,13 @@ func (m *Manager) CompleteLogin(ctx context.Context, state, callback string) (Lo
 		l.credential = Credential{}
 		l.verifier = ""
 		l.deviceToken = ""
-		if l.callback != nil {
-			callbackServer := l.callback
-			l.callback = nil
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := callbackServer.Shutdown(ctx); err != nil {
-					log.Printf("[providers] 停止本地授权回调: %v", err)
-				}
-			}()
-		}
+		releaseCallback = true
 	}()
 	if time.Now().After(l.ExpiresAt) {
+		l.credential = Credential{}
+		l.verifier = ""
+		l.deviceToken = ""
+		releaseCallback, removeState = true, true
 		return LoginView{}, errors.New("授权已过期，请重新开始")
 	}
 	if l.AccountID != "" {
@@ -246,16 +405,7 @@ func (m *Manager) CompleteLogin(ctx context.Context, state, callback string) (Lo
 			return LoginView{}, errors.New("授权回调地址格式不对")
 		}
 		values := u.Query()
-		trace := values.Get("loginTraceID")
-		if trace == "" {
-			trace = values.Get("loginTraceId")
-		}
-		if trace == "" {
-			trace = values.Get("login_trace_id")
-		}
-		if trace == "" {
-			trace = values.Get("state")
-		}
+		trace := extractTraeTrace(values)
 		if trace != l.State {
 			return LoginView{}, errors.New("授权回调不属于本次登录")
 		}
@@ -303,6 +453,7 @@ func (m *Manager) CompleteLogin(ctx context.Context, state, callback string) (Lo
 		return LoginView{}, fmt.Errorf("%s 保存授权账号: %w", l.Target, err)
 	}
 	l.AccountID = id
+	l.done.Store(true)
 	return loginView(l), nil
 }
 func qoderSite(target string) (string, string, string) {

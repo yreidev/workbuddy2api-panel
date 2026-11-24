@@ -70,83 +70,112 @@ func quotaStatus(a Account, rt *runtime) *QuotaStatus {
 // Quota 按账号单飞，自动查询缓存一分钟；force 仅跳过已完成的缓存。
 // 查询在途期间禁止导入、改代理和删除，并复用同一令牌刷新与落盘保护。
 func (m *Manager) Quota(ctx context.Context, id string, force bool) (QuotaStatus, error) {
-	m.mu.Lock()
-	rt := m.running[id]
-	if rt == nil {
-		m.mu.Unlock()
-		return QuotaStatus{}, os.ErrNotExist
-	}
-	var account Account
-	for _, a := range m.data.Accounts {
-		if a.ID == id {
-			account = a
-			break
+	for {
+		m.mu.Lock()
+		rt := m.running[id]
+		if rt == nil {
+			m.mu.Unlock()
+			return QuotaStatus{}, os.ErrNotExist
 		}
-	}
-	if rt.importing {
-		m.mu.Unlock()
-		return QuotaStatus{}, errors.New("账号正在导入凭证，请稍后查询额度")
-	}
-	if done := rt.quotaDone; done != nil {
-		m.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return QuotaStatus{}, ctx.Err()
-		case <-done:
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			return *rt.quotaStatus, nil
-		}
-	}
-	if cached := quotaStatus(account, rt); !force && cached != nil && time.Since(cached.CheckedAt) < time.Minute {
-		m.mu.Unlock()
-		return *cached, nil
-	}
-	rt.quotaDone = make(chan struct{})
-	rt.inFlight++
-	m.mu.Unlock()
-
-	target := account.Targets[0]
-	ctx, err := m.route(ctx, account.ProxyID)
-	var snapshot QuotaSnapshot
-	if err == nil {
-		var credential Credential
-		credential, err = m.credential(ctx, id, target)
-		if err == nil {
-			adapter, ok := m.adapters[strings.Split(target, ":")[0]].(quotaAdapter)
-			if !ok {
-				err = errors.New("该平台尚未接入官方额度查询")
-			} else {
-				snapshot, err = adapter.Quota(ctx, target, credential)
-			}
-		}
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	status := QuotaStatus{Snapshot: account.Quota, CheckedAt: time.Now()}
-	if err == nil {
-		snapshot.FetchedAt = status.CheckedAt
-		for i := range m.data.Accounts {
-			if m.data.Accounts[i].ID == id {
-				m.data.Accounts[i].Quota = &snapshot
-				if err = m.saveLocked(); err != nil {
-					m.data.Accounts[i].Quota = account.Quota
-				} else {
-					status.Snapshot = &snapshot
-				}
+		var account Account
+		for _, a := range m.data.Accounts {
+			if a.ID == id {
+				account = a
 				break
 			}
 		}
+		if rt.importing {
+			m.mu.Unlock()
+			return QuotaStatus{}, errors.New("账号正在导入凭证，请稍后查询额度")
+		}
+		if flight := rt.quotaFlight; flight != nil {
+			m.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return QuotaStatus{}, ctx.Err()
+			case <-flight.done:
+				if err := ctx.Err(); err != nil {
+					return QuotaStatus{}, err
+				}
+				if flight.ownerCanceled {
+					// 发起者取消时由仍在等待的调用者接手，避免把取消错误写进缓存。
+					continue
+				}
+				return flight.status, nil
+			}
+		}
+		if cached := quotaStatus(account, rt); !force && cached != nil && time.Since(cached.CheckedAt) < time.Minute {
+			m.mu.Unlock()
+			return *cached, nil
+		}
+		flight := &quotaFlight{done: make(chan struct{}), status: QuotaStatus{Snapshot: account.Quota, CheckedAt: time.Now(), Error: "查询账号额度异常退出"}}
+		rt.quotaFlight = flight
+		rt.inFlight++
+		m.mu.Unlock()
+
+		var completed bool
+		var status QuotaStatus
+		func() {
+			defer func() {
+				m.mu.Lock()
+				if rt.quotaFlight == flight {
+					rt.quotaFlight = nil
+				}
+				if !completed {
+					flight.ownerCanceled = true
+				}
+				close(flight.done)
+				rt.inFlight--
+				m.wakeLocked()
+				m.mu.Unlock()
+			}()
+			target := account.Targets[0]
+			rctx, err := m.route(ctx, account.ProxyID)
+			var snapshot QuotaSnapshot
+			if err == nil {
+				var credential Credential
+				credential, err = m.credential(rctx, id, target)
+				if err == nil {
+					adapter, ok := m.adapters[strings.Split(target, ":")[0]].(quotaAdapter)
+					if !ok {
+						err = errors.New("该平台尚未接入官方额度查询")
+					} else {
+						snapshot, err = adapter.Quota(rctx, target, credential)
+					}
+				}
+			}
+			if err != nil && ctx.Err() != nil {
+				return
+			}
+			m.mu.Lock()
+			status = QuotaStatus{Snapshot: account.Quota, CheckedAt: time.Now()}
+			if err == nil {
+				snapshot.FetchedAt = status.CheckedAt
+				for i := range m.data.Accounts {
+					if m.data.Accounts[i].ID == id {
+						m.data.Accounts[i].Quota = &snapshot
+						if err = m.saveLocked(); err != nil {
+							m.data.Accounts[i].Quota = account.Quota
+						} else {
+							status.Snapshot = &snapshot
+						}
+						break
+					}
+				}
+			}
+			if err != nil {
+				status.Error = "查询账号额度：" + err.Error()
+			}
+			flight.status = status
+			rt.quotaStatus = &status
+			completed = true
+			m.mu.Unlock()
+		}()
+		if !completed {
+			return QuotaStatus{}, ctx.Err()
+		}
+		return status, nil
 	}
-	if err != nil {
-		status.Error = "查询账号额度：" + err.Error()
-	}
-	rt.quotaStatus = &status
-	rt.inFlight--
-	close(rt.quotaDone)
-	rt.quotaDone = nil
-	m.wakeLocked()
-	return status, nil
 }
 
 // quotaNumber 区分字段缺失和明确的零；异常类型报错，不把协议变化变成零余额。

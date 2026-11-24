@@ -246,6 +246,9 @@ func (q *Qoder) discoverEndpoints(ctx context.Context, c Credential, previous qo
 		if len(nodes) == 0 && field.name == "openapiNodes" {
 			*field.dst = q.openAPI("qoder:global")
 		}
+		if len(nodes) == 0 && field.name == "inferNodes" && data[field.name] != nil {
+			*field.dst = q.base("qoder:global")
+		}
 		if len(nodes) > 0 {
 			selected := nodes[0]
 			for _, node := range nodes {

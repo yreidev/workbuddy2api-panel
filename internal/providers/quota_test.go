@@ -269,3 +269,62 @@ func TestQuotaFailureRetainsSnapshotAndInferenceState(t *testing.T) {
 		t.Fatal("保存失败被当成成功或覆盖了旧快照", s, err)
 	}
 }
+
+func TestQuotaOwnerCancelHandoffWithoutCachePoisoning(t *testing.T) {
+	m, f := testManager(t, "")
+	id := importFake(t, m, "qoder:cn", "owner-cancel")
+	firstStarted := make(chan struct{})
+	var calls atomic.Int32
+	m.adapters["qoder"] = &fakeQuotaAdapter{fakeAdapter: f, quota: func(ctx context.Context, _ string, _ Credential) (QuotaSnapshot, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			close(firstStarted)
+			<-ctx.Done()
+			return QuotaSnapshot{}, ctx.Err()
+		}
+		return QuotaSnapshot{Unit: "credits", Balance: new(float64(42.5))}, nil
+	}}
+
+	ownerCtx, cancelOwner := context.WithCancel(t.Context())
+	defer cancelOwner()
+
+	ownerDone := make(chan error, 1)
+	go func() {
+		_, err := m.Quota(ownerCtx, id, true)
+		ownerDone <- err
+	}()
+	<-firstStarted
+
+	// 第二个调用者在首个航班运行期间挂起等待；首个调用者取消后，第二个调用者必须自动重查成功。
+	waiterDone := make(chan struct {
+		status QuotaStatus
+		err    error
+	}, 1)
+	go func() {
+		s, err := m.Quota(t.Context(), id, true)
+		waiterDone <- struct {
+			status QuotaStatus
+			err    error
+		}{s, err}
+	}()
+	// 给第二个调用者短暂时间挂到 flight.done，随后取消首个调用者。
+	time.Sleep(20 * time.Millisecond)
+	cancelOwner()
+
+	if err := <-ownerDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("首个被取消的调用者应返回 context.Canceled: %v", err)
+	}
+	res := <-waiterDone
+	if res.err != nil || res.status.Error != "" || res.status.Snapshot == nil || res.status.Snapshot.Balance == nil || *res.status.Snapshot.Balance != 42.5 {
+		t.Fatalf("等待者接棒查询失败: status=%+v err=%v", res.status, res.err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("期望首个取消后等待者重查 1 次，实际 calls=%d", calls.Load())
+	}
+
+	// 后续非强制查询应命中刚写入的有效快照缓存，而不是残留的 context canceled。
+	cached, err := m.Quota(t.Context(), id, false)
+	if err != nil || cached.Error != "" || cached.Snapshot == nil || *cached.Snapshot.Balance != 42.5 || calls.Load() != 2 {
+		t.Fatalf("有效快照未缓存或被 owner cancel 污染: status=%+v err=%v calls=%d", cached, err, calls.Load())
+	}
+}

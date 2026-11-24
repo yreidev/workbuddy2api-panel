@@ -626,3 +626,37 @@ func TestQoderQueuedFastRequestPinsEndpoint(t *testing.T) {
 		t.Fatalf("排队时重新选路：%v elections=%d chats=%d polls=%d finish=%d", err, elections.Load(), chats.Load(), polls.Load(), finishes.Load())
 	}
 }
+
+func TestQoderEndpointExplicitEmptyInferNodesFallsBackToDefault(t *testing.T) {
+	var discoveries atomic.Int32
+	var hitHosts []string
+	q := &Qoder{HTTP: qoderEndpointClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "center.qoder.sh" {
+			if discoveries.Add(1) == 1 {
+				fmt.Fprint(w, `{"inferNodes":["https://api3.qoder.sh"]}`)
+				return
+			}
+			// 显式返回空 inferNodes 数组时，应回落到默认推理端点 q.base("qoder:global")（api2.qoder.sh）。
+			fmt.Fprint(w, `{"inferNodes":[]}`)
+			return
+		}
+		hitHosts = append(hitHosts, r.Host)
+		fmt.Fprintf(w, `{"body":[{"key":%q}]}`, r.Host)
+	})}
+
+	c := Credential{UID: "empty-infer-user", MachineID: "empty-infer-machine"}
+	models, err := q.Models(t.Context(), "qoder:global", c)
+	if err != nil || len(models) != 1 || models[0].ID != "api3.qoder.sh" {
+		t.Fatalf("首次发现未切到 api3.qoder.sh: %v %v", models, err)
+	}
+	q.endpointMu.Lock()
+	for _, entry := range q.endpoints {
+		entry.expires = time.Now().Add(-time.Second)
+	}
+	q.endpointMu.Unlock()
+
+	models, err = q.Models(t.Context(), "qoder:global", c)
+	if err != nil || len(models) != 1 || models[0].ID != "api2.qoder.sh" || discoveries.Load() != 2 {
+		t.Fatalf("显式空 inferNodes 未回落到默认推理端点 api2.qoder.sh: models=%v err=%v discoveries=%d hosts=%v", models, err, discoveries.Load(), hitHosts)
+	}
+}

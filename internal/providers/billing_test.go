@@ -270,3 +270,55 @@ func TestBillingDoesNotLeakAcrossRequestsKeysOrRetry(t *testing.T) {
 		t.Fatal("重试或密钥计费隔离错误", one.Totals, two.Totals)
 	}
 }
+
+func TestTraeWorkPreStreamFailureDoesNotStartOrEmitBillingFrame(t *testing.T) {
+	var sessions, feeQueries atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/remote/v1/models":
+			fmt.Fprint(w, `{"code":0,"data":{"list":[{"function":"solo_work_remote","models":[{"name":"model","config_source":1,"is_preset":true}]}]}}`)
+		case "/api/remote/v1/chat_sessions":
+			sessions.Add(1)
+			fmt.Fprint(w, `{"code":0,"data":{"chat_session_id":"chat","message_id":"msg-1"}}`)
+		case "/api/remote/v1/chat_sessions/chat/events":
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"code":500,"message":"pre-stream failure"}`)
+		case "/api/v1/commercial/get_session_usage":
+			feeQueries.Add(1)
+			fmt.Fprint(w, `{"user_usage_group_by_session":{"session_id":"msg-1","credits_float":0.25}}`)
+		default:
+			t.Errorf("意外路径: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m, _ := testManager(t, "")
+	ledger := usage.New("")
+	m.SetUsage(ledger)
+	m.adapters["traework"] = &Trae{HTTP: srv.Client(), WorkBase: srv.URL}
+	id := importFake(t, m, "traework:cn", "fixture-1")
+	importFake(t, m, "traework:cn", "fixture-2")
+
+	emitted := 0
+	res, err := m.Execute(t.Context(), Request{Target: "traework:cn", Model: "model", KeyID: "k1", MaxRotate: 2, Body: []byte(plainChat)}, func(map[string]any) error {
+		emitted++
+		return nil
+	})
+	if err == nil {
+		t.Fatal("前置 500 失败却返回成功")
+	}
+	if sessions.Load() != 1 || res.Attempts != 1 {
+		t.Fatalf("已创建会话后发生换号重放: sessions=%d attempts=%d err=%v", sessions.Load(), res.Attempts, err)
+	}
+	if res.Started || emitted != 0 {
+		t.Fatalf("纯内部计费帧污染了 Started 或下发给了 emit: started=%v emitted=%d", res.Started, emitted)
+	}
+	if !res.ChargeKnown || res.Charge != 0.25 || res.Unit != "credits" || feeQueries.Load() != 1 {
+		t.Fatalf("前置失败丢失已结算扣费: res=%+v feeQueries=%d", res, feeQueries.Load())
+	}
+	snap := ledger.SnapshotWindow(usage.Window{Target: "traework:cn", Key: "k1", KeySet: true}, nil, nil)
+	if snap.Totals.Credits != 0.25 || snap.Totals.CreditSamples != 1 || len(snap.ByAccount) != 1 || snap.ByAccount[0].Key != id {
+		t.Fatalf("账本未记入前置失败扣费或出现重复扣费: %+v", snap)
+	}
+}

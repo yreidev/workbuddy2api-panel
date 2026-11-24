@@ -65,9 +65,14 @@ func request(ctx context.Context, client *http.Client, method, endpoint string, 
 	// 平台使用自定义令牌头和签名正文，任何重定向均在原站终止。
 	local := *client
 	local.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	// 默认线路的准入可在排队期间被收回，每次真正发送（包括重送和清理）均读当前策略。
+	// 默认线路的准入与已绑代理的可用性均可在排队期间变化，每次真正发送（包括重送和清理）前重检。
 	if registry, ok := ctx.Value(unboundRouteKey{}).(*proxies.Registry); ok && registry.Settings().RequireBound {
 		return nil, proxyUnavailable("proxy_required")
+	}
+	if bound, ok := ctx.Value(boundRouteKey{}).(boundRouteCheck); ok && bound.registry != nil {
+		if _, _, usable, code := bound.registry.CheckProxy(bound.proxyID); !usable {
+			return nil, proxyUnavailable(code)
+		}
 	}
 	resp, err := local.Do(req)
 	if err != nil {
@@ -121,6 +126,7 @@ func request(ctx context.Context, client *http.Client, method, endpoint string, 
 			resp.Uncompressed = true
 		}
 	}
+	resp.Body = newIdleBody(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -135,7 +141,6 @@ func request(ctx context.Context, client *http.Client, method, endpoint string, 
 		}
 		return nil, &Error{Status: resp.StatusCode, Code: code, Retry: resp.StatusCode == 429 || resp.StatusCode >= 500}
 	}
-	resp.Body = newIdleBody(resp.Body)
 	return resp, nil
 }
 func safeCode(v any) string {
@@ -341,7 +346,9 @@ type idleBody struct {
 
 func newIdleBody(body io.ReadCloser) *idleBody {
 	b := &idleBody{ReadCloser: body}
+	b.mu.Lock()
 	b.timer = time.AfterFunc(90*time.Second, func() { _ = b.Close() })
+	b.mu.Unlock()
 	return b
 }
 func (b *idleBody) Read(p []byte) (int, error) {

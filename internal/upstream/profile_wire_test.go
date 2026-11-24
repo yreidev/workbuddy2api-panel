@@ -136,7 +136,7 @@ func TestNativeHTTP1HeaderWire(t *testing.T) {
 				method, path, body = "POST", "/algo/api/v2/service/pro/sse/agent_chat_generation", strings.NewReader("{}")
 			}
 			r, _ := http.NewRequest(method, "https://"+ln.Addr().String()+path, body)
-			r.Header = http.Header{"Accept": {"application/json"}, "Accept-Encoding": {"identity"}, "Authorization": {"Bearer fixture"}, "Content-Type": {"application/json"}, "Cosy-Clienttype": {"5"}, "Cosy-Machineid": {"fixture-device"}, "Cosy-Machineos": {"x86_64_linux"}, "User-Agent": {"Bun/1.4.2"}}
+			r.Header = http.Header{"Accept": {"application/json"}, "Accept-Encoding": {"identity"}, "Authorization": {"Bearer fixture"}, "Content-Type": {"application/json"}, "Cosy-Clienttype": {"5"}, "Cosy-Machineid": {"fixture-device"}, "Cosy-Machineos": {"x86_64_linux"}, "User-Agent": {"Bun/1.4.4"}}
 			if stream {
 				r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 				r.Header.Set("Cache-Control", "no-cache")

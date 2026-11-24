@@ -345,3 +345,229 @@ func TestQueuedQoderRechecksProxyPolicy(t *testing.T) {
 		t.Fatal("收紧代理策略后仍有默认线路请求", r, err)
 	}
 }
+
+func TestQoderQueueRefreshesExpiringTokenAcrossPollAndFinish(t *testing.T) {
+	// 1. 直接验证 Qoder.Chat 排队期间凭据快过期时通过 credentialRefreshKey 刷新，
+	// 且后续轮询、重试对话与 defer finishQueue 全部使用刷新后的新凭据。
+	var polls, chats, finishes, refreshes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/algo/api/v2/service/pro/sse/agent_chat_generation":
+			if chats.Add(1) == 1 {
+				writeQoderQueued(t, w)
+				return
+			}
+			if r.Header.Get("Cosy-Machineid") != "refreshed-machine" {
+				t.Errorf("排队恢复重试未使用刷新后凭据: %s", r.Header.Get("Cosy-Machineid"))
+			}
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		case "/algo/api/v2/service/ask/queue/status":
+			n := polls.Add(1)
+			if r.Header.Get("Cosy-Machineid") != "refreshed-machine" {
+				t.Errorf("第 %d 次排队轮询未使用刷新后凭据: %s", n, r.Header.Get("Cosy-Machineid"))
+			}
+			if n == 1 {
+				fmt.Fprint(w, `{"isQueued":true,"serviceAvailable":false,"retryAfterSeconds":0.5}`)
+				return
+			}
+			fmt.Fprint(w, `{"isQueued":false,"serviceAvailable":true,"retryAfterSeconds":0}`)
+		case "/algo/api/v2/service/ask/finish":
+			finishes.Add(1)
+			if r.Header.Get("Cosy-Machineid") != "refreshed-machine" {
+				t.Errorf("排队结束 finishQueue 未使用刷新后凭据: %s", r.Header.Get("Cosy-Machineid"))
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	q := &Qoder{HTTP: server.Client(), Base: server.URL}
+	ctx := context.WithValue(t.Context(), credentialRefreshKey{}, func(context.Context) (Credential, error) {
+		refreshes.Add(1)
+		return Credential{
+			UID:         "fixture-user",
+			UserType:    "personal",
+			AccessToken: "refreshed-token",
+			MachineID:   "refreshed-machine",
+			ExpiresAt:   time.Now().Add(time.Hour).Unix(),
+		}, nil
+	})
+	expiring := Credential{
+		UID:         "fixture-user",
+		UserType:    "personal",
+		AccessToken: "old-token",
+		MachineID:   "old-machine",
+		ExpiresAt:   time.Now().Add(time.Minute).Unix(),
+	}
+	if err := q.Chat(ctx, "qoder:cn", expiring, Model{ID: "auto"}, []byte(plainChat), "fixture-session", discardFrame); err != nil {
+		t.Fatalf("排队期刷新凭据后未正常完成: %v", err)
+	}
+	if refreshes.Load() != 1 || polls.Load() != 2 || chats.Load() != 2 || finishes.Load() != 1 {
+		t.Fatalf("排队刷新与调用次数不符: refresh=%d poll=%d chat=%d finish=%d", refreshes.Load(), polls.Load(), chats.Load(), finishes.Load())
+	}
+
+	// 2. 端到端通过 Manager.Execute：首次进入对话前尚未到期（>5m），排队等待 1s 后进入 5m 刷新窗口，
+	// 触发 deviceToken/refresh 更新并持久化新令牌，完成对话。
+	var e2eRefreshes, e2eChats, e2ePolls, e2eFinishes atomic.Int32
+	e2eSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/algo/api/v2/model/list":
+			fmt.Fprint(w, `{"assistant":[{"key":"model","enable":true}]}`)
+		case "/algo/api/v2/service/pro/sse/agent_chat_generation":
+			if e2eChats.Add(1) == 1 {
+				writeQoderQueued(t, w)
+				return
+			}
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		case "/algo/api/v2/service/ask/queue/status":
+			if e2ePolls.Add(1) == 1 {
+				fmt.Fprint(w, `{"isQueued":true,"serviceAvailable":false,"retryAfterSeconds":1.2}`)
+				return
+			}
+			fmt.Fprint(w, `{"isQueued":false,"serviceAvailable":true,"retryAfterSeconds":0}`)
+		case "/api/v1/deviceToken/refresh":
+			e2eRefreshes.Add(1)
+			fmt.Fprint(w, `{"device_token":"e2e-new-token","refresh_token":"e2e-new-rt","expires_in":3600}`)
+		case "/api/v1/userinfo":
+			fmt.Fprint(w, `{"user_id":"e2e-user"}`)
+		case "/algo/api/v2/service/ask/finish":
+			e2eFinishes.Add(1)
+		default:
+			t.Errorf("意外路径: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer e2eSrv.Close()
+
+	m, _ := testManager(t, filepath.Join(t.TempDir(), "providers.json"))
+	m.adapters["qoder"] = &Qoder{HTTP: e2eSrv.Client(), Base: e2eSrv.URL, OpenAPIBase: e2eSrv.URL}
+	if _, err := m.Import(t.Context(), AccountInput{
+		Target: "qoder:cn",
+		Credential: Credential{
+			UID:          "e2e-user",
+			UserType:     "teams",
+			AccessToken:  "e2e-old-token",
+			RefreshToken: "e2e-old-rt",
+			TokenKind:    "device",
+			MachineID:    "e2e-machine",
+			MachineToken: "e2e-mt",
+			ExpiresAt:    time.Now().Add(5*time.Minute + time.Second).Unix(),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Execute(t.Context(), Request{Target: "qoder:cn", Model: "model", Body: []byte(plainChat)}, discardFrame); err != nil {
+		t.Fatalf("端到端排队续期失败: %v", err)
+	}
+	if e2eRefreshes.Load() != 1 || e2eChats.Load() != 2 || e2ePolls.Load() != 2 || e2eFinishes.Load() != 1 || m.data.Accounts[0].Credential.AccessToken != "e2e-new-token" {
+		t.Fatalf("端到端排队续期状态异常: refresh=%d chat=%d poll=%d finish=%d token=%s", e2eRefreshes.Load(), e2eChats.Load(), e2ePolls.Load(), e2eFinishes.Load(), m.data.Accounts[0].Credential.AccessToken)
+	}
+}
+
+func TestQoderQueueMidPollKeyRevocationAndBoundProxyDown(t *testing.T) {
+	t.Run("轮询间隙撤权立刻403中止且不发第二次轮询", func(t *testing.T) {
+		var chats, polls, finishes atomic.Int32
+		var revoked atomic.Bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/algo/api/v2/model/list":
+				fmt.Fprint(w, `{"assistant":[{"key":"model","enable":true}]}`)
+			case "/algo/api/v2/service/pro/sse/agent_chat_generation":
+				chats.Add(1)
+				writeQoderQueued(t, w)
+			case "/algo/api/v2/service/ask/queue/status":
+				if polls.Add(1) == 1 {
+					revoked.Store(true)
+					fmt.Fprint(w, `{"isQueued":true,"serviceAvailable":false,"retryAfterSeconds":0.5}`)
+					return
+				}
+				t.Error("撤权后仍发出了第二次排队轮询")
+				fmt.Fprint(w, `{"isQueued":false,"serviceAvailable":true,"retryAfterSeconds":0}`)
+			case "/algo/api/v2/service/ask/finish":
+				finishes.Add(1)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		m, _ := testManager(t, "")
+		id := importFake(t, m, "qoder:cn", "revoked")
+		m.adapters["qoder"] = &Qoder{HTTP: srv.Client(), Base: srv.URL}
+		_, err := m.Execute(t.Context(), Request{
+			Target: "qoder:cn",
+			Model:  "model",
+			Body:   []byte(plainChat),
+			Allow:  func(string, []string) bool { return !revoked.Load() },
+		}, discardFrame)
+		var e *Error
+		if !errors.As(err, &e) || e.Status != 403 || e.Code != "target_not_allowed" {
+			t.Fatalf("轮询间隙撤权未直接返回 403 target_not_allowed: %v", err)
+		}
+		if chats.Load() != 1 || polls.Load() != 1 || finishes.Load() != 1 || m.running[id].inFlight != 0 {
+			t.Fatalf("轮询撤权后多发请求或未释放队列/槽位: chats=%d polls=%d finish=%d inFlight=%d", chats.Load(), polls.Load(), finishes.Load(), m.running[id].inFlight)
+		}
+	})
+
+	t.Run("排队期间已绑代理变down后中止后续出站", func(t *testing.T) {
+		reg, err := proxies.Open(filepath.Join(t.TempDir(), "proxies.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolID, err := reg.CreatePool(proxies.PoolInput{Name: "测试池"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		added, err := reg.Import("http://bound-queue.invalid:8888 绑定代理", "http", poolID, nil)
+		if err != nil || len(added.Added) != 1 {
+			t.Fatalf("导入代理失败: %+v %v", added, err)
+		}
+		proxyID := added.Added[0]
+
+		var chats, polls, finishes atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/algo/api/v2/model/list":
+				fmt.Fprint(w, `{"assistant":[{"key":"model","enable":true}]}`)
+			case "/algo/api/v2/service/pro/sse/agent_chat_generation":
+				chats.Add(1)
+				writeQoderQueued(t, w)
+			case "/algo/api/v2/service/ask/queue/status":
+				if polls.Add(1) == 1 {
+					// 模拟排队期间该代理被 ReportProxy 标为 down。
+					reg.ReportProxy(proxyID, errors.New("proxy connection reset"))
+					fmt.Fprint(w, `{"isQueued":true,"serviceAvailable":false,"retryAfterSeconds":0.5}`)
+					return
+				}
+				t.Error("绑定的代理已变 down 仍发出了第二次轮询")
+				fmt.Fprint(w, `{"isQueued":false,"serviceAvailable":true,"retryAfterSeconds":0}`)
+			case "/algo/api/v2/service/ask/finish":
+				finishes.Add(1)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		m, _ := testManager(t, "")
+		m.SetProxies(reg)
+		m.adapters["qoder"] = &Qoder{HTTP: srv.Client(), Base: srv.URL}
+		id, err := m.Import(t.Context(), AccountInput{
+			Target:     "qoder:cn",
+			ProxyID:    proxyID,
+			Credential: Credential{UID: "bound-q", UserType: "teams", AccessToken: "at", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = m.Execute(t.Context(), Request{Target: "qoder:cn", Model: "model", Body: []byte(plainChat)}, discardFrame)
+		var e *Error
+		if !errors.As(err, &e) || e.Code != "proxy_not_available" {
+			t.Fatalf("已绑代理变 down 未阻断返回 proxy_not_available: %v", err)
+		}
+		if chats.Load() != 1 || polls.Load() != 1 || finishes.Load() != 0 || m.running[id].inFlight != 0 {
+			t.Fatalf("已绑代理 down 后仍有后续出站或未释放槽位: chats=%d polls=%d finish=%d inFlight=%d", chats.Load(), polls.Load(), finishes.Load(), m.running[id].inFlight)
+		}
+	})
+}

@@ -4,14 +4,14 @@
 
 ## 官方依据与组件取得
 
-依据为官方 `@qodercn-ai/qoderclicn` 1.1.89 的 UMID 服务、hostname 规范化函数及 Linux helper。网关从[固定官方 npm 包](https://registry.npmjs.org/@qodercn-ai/qoderclicn/-/qoderclicn-1.1.89.tgz)中读取 `package/bundle/qoderclicn.js`，只提取与固定 SHA-256 相符的 ELF 常量，不执行 CLI、npm 安装脚本或授权命令。组件没有随本仓库和镜像分发；缓存存在且校验通过时不再下载。
+依据为官方 `@qodercn-ai/qoderclicn` 1.1.96（与 1.1.89 的 UMID helper ELF 完全一致）的 UMID 服务、hostname 规范化函数及 Linux helper。网关从[固定官方 npm 包](https://registry.npmjs.org/@qodercn-ai/qoderclicn/-/qoderclicn-1.1.96.tgz)中读取 `package/bundle/qoderclicn.js`，只提取与固定 SHA-256 相符的 ELF 常量，不执行 CLI、npm 安装脚本或授权命令。组件没有随本仓库和镜像分发；缓存存在且校验通过时不再下载。
 
 | 架构 | helper SHA-256 | 运行验收 |
 |---|---|---|
-| Linux x64 | `e30b307eaae12680d2f4e220d4d34b0ea4f70355a624d6d55ee916e03f7d7478` | Alpine 3.20 加 `gcompat`、`libstdc++` 已实测返回有效 UMID |
-| Linux ARM64 | `2df9d2c5aa44cb6c45ad27f493bf3dca2aaf1e067fa0ad6e88c6cad0153329fe` | QEMU 用户态及 ARM64 glibc 环境中，国内／国际均返回有效 JSON、官方服务 `ec=200`；原生 ARM64 硬件未验收 |
+| Linux x64 | `e30b307eaae12680d2f4e220d4d34b0ea4f70355a624d6d55ee916e03f7d7478` | Alpine 3.20 镜像（`gcompat` + `libstdc++` + `proxychains4`）直连与代理双地区（国内／国际）均已实测返回有效 UMID |
+| Linux ARM64 | `2df9d2c5aa44cb6c45ad27f493bf3dca2aaf1e067fa0ad6e88c6cad0153329fe` | QEMU 用户态 + glibc 双地区已实测 `ec=200`；Dockerfile `linux/arm64` Go 交叉编译（`EM_AARCH64`）、Alpine 3.20 `aarch64` 8 个运行依赖包及 `gcompat`+`musl` 符号表均已核验与 x64 对称；Alpine 3.20 ARM64 实际运行及原生 ARM64 物理机尚未实测（未确认） |
 
-自动初始化目前限 Linux x64／ARM64。其他系统继续导入官方设备身份；不生成替代硬件值。独立二进制部署需有 glibc 及 `libstdc++`；Alpine 需另装 `gcompat libstdc++`。需要经代理初始化或刷新时，还需 `proxychains-ng` 提供的 `proxychains4`。Dockerfile 已加入这些依赖。
+自动初始化目前限 Linux x64／ARM64。其他系统继续导入官方设备身份；不生成替代硬件值。独立二进制部署需有 glibc 及 `libstdc++`；Alpine 需另装 `gcompat libstdc++`。需要经代理初始化或刷新时，还需 `proxychains-ng` 提供的 `proxychains4`。多架构 Docker 镜像（`linux/amd64`、`linux/arm64`）已内置上述依赖，其中 `linux/amd64` 已完整构建并实测服务 `/readyz` 与双地区直连／`proxychains4` helper，`linux/arm64` 已验证 Go 交叉编译阶段、Alpine 3.20 `aarch64` 依赖包及 `gcompat` ABI 对称性，但 Alpine 3.20 ARM64 容器内实际运行官方 helper 及原生 ARM64 硬件尚未实测（未确认），若遇不兼容可改为导入官方设备身份。
 
 ## 生命周期与保存位置
 
@@ -39,7 +39,7 @@ hostname 按实际运行环境规范化：安全 ASCII 直接保留，域名转 
 
 本机桥只监听回环随机端口，使用随机 Basic 认证，只允许国内 `pum.m.alibaba.com:443` 和国际 `sg-pum.alibabachengdun.com:443`，透明转发官方字节。临时配置权限 `0600`，只包含本机桥的临时认证，不保存上游代理密码；结束后关闭连接并删除配置。缺少 `proxychains4` 时不启动 helper。必须经桥完成一次带响应的网络交互才采用本次输出，防止把组件的离线回退身份当作初始化成功；刷新失败继续保留已落盘的旧快照。若只有 SDK 状态而没有有效 JSON 快照，首次调用没有网络交互时仍会报错。
 
-官方 SDK 使用用户目录的 `.config/.locale_cfg`，不采用 `XDG_CONFIG_HOME`。镜像通过 `.config` 符号链接把 SDK 状态放入持久化数据目录，兼容默认用户、root 及 Docker 自定义 UID 的默认用户目录。备份、迁移、重建容器时保留整个 `data/`，不能只保存 `providers.json` 或只复制 JSON 设备缓存。独立二进制部署还需保留运行用户原有的 `.config/.locale_cfg`。
+官方 SDK 通过 `getpwuid(getuid())` 读取用户目录的 `.config/.locale_cfg`，不采用 `XDG_CONFIG_HOME` 也不读取 `HOME` 环境变量，且不按国内／国际区分文件名。镜像与 Linux 一键安装脚本（`scripts/install-linux.sh`，新建系统用户主目录指向安装目录）均通过 `.config` 符号链接把 SDK 状态放入 `data/qoder-umid/sdk`，兼容默认用户、root 及 Docker 自定义 UID；网关在 `data/qoder-umid/sdk/` 内按环境拆分为 `.locale_cfg.env-0` 与 `.locale_cfg.env-4` 独立持久化并在单次运行期间切换，防止先初始化的地区被另一地区误复用而跳过外网交互（旧版共享 `.locale_cfg` 会自动无损迁移）。备份、迁移、重建容器或重装服务时保留整个 `data/`，不能只保存 `providers.json` 或只复制 JSON 设备缓存。手动运行的独立二进制还需保留运行用户原有的 `.config/.locale_cfg`。
 
 组件及环境缓存始终跟随 `providers.json` 的目录；镜像中的 SDK 链接固定指向 `/app/data/qoder-umid/sdk`。自定义数据布局时也要持久化这个链接目标，不能只迁走账号文件所在目录。
 
@@ -66,3 +66,5 @@ hostname 按实际运行环境规范化：安全 ASCII 直接保留，域名转 
 2026-11-18 23:07（台湾时间），用当前源码构建的 Linux x64 探针、校验过的官方 helper 和 dev 镜像，在没有直连路由的隔离容器完成四种代理的双地区复验。HTTP CONNECT、HTTPS CONNECT、SOCKS5、SOCKS5H 均要求认证，每轮使用新 SDK 状态，不携带账号凭证。共八组均取得有效设备字段，代理侧确认官方 HTTP/1.0 请求、HTTP 200 和 `ec=200`。首次夹具的临时数据卷禁止执行 helper，任何隧道均未建立，修正挂载选项后八组通过。
 
 随后清空四组目标缓存，从相同隔离环境分别经四种代理下载固定官方 npm 包。均确认与 npm 包源建立 TLS、提取成功且 Linux x64 helper 的 SHA-256 与固定值相同。隔离容器已退出，原生 ARM64 硬件仍待运行验收。
+
+2026-11-24（本地多架构构建与 Alpine 3.20 复验）：基于多架构 `Dockerfile` 完整构建 `linux/amd64` 镜像并实测 `wb2api` 启动 `/readyz` 返回 HTTP 200，容器内以 `uid=10001` 验证官方 x64 helper 直连与 `proxychains4` 认证 CONNECT 隧道双地区（`pum.m.alibaba.com:443`、`sg-pum.alibabachengdun.com:443`）均退出码 0 并产出有效 JSON；同轮实测 `Dockerfile` `linux/arm64` 交叉编译阶段（命中双架构缓存共享，4 个二进制均为 `EM_AARCH64`）、Alpine 3.20 `aarch64` 仓库全部 8 个运行依赖包及 `helper-arm64` 与 `gcompat 1.1.0-r4` + `musl 1.2.5` 的 ELF 符号表对称核对均通过。同时实测发现官方 helper 通过 `getpwuid` 读写固定 `.config/.locale_cfg` 且不区分地区，已改为在 `data/qoder-umid/sdk/` 内按 `.locale_cfg.env-0`／`.locale_cfg.env-4` 隔离并支持旧版无损迁移。因本机无 `qemu-aarch64` binfmt 及 ARM64 硬件，Alpine 3.20 `linux/arm64` 实际运行与原生 ARM64 物理机继续保持未确认。

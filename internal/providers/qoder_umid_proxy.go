@@ -37,6 +37,8 @@ type qoderMachineProxy struct {
 	wg            sync.WaitGroup
 	completed     int
 	err           error
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 func runQoderMachineProxy(ctx context.Context, binary string, environment int, dial func(context.Context, string) (net.Conn, error)) (qoderMachineInfo, error) {
@@ -44,18 +46,21 @@ func runQoderMachineProxy(ctx context.Context, binary string, environment int, d
 	if err != nil {
 		return qoderMachineInfo{}, errors.New("Qoder UMID 代理需要 proxychains-ng 的 proxychains4；组件未启动，不回落直连")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	proxy, err := newQoderMachineProxy(ctx, filepath.Dir(filepath.Dir(binary)), dial)
-	if err != nil {
-		return qoderMachineInfo{}, err
-	}
-	info, runErr := runQoderMachineCommand(ctx, binary, command, []string{"-q", "-f", proxy.config, binary, strconv.Itoa(environment)})
-	closeErr := proxy.close()
-	if err := errors.Join(runErr, closeErr); err != nil {
-		return qoderMachineInfo{}, fmt.Errorf("官方 UMID 组件经代理执行: %w", err)
-	}
-	return info, nil
+	return withQoderSDKLocale(binary, environment, func() (qoderMachineInfo, error) {
+		ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		defer cancel()
+		proxy, err := newQoderMachineProxy(ctx, filepath.Dir(filepath.Dir(binary)), dial)
+		if err != nil {
+			return qoderMachineInfo{}, err
+		}
+		defer func() { _ = proxy.close() }()
+		info, runErr := runQoderMachineCommand(ctx, binary, command, []string{"-q", "-f", proxy.config, binary, strconv.Itoa(environment)})
+		closeErr := proxy.close()
+		if err := errors.Join(runErr, closeErr); err != nil {
+			return qoderMachineInfo{}, fmt.Errorf("官方 UMID 组件经代理执行: %w", err)
+		}
+		return info, nil
+	})
 }
 
 func newQoderMachineProxy(ctx context.Context, dir string, dial func(context.Context, string) (net.Conn, error)) (*qoderMachineProxy, error) {
@@ -150,7 +155,13 @@ func (p *qoderMachineProxy) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sent := make(chan error, 1)
-	go func() { _, err := io.Copy(remote, rw); sent <- err }()
+	go func() {
+		_, err := io.Copy(remote, rw)
+		if cw, ok := remote.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+		sent <- err
+	}()
 	received, readErr := io.Copy(client, remote)
 	_ = client.Close()
 	_ = remote.Close()
@@ -163,25 +174,31 @@ func (p *qoderMachineProxy) serve(w http.ResponseWriter, r *http.Request) {
 	if writeErr != nil && !errors.Is(writeErr, net.ErrClosed) {
 		p.err = errors.Join(p.err, fmt.Errorf("发送 UMID 代理请求: %w", writeErr))
 	}
-	if received > 0 && readErr == nil {
+	if received > 0 && (readErr == nil || (p.closed && p.ctx.Err() == nil && errors.Is(readErr, net.ErrClosed) && (writeErr == nil || errors.Is(writeErr, net.ErrClosed)))) {
 		p.completed++
 	}
 }
 
 func (p *qoderMachineProxy) close() error {
-	p.mu.Lock()
-	p.closed = true
-	for conn := range p.conns {
-		_ = conn.Close()
-	}
-	p.mu.Unlock()
-	closeErr := p.server.Close()
-	p.wg.Wait()
-	removeErr := os.Remove(p.config)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.completed == 0 {
-		p.err = errors.Join(p.err, errors.New("UMID 未经所选代理完成网络交互，不采用组件的离线回退结果"))
-	}
-	return errors.Join(p.err, closeErr, removeErr)
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		for conn := range p.conns {
+			_ = conn.Close()
+		}
+		p.mu.Unlock()
+		closeErr := p.server.Close()
+		p.wg.Wait()
+		removeErr := os.Remove(p.config)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.completed == 0 {
+			p.err = errors.Join(p.err, errors.New("UMID 未经所选代理完成网络交互，不采用组件的离线回退结果"))
+		}
+		p.closeErr = errors.Join(p.err, closeErr, removeErr)
+	})
+	return p.closeErr
 }

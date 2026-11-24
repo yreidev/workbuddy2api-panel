@@ -27,8 +27,8 @@ import (
 	"time"
 )
 
-const CosyVersion = "1.1.89"
-const UserAgent = "Bun/1.4.2"
+const CosyVersion = "1.1.96"
+const UserAgent = "Bun/1.4.4"
 const customAlphabet = "_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!"
 const stdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 

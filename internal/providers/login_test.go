@@ -48,9 +48,7 @@ func TestTraeLoginStateAndSaveRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if server := manager.logins[login.State].callback; server != nil {
-		t.Cleanup(func() { _ = server.Close() })
-	}
+	t.Cleanup(func() { _ = manager.Close() })
 	if !strings.Contains(login.URL, "code_challenge_method=S256") || strings.Contains(login.URL, manager.logins[login.State].verifier) {
 		t.Fatal("PKCE verifier 泄露或 challenge 缺失")
 	}
@@ -70,9 +68,13 @@ func TestTraeLoginStateAndSaveRetry(t *testing.T) {
 			t.Fatal("无效 authCodeInfo 被接受")
 		}
 	}
-	if server := manager.logins[login.State].callback; server != nil {
-		if err := server.Close(); err != nil {
-			t.Fatal(err)
+	manager.mu.Lock()
+	if server := manager.callbackServer; server != nil {
+		_ = server.Close()
+		manager.callbackServer = nil
+		if manager.callbackStop != nil {
+			close(manager.callbackStop)
+			manager.callbackStop = nil
 		}
 	}
 	callbackClosed := make(chan struct{})
@@ -80,8 +82,9 @@ func TestTraeLoginStateAndSaveRetry(t *testing.T) {
 	callbackServer.Config.RegisterOnShutdown(func() { close(callbackClosed) })
 	callbackServer.Start()
 	defer callbackServer.Close()
-	manager.logins[login.State].callback = callbackServer.Config
+	manager.callbackServer = callbackServer.Config
 	manager.logins[login.State].localCallback = true
+	manager.mu.Unlock()
 	pending, err := manager.CompleteLogin(context.Background(), login.State, "")
 	if err != nil || !pending.Pending || exchanges.Load() != 0 {
 		t.Fatalf("本地回调到达前未返回等待状态: %+v %v", pending, err)
@@ -414,5 +417,142 @@ func TestQoderOAuthRefreshKinds(t *testing.T) {
 				t.Fatal("令牌过期时间单位不符", remaining)
 			}
 		})
+	}
+}
+
+func TestTraeSharedLocalCallbackRoutesConsecutiveLoginsAndCleansUp(t *testing.T) {
+	oldAddr := traeCallbackAddr
+	traeCallbackAddr = "127.0.0.1:0"
+	t.Cleanup(func() { traeCallbackAddr = oldAddr })
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/trae/api/v3/oauth/ExchangeToken":
+			var in map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Error(err)
+			}
+			code, _ := in["AuthCode"].(string)
+			fmt.Fprintf(w, `{"Result":{"Token":"tok-%s","RefreshToken":"rt-%s","TokenExpireAt":%d}}`, code, code, time.Now().Add(time.Hour).Unix())
+		case "/cloudide/api/v3/trae/GetUserInfo":
+			uid := strings.TrimPrefix(r.Header.Get("Authorization"), "Cloud-IDE-JWT tok-")
+			fmt.Fprintf(w, `{"Result":{"UserID":"user-%s","ScreenName":"账号-%s"}}`, uid, uid)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer backend.Close()
+
+	manager, err := Open(filepath.Join(t.TempDir(), "providers.json"), backend.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	traeAdapter := &Trae{HTTP: backend.Client(), AuthBase: backend.URL}
+	manager.adapters["traecode"] = traeAdapter
+	manager.adapters["traework"] = traeAdapter
+
+	// 连续发起两个 Trae 登录会话：应共享同一个 Manager 级本地回调服务，互不冲突。
+	first, err := manager.StartLogin("traecode:cn", "")
+	if err != nil || !first.LocalCallback {
+		t.Fatalf("首次 Trae 登录未启用本地回调: %+v %v", first, err)
+	}
+	manager.mu.Lock()
+	srv1 := manager.callbackServer
+	stop1 := manager.callbackStop
+	manager.mu.Unlock()
+	if srv1 == nil || srv1.Addr == "" || stop1 == nil {
+		t.Fatal("本地回调服务未启动")
+	}
+
+	second, err := manager.StartLogin("traework:cn", "")
+	if err != nil || !second.LocalCallback {
+		t.Fatalf("第二次 Trae 登录未复用本地回调: %+v %v", second, err)
+	}
+	manager.mu.Lock()
+	srv2 := manager.callbackServer
+	manager.mu.Unlock()
+	if srv2 != srv1 {
+		t.Fatal("连续发起 Trae 登录没有复用同一回调监听服务")
+	}
+
+	// 先回调第二个会话：仅第二个完成，第一个仍待授权且本地回调服务保持运行。
+	cbURL2 := "http://" + srv1.Addr + "/authorize?" + url.Values{
+		"loginTraceID": {second.State},
+		"authCodeInfo": {`{"AuthCode":"second","ExpireAt":1893456000000}`},
+	}.Encode()
+	resp, err := http.Get(cbURL2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("第二次登录本地回调失败: %d", resp.StatusCode)
+	}
+	view2, err := manager.CompleteLogin(t.Context(), second.State, "")
+	if err != nil || view2.Pending || view2.AccountID == "" {
+		t.Fatalf("第二个会话未完成: %+v %v", view2, err)
+	}
+	view1, err := manager.CompleteLogin(t.Context(), first.State, "")
+	if err != nil || !view1.Pending {
+		t.Fatalf("第一个会话被串扰或提前结束: %+v %v", view1, err)
+	}
+	manager.mu.Lock()
+	stillRunning := manager.callbackServer == srv1
+	manager.mu.Unlock()
+	if !stillRunning {
+		t.Fatal("仍有待完成 Trae 会话时提前关闭了本地回调服务")
+	}
+
+	// 回调第一个会话后，所有待完成 Trae 会话结束，自动关闭回调服务并通知 watchTraeCallback 退出。
+	closed := make(chan struct{})
+	srv1.RegisterOnShutdown(func() { close(closed) })
+	cbURL1 := "http://" + srv1.Addr + "/authorize?" + url.Values{
+		"loginTraceID": {first.State},
+		"authCodeInfo": {`{"AuthCode":"first","ExpireAt":1893456000000}`},
+	}.Encode()
+	resp, err = http.Get(cbURL1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("第一次登录本地回调失败: %d", resp.StatusCode)
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("最后一个待完成 Trae 会话结束后未自动关闭本地回调服务")
+	}
+	select {
+	case <-stop1:
+	case <-time.After(time.Second):
+		t.Fatal("未关闭 callbackStop 通道通知后台监听协程退出")
+	}
+
+	// 过期登录调用 CompleteLogin 时应删除 map 条目并清零敏感字段。
+	third, err := manager.StartLogin("traecode:cn", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	expiredLogin := manager.logins[third.State]
+	expiredLogin.ExpiresAt = time.Now().Add(-time.Second)
+	expiredLogin.deviceToken = "secret-device-token"
+	manager.mu.Unlock()
+	if _, err := manager.CompleteLogin(t.Context(), third.State, ""); err == nil {
+		t.Fatal("过期授权未被拒绝")
+	}
+	manager.mu.Lock()
+	_, stillPresent := manager.logins[third.State]
+	manager.mu.Unlock()
+	if stillPresent {
+		t.Fatal("过期授权未从 logins map 删除")
+	}
+	expiredLogin.mu.Lock()
+	cleared := expiredLogin.verifier == "" && expiredLogin.deviceToken == "" && expiredLogin.credential == (Credential{})
+	expiredLogin.mu.Unlock()
+	if !cleared {
+		t.Fatal("过期授权未清零敏感字段")
 	}
 }

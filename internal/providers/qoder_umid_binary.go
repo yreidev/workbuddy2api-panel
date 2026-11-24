@@ -25,11 +25,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
-const qoderUMIDPackage = "https://registry.npmjs.org/@qodercn-ai/qoderclicn/-/qoderclicn-1.1.89.tgz"
+const qoderUMIDPackage = "https://registry.npmjs.org/@qodercn-ai/qoderclicn/-/qoderclicn-1.1.96.tgz"
 
 func prepareQoderHelper(ctx context.Context, dir, proxyURL string) (string, error) {
 	if goruntime.GOOS != "linux" {
@@ -67,18 +65,18 @@ func prepareQoderHelper(ctx context.Context, dir, proxyURL string) (string, erro
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.Proxy = nil
 		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-			return upstream.DialProxyContext(ctx, proxyURL, network, address)
+			return dialQoderUMIDProxy(ctx, proxyURL, network, address)
 		}
 		defer transport.CloseIdleConnections()
 		client = &http.Client{Transport: transport}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("下载官方 Qoder 1.1.89 组件包: %w", err)
+		return "", fmt.Errorf("下载官方 Qoder 1.1.96 组件包: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载官方 Qoder 1.1.89 组件包: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("下载官方 Qoder 1.1.96 组件包: HTTP %d", resp.StatusCode)
 	}
 	binary, err := extractQoderHelper(io.LimitReader(resp.Body, 96<<20), digest)
 	if err != nil {
@@ -149,7 +147,91 @@ func (w *qoderBoundedOutput) Write(p []byte) (int, error) {
 
 // runQoderMachine 只传官方 Linux 的 environment 参数，不传账号或授权令牌。
 func runQoderMachine(ctx context.Context, binary string, environment int) (qoderMachineInfo, error) {
-	return runQoderMachineCommand(ctx, binary, binary, []string{strconv.Itoa(environment)})
+	return withQoderSDKLocale(binary, environment, func() (qoderMachineInfo, error) {
+		return runQoderMachineCommand(ctx, binary, binary, []string{strconv.Itoa(environment)})
+	})
+}
+
+// withQoderSDKLocale 按地区（environment 0/4）隔离官方 SDK 的 .locale_cfg 状态文件。
+// 官方 helper 固定读写 <pw_dir>/.config/.locale_cfg（容器与一键安装脚本中均软链至 data/qoder-umid/sdk），
+// 且不区分国内/国际环境；共享同一份文件会导致后初始化的另一地区直接命中前者的本地缓存、
+// 跳过官方网络交互（代理模式下触发「离线回退」失败，直连模式下串用另一地区身份）。
+func withQoderSDKLocale(binary string, environment int, fn func() (qoderMachineInfo, error)) (qoderMachineInfo, error) {
+	umidDir := filepath.Dir(filepath.Dir(binary))
+	sdkDir := filepath.Join(umidDir, "sdk")
+	if err := os.MkdirAll(sdkDir, 0700); err != nil {
+		return qoderMachineInfo{}, fmt.Errorf("创建 UMID SDK 状态目录: %w", err)
+	}
+	activeFile := filepath.Join(sdkDir, ".locale_cfg")
+	envFile := filepath.Join(sdkDir, fmt.Sprintf(".locale_cfg.env-%d", environment))
+	preserveUnownedOnFail := false
+
+	if _, err := os.Stat(envFile); errors.Is(err, os.ErrNotExist) {
+		if activeRaw, rErr := os.ReadFile(activeFile); rErr == nil {
+			existingSlots, _ := filepath.Glob(filepath.Join(sdkDir, ".locale_cfg.env-*"))
+			if len(existingSlots) == 0 {
+				_, err0 := os.Stat(filepath.Join(umidDir, "environment-0.json"))
+				_, err4 := os.Stat(filepath.Join(umidDir, "environment-4.json"))
+				has0, has4 := err0 == nil, err4 == nil
+				owner := -1
+				switch {
+				case has0 && !has4:
+					owner = 0
+				case has4 && !has0:
+					owner = 4
+				case has0 && has4:
+					// 旧版双区共享同一份 .locale_cfg：归属国内 0 保留既有设备身份，国际 4 独立初始化。
+					owner = 0
+				}
+				if owner >= 0 {
+					ownerFile := filepath.Join(sdkDir, fmt.Sprintf(".locale_cfg.env-%d", owner))
+					if wErr := writeProviderFile(ownerFile, activeRaw, 0600); wErr != nil {
+						return qoderMachineInfo{}, fmt.Errorf("迁移旧版 UMID SDK 状态: %w", wErr)
+					}
+				} else {
+					preserveUnownedOnFail = true
+				}
+			}
+		} else if !errors.Is(rErr, os.ErrNotExist) {
+			return qoderMachineInfo{}, fmt.Errorf("读取 UMID SDK 状态: %w", rErr)
+		}
+	}
+
+	if envRaw, err := os.ReadFile(envFile); err == nil {
+		if wErr := writeProviderFile(activeFile, envRaw, 0600); wErr != nil {
+			return qoderMachineInfo{}, fmt.Errorf("准备 UMID SDK 状态: %w", wErr)
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		if !preserveUnownedOnFail {
+			if rmErr := os.Remove(activeFile); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				return qoderMachineInfo{}, fmt.Errorf("清理残留 UMID SDK 状态: %w", rmErr)
+			}
+		}
+	} else {
+		return qoderMachineInfo{}, fmt.Errorf("读取环境 UMID SDK 状态: %w", err)
+	}
+
+	committed := false
+	defer func() {
+		if !committed && preserveUnownedOnFail {
+			return
+		}
+		_ = os.Remove(activeFile)
+	}()
+
+	info, err := fn()
+	if err != nil {
+		return info, err
+	}
+	if activeRaw, rErr := os.ReadFile(activeFile); rErr == nil {
+		if wErr := writeProviderFile(envFile, activeRaw, 0600); wErr != nil {
+			return qoderMachineInfo{}, fmt.Errorf("保存环境 UMID SDK 状态: %w", wErr)
+		}
+		committed = true
+	} else if !errors.Is(rErr, os.ErrNotExist) {
+		return qoderMachineInfo{}, fmt.Errorf("读取更新后 UMID SDK 状态: %w", rErr)
+	}
+	return info, nil
 }
 
 func runQoderMachineCommand(ctx context.Context, binary, command string, args []string) (qoderMachineInfo, error) {
@@ -235,13 +317,23 @@ func qoderLiveProcessStart(raw []byte) string {
 }
 
 func collectQoderChildren(pid int, children map[int]string) {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	tasks, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
 	if err != nil {
 		return
 	}
-	for _, field := range strings.Fields(string(raw)) {
-		child, err := strconv.Atoi(field)
-		if err == nil {
+	for _, task := range tasks {
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%s/children", pid, task.Name()))
+		if err != nil {
+			continue
+		}
+		for _, field := range strings.Fields(string(raw)) {
+			child, err := strconv.Atoi(field)
+			if err != nil {
+				continue
+			}
+			if _, seen := children[child]; seen {
+				continue
+			}
 			if start := qoderProcessStart(child); start != "" {
 				children[child] = start
 				collectQoderChildren(child, children)

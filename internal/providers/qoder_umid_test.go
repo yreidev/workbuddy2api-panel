@@ -359,3 +359,103 @@ func TestQoderHostnameNormalization(t *testing.T) {
 		t.Fatal("hostname 未限制为 96 字节")
 	}
 }
+
+func TestQoderUMIDSDKLocaleIsolatesEnvironmentsAndMigratesLegacy(t *testing.T) {
+	umidDir := t.TempDir()
+	binary := filepath.Join(umidDir, ".bin", "runtime-info-fixture")
+	sdkDir := filepath.Join(umidDir, "sdk")
+	activeFile := filepath.Join(sdkDir, ".locale_cfg")
+	env0File := filepath.Join(sdkDir, ".locale_cfg.env-0")
+	env4File := filepath.Join(sdkDir, ".locale_cfg.env-4")
+
+	// 1. 国内 env=0 首次运行：无残留 .locale_cfg，成功后持久化到 .locale_cfg.env-0 并清理共享槽位。
+	_, err := withQoderSDKLocale(binary, 0, func() (qoderMachineInfo, error) {
+		if _, statErr := os.Stat(activeFile); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("首次运行 env=0 前共享槽位不为空: %v", statErr)
+		}
+		if err := os.WriteFile(activeFile, []byte("cn-sdk-state-v1"), 0600); err != nil {
+			return qoderMachineInfo{}, err
+		}
+		return qoderMachineInfo{Token: "cn-tok", Type: "cn-type", Code: "cn-code"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(activeFile); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("运行结束后未清理共享 .locale_cfg: %v", statErr)
+	}
+	if raw, err := os.ReadFile(env0File); err != nil || string(raw) != "cn-sdk-state-v1" {
+		t.Fatalf("env=0 SDK 状态未持久化: %q %v", raw, err)
+	}
+
+	// 2. 国际 env=4 紧接着运行：不会看到 env=0 的 .locale_cfg，独立写入 .locale_cfg.env-4。
+	_, err = withQoderSDKLocale(binary, 4, func() (qoderMachineInfo, error) {
+		if _, statErr := os.Stat(activeFile); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("env=4 串读了 env=0 的 .locale_cfg: %v", statErr)
+		}
+		if err := os.WriteFile(activeFile, []byte("global-sdk-state-v1"), 0600); err != nil {
+			return qoderMachineInfo{}, err
+		}
+		return qoderMachineInfo{Token: "gl-tok", Type: "gl-type", Code: "gl-code"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(env4File); err != nil || string(raw) != "global-sdk-state-v1" {
+		t.Fatalf("env=4 SDK 状态未持久化: %q %v", raw, err)
+	}
+
+	// 3. 国内 env=0 再次运行但失败：先载入 env=0 自己的旧状态；失败后不覆盖 .locale_cfg.env-0 且清理共享槽位。
+	_, err = withQoderSDKLocale(binary, 0, func() (qoderMachineInfo, error) {
+		raw, rErr := os.ReadFile(activeFile)
+		if rErr != nil || string(raw) != "cn-sdk-state-v1" {
+			t.Fatalf("env=0 重跑未载入自身旧状态: %q %v", raw, rErr)
+		}
+		if err := os.WriteFile(activeFile, []byte("corrupted-failed-state"), 0600); err != nil {
+			return qoderMachineInfo{}, err
+		}
+		return qoderMachineInfo{}, errors.New("proxy offline")
+	})
+	if err == nil {
+		t.Fatal("预期返回失败")
+	}
+	if _, statErr := os.Stat(activeFile); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("失败后未清理共享 .locale_cfg: %v", statErr)
+	}
+	if raw, err := os.ReadFile(env0File); err != nil || string(raw) != "cn-sdk-state-v1" {
+		t.Fatalf("失败污染了已有 .locale_cfg.env-0: %q %v", raw, err)
+	}
+
+	// 4. 旧版升级迁移：已有 environment-0.json 与旧版 sdk/.locale_cfg 时，运行 env=4 应将旧文件迁到 env-0，
+	// 并为 env=4 提供干净槽位，避免跨区串用。
+	legacyDir := t.TempDir()
+	legacyBin := filepath.Join(legacyDir, ".bin", "runtime-info-fixture")
+	legacySDK := filepath.Join(legacyDir, "sdk")
+	if err := os.MkdirAll(legacySDK, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "environment-0.json"), []byte(`{"version":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacySDK, ".locale_cfg"), []byte("legacy-cn-cfg"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = withQoderSDKLocale(legacyBin, 4, func() (qoderMachineInfo, error) {
+		if _, statErr := os.Stat(filepath.Join(legacySDK, ".locale_cfg")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("旧版升级后 env=4 仍继承了旧版国内 .locale_cfg: %v", statErr)
+		}
+		if err := os.WriteFile(filepath.Join(legacySDK, ".locale_cfg"), []byte("fresh-global-cfg"), 0600); err != nil {
+			return qoderMachineInfo{}, err
+		}
+		return qoderMachineInfo{Token: "gl-tok", Type: "gl-type", Code: "gl-code"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(legacySDK, ".locale_cfg.env-0")); err != nil || string(raw) != "legacy-cn-cfg" {
+		t.Fatalf("旧版国内 .locale_cfg 未无损迁移: %q %v", raw, err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(legacySDK, ".locale_cfg.env-4")); err != nil || string(raw) != "fresh-global-cfg" {
+		t.Fatalf("新国际 .locale_cfg 未保存: %q %v", raw, err)
+	}
+}

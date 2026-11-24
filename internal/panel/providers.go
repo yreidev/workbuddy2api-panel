@@ -222,6 +222,13 @@ func (p *Panel) providerInput(w http.ResponseWriter, r *http.Request) (providers
 		writeErr(w, 400, err.Error())
 		return in, false
 	}
+	var cleanGroups []string
+	for _, g := range in.Groups {
+		if g = strings.TrimSpace(g); g != "" && !slices.Contains(cleanGroups, g) {
+			cleanGroups = append(cleanGroups, g)
+		}
+	}
+	in.Groups = cleanGroups
 	return in, true
 }
 func (p *Panel) providerImport(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +270,7 @@ func (p *Panel) providerModels(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Target string `json:"target"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in); err != nil {
 		writeErr(w, 400, "缺少 target")
 		return
 	}
@@ -281,7 +288,7 @@ func (p *Panel) providerLogin(w http.ResponseWriter, r *http.Request) {
 		Target  string `json:"target"`
 		ProxyID string `json:"proxy_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in); err != nil {
 		writeErr(w, 400, "缺少 target")
 		return
 	}

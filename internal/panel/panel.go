@@ -369,13 +369,13 @@ func (p *Panel) proxyOverview() map[string]any {
 	if p.cfg.Proxies == nil {
 		return nil
 	}
-	v := p.cfg.Proxies.View()
+	v, accounts := p.proxyAccountsAndView()
 	return map[string]any{
 		"pools":         len(v.Pools),
 		"proxies":       len(v.Proxies),
 		"require_bound": v.Settings.RequireBound,
 		"warnings":      v.Warnings,
-		"accounts":      p.cfg.Proxies.AccountViews(),
+		"accounts":      accounts,
 	}
 }
 

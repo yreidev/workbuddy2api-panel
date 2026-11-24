@@ -22,7 +22,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/providers/cosy"
 )
 
-// Qoder 的签名参考 cli2api 5224c100、Magpie 175dfd25；请求身份已核对官方 CLI 1.1.89 样本。
+// Qoder 的签名参考 cli2api 5224c100、Magpie 175dfd25；请求身份已核对官方 CLI 1.1.89 样本并经 1.1.96 实包复核。
 type Qoder struct {
 	HTTP        *http.Client
 	Base        string

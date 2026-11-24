@@ -834,3 +834,129 @@ func TestChatPanicReleasesAccountSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRefreshGuardRecoveryWithNewTokenOrPATAndRoutePreservation(t *testing.T) {
+	t.Run("新RefreshToken可恢复并清保护_旧令牌仍拒绝_线路错保留原保护", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "providers.json")
+		m, f := testManager(t, path)
+		id, err := m.Import(t.Context(), AccountInput{Target: "traecode:cn", Credential: Credential{UID: "u1", AccessToken: "at-1", RefreshToken: "rt-old", ExpiresAt: time.Now().Add(time.Hour).Unix()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.markRefreshing(id); err != nil {
+			t.Fatal(err)
+		}
+		m.mu.Lock()
+		m.running[id].blocked = true
+		m.mu.Unlock()
+
+		// 1. 重放同一个旧 refresh_token 必须拒绝且不触发上游刷新。
+		_, err = m.Import(t.Context(), AccountInput{Target: "traecode:cn", Credential: Credential{UID: "u1", RefreshToken: "rt-old"}})
+		if err == nil || f.refreshed.Load() != 0 {
+			t.Fatalf("受保护状态下重放旧 refresh_token 未被拒绝: err=%v refreshed=%d", err, f.refreshed.Load())
+		}
+
+		// 2. 提供新 refresh_token 但在刷新阶段遇到可重试线路错误：不得误删已存在的 .refresh-* 保护文件。
+		f.refresh = func(context.Context, string, Credential) (Credential, error) {
+			return Credential{}, &upstream.RouteError{Proxy: "p1", Err: errors.New("dial failed")}
+		}
+		if _, err := m.Import(t.Context(), AccountInput{Target: "traecode:cn", Credential: Credential{UID: "u1", RefreshToken: "rt-new"}}); err == nil {
+			t.Fatal("线路错误却导入成功")
+		}
+		if _, statErr := os.Stat(m.guardPath(id)); statErr != nil || !m.running[id].blocked {
+			t.Fatalf("已受保护账号遇线路错误时误清了 .refresh-* 保护: stat=%v blocked=%v", statErr, m.running[id].blocked)
+		}
+
+		// 3. 新 refresh_token 刷新成功：恢复账号、清除 .refresh-* 保护并解除 blocked。
+		f.refresh = func(_ context.Context, _ string, c Credential) (Credential, error) {
+			c.AccessToken = "at-recovered"
+			c.RefreshToken = "rt-recovered"
+			c.ExpiresAt = time.Now().Add(time.Hour).Unix()
+			return c, nil
+		}
+		gotID, err := m.Import(t.Context(), AccountInput{Target: "traecode:cn", Credential: Credential{UID: "u1", RefreshToken: "rt-new"}})
+		if err != nil || gotID != id {
+			t.Fatalf("新 refresh_token 未能恢复受保护账号: id=%s err=%v", gotID, err)
+		}
+		if _, statErr := os.Stat(m.guardPath(id)); !errors.Is(statErr, os.ErrNotExist) || m.running[id].blocked {
+			t.Fatalf("恢复后未清理 .refresh-* 或未解除 blocked: stat=%v blocked=%v", statErr, m.running[id].blocked)
+		}
+	})
+
+	t.Run("Qoder使用PAT原地恢复受保护账号", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "providers.json")
+		m, f := testManager(t, path)
+		id, err := m.Import(t.Context(), AccountInput{Target: "qoder:cn", Credential: Credential{UID: "q1", UserType: "teams", AccessToken: "at-1", RefreshToken: "rt-old", ExpiresAt: time.Now().Add(time.Hour).Unix()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.markRefreshing(id); err != nil {
+			t.Fatal(err)
+		}
+		m.mu.Lock()
+		m.running[id].blocked = true
+		m.mu.Unlock()
+		f.refresh = func(_ context.Context, _ string, c Credential) (Credential, error) {
+			if c.PAT != "pat-recover" {
+				return Credential{}, errors.New("缺少 PAT")
+			}
+			c.AccessToken = "at-from-pat"
+			c.ExpiresAt = time.Now().Add(time.Hour).Unix()
+			return c, nil
+		}
+		gotID, err := m.Import(t.Context(), AccountInput{Target: "qoder:cn", Credential: Credential{UID: "q1", UserType: "teams", PAT: "pat-recover"}})
+		if err != nil || gotID != id || m.running[id].blocked {
+			t.Fatalf("Qoder PAT 未能恢复受保护账号: id=%s blocked=%v err=%v", gotID, m.running[id].blocked, err)
+		}
+		if _, statErr := os.Stat(m.guardPath(id)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("PAT 恢复后未清理 .refresh-* 保护: %v", statErr)
+		}
+	})
+}
+
+func TestReimportDeletedProxyOfflineAndSwitchToNewProxy(t *testing.T) {
+	m, f := testManager(t, filepath.Join(t.TempDir(), "providers.json"))
+	reg, err := proxies.Open(filepath.Join(t.TempDir(), "proxies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolID, err := reg.CreatePool(proxies.PoolInput{Name: "测试池"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := reg.Import("http://old-proxy.invalid:8888 旧代理\nhttp://new-proxy.invalid:8888 新代理", "http", poolID, nil)
+	if err != nil || len(added.Added) != 2 {
+		t.Fatalf("导入代理失败: %+v %v", added, err)
+	}
+	oldProxy, newProxy := added.Added[0], added.Added[1]
+	m.SetProxies(reg)
+
+	id, err := m.Import(t.Context(), AccountInput{Target: "qoder:cn", ProxyID: oldProxy, Credential: Credential{UID: "u1", UserType: "teams", AccessToken: "at-1", ExpiresAt: time.Now().Add(time.Hour).Unix()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 删除原代理，使该账号旧绑定失效。
+	if _, err := reg.DeleteProxies([]string{oldProxy}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 场景一：离线完整凭证重导入（无需出站），应允许直接更新凭证落盘而不被已删代理阻断。
+	gotID, err := m.Import(t.Context(), AccountInput{Target: "qoder:cn", Credential: Credential{UID: "u1", UserType: "teams", AccessToken: "at-offline-2", ExpiresAt: time.Now().Add(time.Hour).Unix()}})
+	if err != nil || gotID != id || m.data.Accounts[0].Credential.AccessToken != "at-offline-2" {
+		t.Fatalf("原代理删除后离线完整凭证重导入失败: id=%s err=%v", gotID, err)
+	}
+
+	// 场景二：显式传入可用新代理并触发需要出站的刷新（如重新浏览器授权），应切换到新代理并持久化 ProxyID。
+	f.refresh = func(ctx context.Context, _ string, c Credential) (Credential, error) {
+		if ctx.Value(providerRouteKey{}) != newProxy {
+			t.Errorf("切换新代理后刷新未走新代理: %v", ctx.Value(providerRouteKey{}))
+		}
+		c.AccessToken = "at-new-proxy"
+		c.ExpiresAt = time.Now().Add(time.Hour).Unix()
+		return c, nil
+	}
+	gotID, err = m.Import(t.Context(), AccountInput{Target: "qoder:cn", ProxyID: newProxy, Credential: Credential{UID: "u1", UserType: "teams", RefreshToken: "rt-new"}})
+	if err != nil || gotID != id || m.List()[0].ProxyID != newProxy || m.data.Accounts[0].Credential.AccessToken != "at-new-proxy" {
+		t.Fatalf("原代理删除后显式切新代理失败: id=%s proxy=%s err=%v", gotID, m.List()[0].ProxyID, err)
+	}
+}

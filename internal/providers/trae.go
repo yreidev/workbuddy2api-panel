@@ -293,7 +293,7 @@ func (t *Trae) Chat(ctx context.Context, target string, c Credential, model Mode
 		return err
 	}
 	defer resp.Body.Close()
-	sawTools := false
+	sawTools, sawFinish := false, false
 	return scanSSE(ctx, resp.Body, func(event string, data map[string]any) error {
 		switch event {
 		case "error":
@@ -327,13 +327,22 @@ func (t *Trae) Chat(ctx context.Context, target string, c Credential, model Mode
 		case "token_usage":
 			return emit(chunk(model.ID, map[string]any{}, nil, data))
 		case "done":
+			if sawFinish {
+				return nil
+			}
 			finish := "stop"
 			if sawTools {
 				finish = "tool_calls"
 			}
+			sawFinish = true
 			return emit(chunk(model.ID, map[string]any{}, finish, nil))
 		default:
-			if data["choices"] != nil {
+			if choices, ok := data["choices"].([]any); ok {
+				for _, v := range choices {
+					if reason, ok := object(v)["finish_reason"].(string); ok && strings.TrimSpace(reason) != "" {
+						sawFinish = true
+					}
+				}
 				return emit(data)
 			}
 			return nil
@@ -385,7 +394,6 @@ func (t *Trae) workChat(ctx context.Context, c Credential, model Model, src map[
 		return errors.New("TraeWork 创建会话响应缺少 chat_session_id 或 message_id")
 	}
 	defer func() {
-		chatErr = routeErrorAfterDispatch(chatErr)
 		// 官方按本条用户消息 ID 结算。短查询独立于下游取消，已发生的扣费仍要记录。
 		billingCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
@@ -393,10 +401,17 @@ func (t *Trae) workChat(ctx context.Context, c Credential, model Model, src map[
 		credit, known, billingErr := t.workCharge(billingCtx, c, mid)
 		if billingErr == nil && !known {
 			// 官方网页为新消息预留两秒结算时间。补查沿用本次查询的截止时间。
+			wait := time.Until(retryAt)
+			if wait < 0 {
+				wait = 0
+			}
+			timer := time.NewTimer(wait)
 			select {
-			case <-time.After(time.Until(retryAt)):
+			case <-timer.C:
+				timer.Stop()
 				credit, known, billingErr = t.workCharge(billingCtx, c, mid)
 			case <-billingCtx.Done():
+				timer.Stop()
 				billingErr = billingCtx.Err()
 			}
 		}
@@ -406,6 +421,10 @@ func (t *Trae) workChat(ctx context.Context, c Credential, model Model, src map[
 			if emitErr := emit(chunk(model.ID, map[string]any{}, nil, map[string]any{"credit": credit})); chatErr == nil {
 				chatErr = emitErr
 			}
+		}
+		// 会话创建成功后上游已受理本条消息并可能产生扣费，任何后续错误均标记已派发，禁止换号重放。
+		if chatErr != nil {
+			chatErr = &dispatchedError{chatErr}
 		}
 	}()
 	h := traeHeaders(c, true)

@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,6 +23,7 @@ import (
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/translator/builtin"
+	"github.com/yreidev/workbuddy2api-panel/internal/targets"
 )
 
 var translators = builtin.Registry()
@@ -72,7 +72,8 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			Model string `json:"model"`
 		}
 		_ = json.Unmarshal(body, &peek)
-		_, target, _ := h.targetModel(r.Context(), peek.Model)
+		model, _ := h.routeModel(r.Context(), peek.Model)
+		_, target, _ := h.targetModel(r.Context(), model)
 		if target != "" && (!targets.WorkBuddy(target) || !h.targetAllowed(r.Context(), target, nil, false)) {
 			writeBridgeError(w, sdktranslator.FormatClaude, 400, "search_not_supported", "该上游不提供网关联网搜索；请使用客户端搜索工具")
 			return
@@ -135,6 +136,32 @@ func (h *Handler) bridgeBody(w http.ResponseWriter, r *http.Request, format sdkt
 						writeBridgeError(w, format, http.StatusBadRequest, "unsupported_content", "该平台首期仅支持文本工具结果，不支持图片、文档或其他多模态内容")
 						return
 					}
+				}
+			}
+		}
+	}
+	if target != "" && !targets.WorkBuddy(target) && format == sdktranslator.FormatOpenAIResponse {
+		// 翻译器会丢弃 function_call_output 内的非文本块（如 input_file）；翻译前显式拒绝。
+		var source struct {
+			Input any `json:"input"`
+		}
+		if err := json.Unmarshal(body, &source); err != nil {
+			writeBridgeError(w, format, http.StatusBadRequest, "invalid_request", "input 格式错误："+err.Error())
+			return
+		}
+		items, _ := source.Input.([]any)
+		for _, item := range items {
+			entry, _ := item.(map[string]any)
+			if entry["type"] != "function_call_output" {
+				continue
+			}
+			parts, _ := entry["output"].([]any)
+			for _, part := range parts {
+				block, _ := part.(map[string]any)
+				kind, _ := block["type"].(string)
+				if kind != "input_text" && kind != "text" {
+					writeBridgeError(w, format, http.StatusBadRequest, "unsupported_content", "该平台首期仅支持文本工具结果，不支持图片、文档或其他多模态内容")
+					return
 				}
 			}
 		}

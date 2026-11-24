@@ -336,7 +336,7 @@ func qoderHeaderOrder(r *http.Request) {
 	if r.Header.Get("Cache-Control") != "" {
 		order = append(order, "connection")
 	}
-	if strings.HasPrefix(r.URL.Path, "/api/") && r.UserAgent() == "qoder/1.1.89" {
+	if strings.HasPrefix(r.URL.Path, "/api/") && strings.HasPrefix(r.UserAgent(), "qoder/") {
 		order = append(order, "user-agent")
 	}
 	slices.Sort(order)

@@ -81,19 +81,21 @@ func (p *Panel) groupUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// groupDelete POST /panel/api/groups/{id}/delete：删分组，组里的号退出这个组。还有密钥限定了它时回 409，
-// 免得那些密钥变成不限、什么号都能用。
+// groupDelete POST /panel/api/groups/{id}/delete：删分组，组里的号（含 Trae/Qoder 平台账号）同步退出这个组。
+// 还有密钥限定了它时回 409，免得那些密钥变成不限、什么号都能用。
 func (p *Panel) groupDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if keys := p.keysUsingGroup(id); len(keys) > 0 {
 		writeErr(w, http.StatusConflict, "这些密钥限定了这个分组，先在密钥里去掉它："+strings.Join(keys, "、"))
 		return
 	}
-	for _, account := range p.cfg.Providers.List() {
-		if slices.Contains(account.Groups, id) {
-			writeErr(w, 409, "平台账号仍在该分组，请先修改平台账号的分组")
-			return
-		}
+	if !p.cfg.Pool.HasGroup(id) {
+		writeErr(w, http.StatusNotFound, pool.ErrGroupNotFound.Error())
+		return
+	}
+	if err := p.cfg.Providers.RemoveGroup(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "清理平台账号分组失败："+err.Error())
+		return
 	}
 	if err := p.cfg.Pool.DeleteGroup(id); err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())

@@ -27,6 +27,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
 	"github.com/yreidev/workbuddy2api-panel/internal/providers"
 	"github.com/yreidev/workbuddy2api-panel/internal/providers/cosy"
+	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
 	"github.com/yreidev/workbuddy2api-panel/internal/reqlog"
 )
 
@@ -351,6 +352,7 @@ func TestProviderRejectsUnsupportedSourceContent(t *testing.T) {
 			{"Responses图片", "/v1/responses", `{"input":[{"role":"user","content":[{"type":"input_text","text":"说明"},{"type":"input_image","image_url":"https://example.invalid/image.png"}]}]}`},
 			{"Responses文件", "/v1/responses", `{"input":[{"role":"user","content":[{"type":"input_text","text":"说明"},{"type":"input_file","file_id":"file-fixture"}]}]}`},
 			{"Responses工具图片", "/v1/responses", `{"input":[{"type":"function_call_output","call_id":"call","output":[{"type":"input_image","image_url":"https://example.invalid/image.png"}]}]}`},
+			{"Responses工具文件", "/v1/responses", `{"input":[{"type":"function_call_output","call_id":"call","output":[{"type":"input_file","file_id":"file-fixture"}]}]}`},
 		} {
 			for _, stream := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/%t", target, tc.name, stream), func(t *testing.T) {
@@ -854,4 +856,310 @@ func TestQoderQueuedDispatchUsesCurrentKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTraeWorkPreStreamFailureReturnsErrorAndFiltersInternalBillingFields(t *testing.T) {
+	t.Run("前置500失败且defer查到扣费_三协议均返回502并记账", func(t *testing.T) {
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/remote/v1/models":
+				fmt.Fprint(w, `{"code":0,"data":{"list":[{"function":"solo_work_remote","models":[{"name":"model","config_source":1,"is_preset":true}]}]}}`)
+			case "/api/remote/v1/chat_sessions":
+				fmt.Fprint(w, `{"code":0,"data":{"chat_session_id":"s","message_id":"m"}}`)
+			case "/api/remote/v1/chat_sessions/s/events":
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, `{"code":500,"message":"upstream exploded"}`)
+			case "/api/v1/commercial/get_session_usage":
+				fmt.Fprint(w, `{"user_usage_group_by_session":{"session_id":"m","credits_float":0.25}}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer backend.Close()
+		base, _ := url.Parse(backend.URL)
+		h, keys, _ := keyRig(t, "sk-admin")
+		logs := reqlog.New(reqlog.Config{})
+		defer logs.Close()
+		h.cfg.RequestLog = logs
+
+		for _, stream := range []bool{false, true} {
+			for _, tc := range []struct{ path, payload string }{
+				{"/v1/chat/completions", fmt.Sprintf(`{"model":"traework:cn:model","stream":%t,"messages":[{"role":"user","content":"hi"}]}`, stream)},
+				{"/v1/messages", fmt.Sprintf(`{"model":"traework:cn:model","stream":%t,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`, stream)},
+				{"/v1/responses", fmt.Sprintf(`{"model":"traework:cn:model","stream":%t,"input":[{"role":"user","content":"hi"}]}`, stream)},
+			} {
+				// 500 会触发单号冷却，每个协议用例独立准备一个 Manager 避免串扰。
+				m, err := providers.Open("", &http.Client{Transport: providerTransport{base: base}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := m.Import(t.Context(), providers.AccountInput{
+					Target:     "traework:cn",
+					Credential: providers.Credential{UID: "fixture", AccessToken: "fixture", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				h.cfg.Providers = m
+				key := createKey(t, keys, apikeys.Input{Name: fmt.Sprintf("pre-%s-%t", tc.path, stream), Enabled: true, AllowedTargets: []string{"traework:cn"}})
+				rec := post(h, tc.path, tc.payload, "Authorization", "Bearer "+key.Secret)
+				if rec.Code != http.StatusInternalServerError {
+					t.Fatalf("path=%s stream=%t 前置失败未返回 500 JSON 错误: status=%d ct=%s body=%s", tc.path, stream, rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+				}
+				if strings.Contains(rec.Header().Get("Content-Type"), "text/event-stream") || strings.Contains(rec.Body.String(), "data: [DONE]") {
+					t.Fatalf("path=%s stream=%t 前置失败误开启了 SSE 响应: ct=%s body=%s", tc.path, stream, rec.Header().Get("Content-Type"), rec.Body.String())
+				}
+				var ev reqlog.Event
+				found := false
+				for _, cand := range logs.Snapshot().Recent {
+					if cand.APIKey == key.Name {
+						ev, found = cand, true
+						break
+					}
+				}
+				if !found || ev.Outcome != reqlog.OutcomeHTTPError || ev.Status != http.StatusInternalServerError || !ev.HasCredit || ev.Credit != 0.25 || ev.CreditUnit != "credits" {
+					t.Fatalf("path=%s stream=%t 日志未记录 500 与已结算扣费: found=%v ev=%+v", tc.path, stream, found, ev)
+				}
+			}
+		}
+	})
+
+	t.Run("成功响应过滤内部计费字段只保留标准OpenAI用量", func(t *testing.T) {
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/algo/api/v2/model/list":
+				fmt.Fprint(w, `{"code":200,"body":[{"key":"model","enable":true}]}`)
+			case "/algo/api/v2/service/pro/sse/agent_chat_generation":
+				inner := `{"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"credits":0.125,"original_credits":1,"billable":true}}`
+				outer, _ := json.Marshal(map[string]any{"code": 200, "body": inner})
+				fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", outer)
+			case "/api/remote/v1/models":
+				fmt.Fprint(w, `{"code":0,"data":{"list":[{"function":"solo_work_remote","models":[{"name":"model","config_source":1,"is_preset":true}]}]}}`)
+			case "/api/remote/v1/chat_sessions":
+				fmt.Fprint(w, `{"code":0,"data":{"chat_session_id":"s","message_id":"m"}}`)
+			case "/api/remote/v1/chat_sessions/s/events":
+				fmt.Fprint(w, "event: output\ndata: {\"response\":\"hi\"}\n\nevent: token_usage\ndata: {\"prompt_tokens\":8,\"completion_tokens\":3,\"total_tokens\":11}\n\nevent: done\ndata: {}\n\n")
+			case "/api/v1/commercial/get_session_usage":
+				fmt.Fprint(w, `{"user_usage_group_by_session":{"session_id":"m","credits_float":0.25}}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer backend.Close()
+		base, _ := url.Parse(backend.URL)
+		manager, err := providers.Open("", &http.Client{Transport: providerTransport{base: base}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range []string{"qoder:cn", "traework:cn"} {
+			if _, err := manager.Import(t.Context(), providers.AccountInput{
+				Target:     target,
+				Credential: providers.Credential{UID: "u-" + target, UserType: "teams", AccessToken: "at", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h, _, _ := keyRig(t, "sk-admin")
+		h.cfg.Providers = manager
+		for _, target := range []string{"qoder:cn", "traework:cn"} {
+			for _, stream := range []bool{false, true} {
+				rec := post(h, "/v1/chat/completions", fmt.Sprintf(`{"model":"%s:model","stream":%t,"messages":[{"role":"user","content":"hi"}]}`, target, stream), "Authorization", "Bearer sk-admin")
+				body := rec.Body.String()
+				if rec.Code != 200 || !strings.Contains(body, `"prompt_tokens"`) || !strings.Contains(body, `"completion_tokens"`) {
+					t.Fatalf("target=%s stream=%t 响应异常: status=%d body=%s", target, stream, rec.Code, body)
+				}
+				for _, leaked := range []string{`"credit"`, `"credits"`, `"original_credits"`, `"billable"`} {
+					if strings.Contains(body, leaked) {
+						t.Fatalf("target=%s stream=%t 响应泄露内部计费字段 %s: %s", target, stream, leaked, body)
+					}
+				}
+			}
+		}
+	})
+}
+
+func TestRequestLogPlatformRecordsProxyName(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/algo/api/v2/model/list":
+			fmt.Fprint(w, `{"code":200,"body":[{"key":"model","enable":true}]}`)
+		case "/algo/api/v2/service/pro/sse/agent_chat_generation":
+			fmt.Fprint(w, chunk(`{"role":"assistant","content":"ok"}`, "stop")+usageTail)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer backend.Close()
+	base, _ := url.Parse(backend.URL)
+
+	reg, err := proxies.Open(filepath.Join(t.TempDir(), "proxies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolID, err := reg.CreatePool(proxies.PoolInput{Name: "测试池"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := reg.Import("http://proxy-fixture.invalid:8888 测试东京节点", "http", poolID, nil)
+	if err != nil || len(added.Added) != 1 {
+		t.Fatalf("导入代理失败: %+v %v", added, err)
+	}
+	proxyID := added.Added[0]
+
+	manager, err := providers.Open("", &http.Client{Transport: providerTransport{base: base}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetProxies(reg)
+	if _, err := manager.Import(t.Context(), providers.AccountInput{
+		Target:     "qoder:cn",
+		Name:       "展示昵称",
+		ProxyID:    proxyID,
+		Credential: providers.Credential{UID: "u-proxy", UserType: "teams", AccessToken: "at", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h, _, _ := keyRig(t, "sk-admin")
+	h.cfg.Providers = manager
+	logs := reqlog.New(reqlog.Config{})
+	defer logs.Close()
+	h.cfg.RequestLog = logs
+
+	rec := post(h, "/v1/chat/completions", `{"model":"qoder:cn:model","messages":[{"role":"user","content":"hi"}]}`, "Authorization", "Bearer sk-admin")
+	if rec.Code != 200 {
+		t.Fatalf("请求失败: %d %s", rec.Code, rec.Body.String())
+	}
+	events := logs.Snapshot().Recent
+	if len(events) != 1 || events[0].Proxy != "测试东京节点" || !strings.Contains(events[0].Account, "展示昵称") {
+		t.Fatalf("平台请求日志未写可读代理名或昵称: %+v", events)
+	}
+}
+
+func TestProviderP2Regressions(t *testing.T) {
+	t.Run("TraeCode已发finish_reason后再收done不重复输出choice", func(t *testing.T) {
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/ide/v1/get_detail_param":
+				fmt.Fprint(w, `{"config_info_list":[{"config_name":"model","display_config":{"display_name":"model"}}]}`)
+			case "/api/agent/v3/llm_utils_chat":
+				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\nevent: done\ndata: {}\n\n")
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer backend.Close()
+		base, _ := url.Parse(backend.URL)
+		manager, err := providers.Open("", &http.Client{Transport: providerTransport{base: base}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Import(t.Context(), providers.AccountInput{
+			Target:     "traecode:cn",
+			Credential: providers.Credential{UID: "tc-u", AccessToken: "at", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		h, _, _ := keyRig(t, "sk-admin")
+		h.cfg.Providers = manager
+
+		// 流式：统计整个 SSE 流中非空 finish_reason 出现次数必须为 1，且每个帧 choices 不重复 index:0。
+		recStream := post(h, "/v1/chat/completions", `{"model":"traecode:cn:model","stream":true,"messages":[{"role":"user","content":"hi"}]}`, "Authorization", "Bearer sk-admin")
+		if recStream.Code != 200 {
+			t.Fatalf("流式请求失败: %d %s", recStream.Code, recStream.Body.String())
+		}
+		finishCount := 0
+		for _, line := range strings.Split(recStream.Body.String(), "\n") {
+			if !strings.HasPrefix(line, "data: ") || strings.TrimSpace(line) == "data: [DONE]" {
+				continue
+			}
+			var frame struct {
+				Choices []struct {
+					Index        int     `json:"index"`
+					FinishReason *string `json:"finish_reason"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
+				t.Fatalf("解析 SSE 帧失败: %v line=%s", err, line)
+			}
+			if len(frame.Choices) > 1 {
+				t.Fatalf("单帧出现重复 choices: %s", line)
+			}
+			for _, ch := range frame.Choices {
+				if ch.FinishReason != nil && *ch.FinishReason != "" {
+					finishCount++
+				}
+			}
+		}
+		if finishCount != 1 {
+			t.Fatalf("流式 finish_reason 次数=%d（应为 1）body=%s", finishCount, recStream.Body.String())
+		}
+
+		// 非流式：聚合后的 choices 长度为 1 且 content=="hi", finish_reason=="stop"。
+		recNonStream := post(h, "/v1/chat/completions", `{"model":"traecode:cn:model","stream":false,"messages":[{"role":"user","content":"hi"}]}`, "Authorization", "Bearer sk-admin")
+		if recNonStream.Code != 200 {
+			t.Fatalf("非流式请求失败: %d %s", recNonStream.Code, recNonStream.Body.String())
+		}
+		var agg struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+				Message      struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(recNonStream.Body.Bytes(), &agg); err != nil {
+			t.Fatal(err)
+		}
+		if len(agg.Choices) != 1 || agg.Choices[0].Message.Content != "hi" || agg.Choices[0].FinishReason != "stop" {
+			t.Fatalf("非流式聚合结果异常: %+v", agg)
+		}
+	})
+
+	t.Run("ClaudeCodeWebSearch命中路由到新平台返回400而非WorkBuddy额度429", func(t *testing.T) {
+		resetModelsCache(t)
+		cn := &auth.Auth{UID: "cn-ws", AccessToken: "at-cn", ExpiresAt: 9999999999, Domain: "www.codebuddy.cn"}
+		fake := &crossRealmUpstream{}
+		up := fake.client(t, []string{"glm-5.2"}, nil)
+		keys, err := apikeys.Open("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager, err := providers.Open("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Import(t.Context(), providers.AccountInput{
+			Target:     "qoder:cn",
+			Credential: providers.Credential{UID: "q-ws", UserType: "teams", AccessToken: "at", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		h := NewHandler(Config{
+			Pool:      testPoolWith(cn),
+			Upstream:  up,
+			Keys:      keys,
+			Providers: manager,
+			Live: livecfg.New(livecfg.Snapshot{
+				APIKey:      "sk-admin",
+				ModelRoutes: []livecfg.ModelRoute{{Match: "claude-*", Target: "qoder:cn:model"}},
+			}),
+		})
+
+		// 构造一个已耗尽日积分额度的密钥：若未先走 routeModel 落到 qoder:cn，进入 WorkBuddy 搜索会返回 429。
+		key := createKey(t, keys, apikeys.Input{
+			Name:           "ws-routed",
+			Enabled:        true,
+			AllowedTargets: []string{"workbuddy:cn", "qoder:cn"},
+			DailyLimit:     apikeys.Limits{Credits: 1},
+		})
+		now := time.Now()
+		_ = keys.Admit(key.ID, now)
+		keys.Record(key.ID, now, 10, 1, true)
+
+		body := `{"model":"claude-sonnet-4-6","max_tokens":100,"tools":[{"type":"web_search_20250305","name":"web_search"}],"messages":[{"role":"user","content":"Perform a web search for the query: golang"}]}`
+		rec := post(h, "/v1/messages", body, "Authorization", "Bearer "+key.Secret)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "不提供网关联网搜索") {
+			t.Fatalf("WebSearch 路由到新平台未直接回 400 search_not_supported: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
 }

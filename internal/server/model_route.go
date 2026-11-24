@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/glob"
 	"github.com/yreidev/workbuddy2api-panel/internal/targets"
@@ -25,8 +26,16 @@ func (h *Handler) routeModel(ctx context.Context, model string) (string, bool) {
 	if _, _, explicit := targets.Parse(model); explicit {
 		return model, false
 	}
-	if p := principalFrom(ctx); p.key != nil && p.key.DefaultTarget != "" && !targets.WorkBuddy(p.key.DefaultTarget) {
-		return model, false
+	if p := principalFrom(ctx); p.key != nil {
+		defaultTarget := p.key.DefaultTarget
+		if h.cfg.Keys != nil {
+			if current, ok := h.cfg.Keys.Get(p.key.ID, time.Now()); ok {
+				defaultTarget = current.DefaultTarget
+			}
+		}
+		if defaultTarget != "" && !targets.WorkBuddy(defaultTarget) {
+			return model, false
+		}
 	}
 	routes := h.loadLive().ModelRoutes
 	if len(routes) == 0 || model == "" || h.cfg.Upstream == nil || ctx.Value(routedKey{}) != nil {

@@ -146,8 +146,15 @@ type runtime struct {
 	catalogRequest uint64
 	catalogFlights map[string][]*catalogFlight
 	lastError      string
-	quotaDone      chan struct{}
+	quotaFlight    *quotaFlight
 	quotaStatus    *QuotaStatus
+}
+
+// quotaFlight 合并同账号并发额度查询；发起者取消时由仍在等待的调用者接手，不污染缓存。
+type quotaFlight struct {
+	ownerCanceled bool
+	done          chan struct{}
+	status        QuotaStatus
 }
 
 // 普通查询共享最新的在途结果；手动刷新始终发起一次新查询。
@@ -176,20 +183,22 @@ type Adapter interface {
 }
 
 type Manager struct {
-	activity     activityLedger
-	waiters      int
-	waitersByKey map[string]int
-	mu           sync.Mutex
-	importing    sync.Mutex
-	path         string
-	data         state
-	running      map[string]*runtime
-	adapters     map[string]Adapter
-	changed      chan struct{}
-	logins       map[string]*Login
-	proxies      *proxies.Registry
-	usage        *usage.Recorder
-	qoderMachine *qoderMachine
+	activity       activityLedger
+	waiters        int
+	waitersByKey   map[string]int
+	mu             sync.Mutex
+	importing      sync.Mutex
+	path           string
+	data           state
+	running        map[string]*runtime
+	adapters       map[string]Adapter
+	changed        chan struct{}
+	logins         map[string]*Login
+	callbackServer *http.Server
+	callbackStop   chan struct{}
+	proxies        *proxies.Registry
+	usage          *usage.Recorder
+	qoderMachine   *qoderMachine
 }
 
 func Open(path string, client *http.Client) (*Manager, error) {
@@ -393,8 +402,9 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 
 	// 先占住已有账号，再做可能消费一次性刷新令牌的认证；缺 UID 时按原凭证定位。
 	var reserved *runtime
-	var existingID, importDigest string
+	var existingID, importDigest, existingRefreshToken string
 	proxyID := in.ProxyID
+	updateProxy := false
 	if strings.HasPrefix(in.Target, "trae") && c.RefreshToken != "" {
 		raw, err := json.Marshal(in.Credential)
 		if err != nil {
@@ -430,7 +440,7 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 		}
 		rt.importing = true
 		rt.inFlight++
-		reserved, existingID = rt, a.ID
+		reserved, existingID, existingRefreshToken = rt, a.ID, a.Credential.RefreshToken
 		proxyID = a.ProxyID
 		if importDigest != "" && importDigest == a.ImportDigest && !rt.blocked {
 			c = a.Credential
@@ -464,27 +474,54 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 		}()
 	}
 
-	routed, routeErr := m.route(ctx, proxyID)
-	if routeErr != nil {
-		return "", routeErr
+	// 若已有账号的原绑定代理已删除或不可用，且本次显式选择了可用新代理（如重新浏览器授权），允许切到新代理。
+	if reserved != nil && proxyID != "" && in.ProxyID != "" && in.ProxyID != proxyID && m.proxies != nil {
+		if _, _, oldUsable, _ := m.proxies.CheckProxy(proxyID); !oldUsable {
+			if _, _, newUsable, _ := m.proxies.CheckProxy(in.ProxyID); newUsable {
+				proxyID = in.ProxyID
+				updateProxy = true
+			}
+		}
 	}
-	ctx = routed
+
+	needsQoderUMID := m.qoderMachine != nil && strings.HasPrefix(in.Target, "qoder:") && (c.MachineLocal || c.MachineToken == "" || c.MachineToken == c.MachineID)
+	needsRefresh := c.AccessToken == "" || c.ExpiresAt > 0 && c.ExpiresAt < time.Now().Add(5*time.Minute).Unix()
+	needsUser := (c.UID == "" && strings.HasPrefix(in.Target, "trae")) || (strings.HasPrefix(in.Target, "qoder:") && c.UserType == "")
+	needsOutbound := needsQoderUMID || needsRefresh || needsUser
+
+	// 离线完整凭证重导入到原绑失效代理的已有账号时无需出站，允许直接落盘恢复凭证；
+	// 新增账号、或需要出站的导入仍严格校验代理线路与 RequireBound。
+	skipOfflineRoute := reserved != nil && !needsOutbound && proxyID != ""
+	if !skipOfflineRoute {
+		routed, routeErr := m.route(ctx, proxyID)
+		if routeErr != nil {
+			return "", routeErr
+		}
+		ctx = routed
+	}
 	adapter := m.adapters[strings.Split(in.Target, ":")[0]]
 	var err error
-	c, err = m.qoderIdentity(ctx, in.Target, proxyID, c)
-	if err != nil {
-		return "", err
+	if needsQoderUMID {
+		c, err = m.qoderIdentity(ctx, in.Target, proxyID, c)
+		if err != nil {
+			return "", err
+		}
 	}
-	if c.AccessToken == "" || c.ExpiresAt > 0 && c.ExpiresAt < time.Now().Add(5*time.Minute).Unix() {
+	if needsRefresh {
+		wasBlocked := false
 		if reserved != nil {
 			m.mu.Lock()
-			blocked := reserved.blocked
+			wasBlocked = reserved.blocked
 			m.mu.Unlock()
-			if blocked {
+			// 受刷新保护时仅拒绝重放原同一刷新令牌；提供新 refresh_token 或可复用的 Qoder PAT 允许原地恢复。
+			replayingOld := in.Credential.PAT == "" && (c.RefreshToken == "" || c.RefreshToken == existingRefreshToken)
+			if wasBlocked && replayingOld {
 				return "", errors.New("账号刷新状态不确定，请重新授权或导入有效的新凭证")
 			}
-			if err := m.markRefreshing(existingID); err != nil {
-				return "", err
+			if !wasBlocked {
+				if err := m.markRefreshing(existingID); err != nil {
+					return "", err
+				}
 			}
 			m.mu.Lock()
 			reserved.blocked = true
@@ -493,7 +530,7 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 		}
 		c, err = adapter.Refresh(ctx, in.Target, c)
 		if err != nil {
-			if reserved != nil && canRetryRouteError(err) {
+			if reserved != nil && !wasBlocked && canRetryRouteError(err) {
 				if clearErr := m.clearRefreshGuard(existingID); clearErr != nil {
 					return "", fmt.Errorf("导入账号认证（%v）: %w", err, clearErr)
 				}
@@ -524,6 +561,8 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 	if reserved != nil && id != existingID || in.Credential.UID != "" && c.UID != in.Credential.UID {
 		return "", errors.New("刷新后的账号身份与导入前不一致")
 	}
+	var reprobe string
+	defer func() { m.reprobeIfDown(reprobe) }()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, a := range m.data.Accounts {
@@ -531,7 +570,15 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 			rt := m.running[id]
 			if reserved == nil {
 				if a.ProxyID != proxyID {
-					return "", errors.New("已绑定代理的账号需携带原 UID 或可识别的原凭证重新导入")
+					oldBroken := a.ProxyID != "" && m.proxies != nil
+					if oldBroken {
+						_, _, usable, _ := m.proxies.CheckProxy(a.ProxyID)
+						oldBroken = !usable
+					}
+					if !oldBroken {
+						return "", errors.New("已绑定代理的账号需携带原 UID 或可识别的原凭证重新导入")
+					}
+					updateProxy = true
 				}
 				if !rt.refresh.TryLock() {
 					return "", errors.New("账号正在刷新凭证，请稍后重新导入")
@@ -547,6 +594,9 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 			}
 			a.Credential = c
 			a.ImportDigest = importDigest
+			if updateProxy {
+				a.ProxyID = proxyID
+			}
 			if in.Name != "" {
 				a.Name = in.Name
 			}
@@ -557,6 +607,7 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 			}
 			clear(rt.catalogs)
 			rt.coolUntil = time.Time{}
+			reprobe = a.ProxyID
 			return m.finishImportLocked(id, rt)
 		}
 	}
@@ -575,6 +626,7 @@ func (m *Manager) Import(ctx context.Context, in AccountInput) (string, error) {
 	}
 	rt := newRuntime()
 	m.running[id] = rt
+	reprobe = a.ProxyID
 	return m.finishImportLocked(id, rt)
 }
 
@@ -590,7 +642,8 @@ func (m *Manager) finishImportLocked(id string, rt *runtime) (string, error) {
 }
 
 func (m *Manager) Update(id string, in AccountInput, remove bool) error {
-	return m.update(id, func(a *Account) error {
+	var reprobe string
+	err := m.update(id, func(a *Account) error {
 		if in.Priority < 0 || in.Priority > 99 {
 			return errors.New("优先级必须在 0～99 之间")
 		}
@@ -600,11 +653,46 @@ func (m *Manager) Update(id string, in AccountInput, remove bool) error {
 				return errors.New("批量与定时测活模型必须属于该账号的产品与地区")
 			}
 		}
+		if in.ProxyID != "" && in.ProxyID != a.ProxyID {
+			reprobe = in.ProxyID
+		}
 		a.ProxyID, a.Name = in.ProxyID, strings.TrimSpace(in.Name)
 		a.Groups, a.Priority, a.Disabled = slices.Clone(in.Groups), in.Priority, in.Disabled
 		a.Paused, a.BlockedModels, a.LivenessModel = in.Paused, slices.Clone(in.BlockedModels), in.LivenessModel
 		return nil
 	}, remove, false)
+	if err == nil && !remove {
+		m.reprobeIfDown(reprobe)
+	}
+	return err
+}
+
+// RemoveGroup 删分组时同步把组内所有平台账号移出该组（与 WorkBuddy 行为一致），写盘失败回滚。
+func (m *Manager) RemoveGroup(groupID string) error {
+	if m == nil || groupID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	changed := false
+	old := make([]Account, len(m.data.Accounts))
+	for i, a := range m.data.Accounts {
+		old[i] = a
+		if slices.Contains(a.Groups, groupID) {
+			next := slices.DeleteFunc(slices.Clone(a.Groups), func(g string) bool { return g == groupID })
+			m.data.Accounts[i].Groups = next
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := m.saveLocked(); err != nil {
+		m.data.Accounts = old
+		return err
+	}
+	m.wakeLocked()
+	return nil
 }
 
 func (m *Manager) update(id string, edit func(*Account) error, remove, recover bool) error {
@@ -933,6 +1021,33 @@ func (m *Manager) proxyHosts() map[string][]string {
 func (m *Manager) SetUsage(recorder *usage.Recorder) { m.usage = recorder }
 
 type unboundRouteKey struct{}
+type boundRouteKey struct{}
+
+type boundRouteCheck struct {
+	registry *proxies.Registry
+	proxyID  string
+}
+
+func (m *Manager) proxyName(proxyID string) string {
+	if proxyID == "" || m.proxies == nil {
+		return ""
+	}
+	name, _, _, code := m.proxies.CheckProxy(proxyID)
+	if code == "proxy_not_found" {
+		return ""
+	}
+	return name
+}
+
+// reprobeIfDown 平台账号新绑到曾因探测别域入口失败而标 down 的代理时，尽快触发一次重测。
+func (m *Manager) reprobeIfDown(proxyID string) {
+	if proxyID == "" || m.proxies == nil {
+		return
+	}
+	if _, _, usable, code := m.proxies.CheckProxy(proxyID); !usable && code == "proxy_not_available" {
+		m.proxies.MarkDue(proxyID)
+	}
+}
 
 func (m *Manager) route(ctx context.Context, proxyID string) (context.Context, error) {
 	ctx = context.WithValue(ctx, providerRouteKey{}, proxyID)
@@ -948,15 +1063,12 @@ func (m *Manager) route(ctx context.Context, proxyID string) (context.Context, e
 		}
 		return context.WithValue(ctx, unboundRouteKey{}, m.proxies), nil
 	}
-	for _, proxy := range m.proxies.View().Proxies {
-		if proxy.ID == proxyID {
-			if !proxy.Usable {
-				return ctx, proxyUnavailable("proxy_not_available")
-			}
-			return upstream.WithProxy(ctx, proxyID), nil
-		}
+	_, _, usable, code := m.proxies.CheckProxy(proxyID)
+	if !usable {
+		return ctx, proxyUnavailable(code)
 	}
-	return ctx, proxyUnavailable("proxy_not_found")
+	ctx = upstream.WithProxy(ctx, proxyID)
+	return context.WithValue(ctx, boundRouteKey{}, boundRouteCheck{registry: m.proxies, proxyID: proxyID}), nil
 }
 
 func proxyUnavailable(code string) error {

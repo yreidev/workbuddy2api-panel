@@ -56,13 +56,18 @@ func writeProxyErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// proxiesList GET /panel/api/proxies：代理页的全部数据，外加每个号的代理情况（账号池卡片也用）。
-func (p *Panel) proxiesList(w http.ResponseWriter, r *http.Request) {
-	if !p.proxiesReady(w) {
-		return
-	}
+// proxyAccountsAndView 汇总代理池视图与全平台（WorkBuddy + Trae/Qoder）账号代理状态，
+// 供 /panel/api/proxies 与 /panel/api/status 共享同一口径（含 ExitIP/ExitGeo 与 Warnings.Blocked）。
+func (p *Panel) proxyAccountsAndView() (proxies.View, map[string]proxies.AccountView) {
 	view := p.cfg.Proxies.View()
 	accounts := p.cfg.Proxies.AccountViews()
+	if p.cfg.Providers == nil {
+		return view, accounts
+	}
+	poolNames := make(map[string]string, len(view.Pools))
+	for _, pl := range view.Pools {
+		poolNames[pl.ID] = pl.Name
+	}
 	for _, a := range p.cfg.Providers.List() {
 		account := proxies.AccountView{Proxy: a.ProxyID, Manual: a.ProxyID != ""}
 		if a.ProxyID == "" && view.Settings.RequireBound {
@@ -77,14 +82,32 @@ func (p *Panel) proxiesList(w http.ResponseWriter, r *http.Request) {
 				}
 				px.PlatformAccounts = append(px.PlatformAccounts, a.ID)
 				account.ProxyName = px.Name
+				account.Pool = px.Pool
+				account.PoolName = poolNames[px.Pool]
+				if e := px.Health.Exit; e != nil {
+					account.ExitIP, account.ExitGeo = e.IP, e.Geo()
+				}
 				account.Blocked = ""
 				if !px.Usable {
 					account.Blocked = "绑定的代理不可用或已到期"
 				}
+				break
 			}
+		}
+		if account.Blocked != "" {
+			view.Warnings.Blocked++
 		}
 		accounts[a.ID] = account
 	}
+	return view, accounts
+}
+
+// proxiesList GET /panel/api/proxies：代理页的全部数据，外加每个号的代理情况（账号池卡片也用）。
+func (p *Panel) proxiesList(w http.ResponseWriter, r *http.Request) {
+	if !p.proxiesReady(w) {
+		return
+	}
+	view, accounts := p.proxyAccountsAndView()
 	writeJSON(w, http.StatusOK, map[string]any{"view": view, "accounts": accounts})
 }
 

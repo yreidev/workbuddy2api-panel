@@ -20,7 +20,7 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
-// 默认预算和恢复次数来自官方 CLI 1.1.89；客户端取消或更短的请求期限优先。
+// 默认预算和恢复次数来自官方 CLI 1.1.89（1.1.96 复核一致）；客户端取消或更短的请求期限优先。
 const qoderQueueMaxWait = time.Hour
 const qoderQueueMaxRecoveries = 10
 
@@ -120,11 +120,46 @@ func (q *Qoder) queueStatus(ctx context.Context, target string, c Credential, bo
 	return next, err
 }
 
-func (q *Qoder) waitQueue(ctx context.Context, target string, c Credential, body map[string]any, status qoderQueueStatus) error {
+type credentialRefreshKey struct{}
+
+func checkQueuedDispatch(ctx context.Context) error {
+	if check, ok := ctx.Value(dispatchCheckKey{}).(func() error); ok {
+		return check()
+	}
+	return nil
+}
+
+func refreshQueuedCredential(ctx context.Context, c Credential) (Credential, error) {
+	if c.AccessToken != "" && (c.ExpiresAt == 0 || c.ExpiresAt > time.Now().Add(5*time.Minute).Unix()) {
+		return c, nil
+	}
+	refresh, ok := ctx.Value(credentialRefreshKey{}).(func(context.Context) (Credential, error))
+	if !ok {
+		return c, nil
+	}
+	return refresh(ctx)
+}
+
+func (q *Qoder) waitQueue(ctx context.Context, target string, c *Credential, body map[string]any, status qoderQueueStatus) error {
 	failures := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := checkQueuedDispatch(ctx); err != nil {
+			return err
+		}
 		pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		next, err := q.queueStatus(pollCtx, target, c, body, status)
+		fresh, refreshErr := refreshQueuedCredential(pollCtx, *c)
+		if refreshErr != nil {
+			cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return refreshErr
+		}
+		*c = fresh
+		next, err := q.queueStatus(pollCtx, target, *c, body, status)
 		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -210,10 +245,15 @@ func (q *Qoder) chatQueued(ctx context.Context, target string, c Credential, mod
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if check, ok := ctx.Value(dispatchCheckKey{}).(func() error); ok {
-			if err := check(); err != nil {
+		if err := checkQueuedDispatch(ctx); err != nil {
+			return err
+		}
+		if recoveries > 0 {
+			fresh, err := refreshQueuedCredential(ctx, c)
+			if err != nil {
 				return err
 			}
+			c = fresh
 		}
 		err := q.chatAttempt(ctx, target, c, model, body, func(frame map[string]any) error {
 			emitted = true
@@ -244,14 +284,15 @@ func (q *Qoder) chatQueued(ctx context.Context, target string, c Credential, mod
 		queueModel = status.ModelKey
 		waitCtx, cancel := context.WithTimeout(ctx, budget)
 		waitStarted := time.Now()
-		waitErr := q.waitQueue(waitCtx, target, c, body, status)
+		waitErr := q.waitQueue(waitCtx, target, &c, body, status)
 		budget -= time.Since(waitStarted)
 		cancel()
 		if waitErr != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if upstream.IsRouteError(waitErr) {
+			var denied *Error
+			if upstream.IsRouteError(waitErr) || (errors.As(waitErr, &denied) && denied.Status == http.StatusForbidden) {
 				return waitErr
 			}
 			return fmt.Errorf("Qoder 等待模型队列: %v: %w", waitErr, queueErr)

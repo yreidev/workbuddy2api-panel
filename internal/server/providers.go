@@ -152,37 +152,53 @@ func (h *Handler) providerChat(w http.ResponseWriter, r *http.Request, body []by
 	}}, func(frame map[string]any) error {
 		if usage, ok := frame["usage"].(map[string]any); ok {
 			merged, _ := terminal["usage"].(map[string]any)
-			if merged == nil {
-				merged = map[string]any{}
+			// 仅向客户端透出标准 OpenAI token 字段，过滤网关内部计费键（credit/credits/billable 等）。
+			for _, key := range []string{"prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details", "completion_tokens_details"} {
+				if value, exists := usage[key]; exists {
+					if merged == nil {
+						merged = map[string]any{}
+					}
+					merged[key] = value
+				}
 			}
-			for key, value := range usage {
-				merged[key] = value
+			if merged != nil {
+				terminal["usage"] = merged
 			}
-			terminal["usage"] = merged
 			delete(frame, "usage")
 		}
 		if stream {
 			if choices, ok := frame["choices"].([]any); ok {
 				for _, value := range choices {
 					if choice, ok := value.(map[string]any); ok && choice["finish_reason"] != nil {
-						if reason := choice["finish_reason"].(string); strings.TrimSpace(reason) != "" {
-							terminal["choices"] = append(terminal["choices"].([]any), map[string]any{"index": choice["index"], "delta": map[string]any{}, "finish_reason": reason})
+						if reason, ok := choice["finish_reason"].(string); ok && strings.TrimSpace(reason) != "" {
+							termChoices, _ := terminal["choices"].([]any)
+							entry := map[string]any{"index": choice["index"], "delta": map[string]any{}, "finish_reason": reason}
+							replaced := false
+							for i, existing := range termChoices {
+								if ec, ok := existing.(map[string]any); ok && fmt.Sprint(ec["index"]) == fmt.Sprint(choice["index"]) {
+									termChoices[i] = entry
+									replaced = true
+									break
+								}
+							}
+							if !replaced {
+								termChoices = append(termChoices, entry)
+							}
+							terminal["choices"] = termChoices
 						}
 						choice["finish_reason"] = nil
 					}
 				}
 			}
 		}
+		if !providerFrameHasPayload(frame) {
+			return nil
+		}
 		return writeFrame(frame)
 	})
 	st.uid = result.AccountID
-	for _, a := range h.cfg.Providers.List() {
-		if a.ID == result.AccountID {
-			st.nick = a.Name
-			break
-		}
-	}
-	st.proxy = result.ProxyID
+	st.nick = result.AccountName
+	st.proxy = result.ProxyName
 	st.attempts = result.Attempts
 	st.promptTokens = result.PromptTokens
 	st.completionTokens = result.CompletionTokens
@@ -282,6 +298,32 @@ func (h *Handler) providerChat(w http.ResponseWriter, r *http.Request, body []by
 	}
 	st.status = 200
 	st.outcome = reqlog.OutcomeSuccess
+}
+
+// providerFrameHasPayload 判断剥离 usage 和（流式）finish_reason 后，帧是否仍含可交付内容，
+// 避免向客户端输出空 delta 帧或提前开启 HTTP 200 SSE 响应头。
+func providerFrameHasPayload(frame map[string]any) bool {
+	choices, ok := frame["choices"].([]any)
+	if !ok || len(choices) == 0 {
+		return false
+	}
+	for _, value := range choices {
+		choice, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if reason, ok := choice["finish_reason"].(string); ok && strings.TrimSpace(reason) != "" {
+			return true
+		}
+		if delta, ok := choice["delta"].(map[string]any); ok {
+			for _, v := range delta {
+				if v != nil {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (h *Handler) workbuddyAccountAllowed(ctx context.Context, uid, model string) bool {

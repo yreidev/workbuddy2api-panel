@@ -271,3 +271,195 @@ func TestQoderUMIDHelperDownloadUsesSelectedProxy(t *testing.T) {
 		t.Fatal("所选代理拒绝后下载仍继续", err)
 	}
 }
+
+func TestQoderUMIDProxyDialFailureReportsFailoverAndNoGlobalPoison(t *testing.T) {
+	// 拒绝 CONNECT 的代理服务端：验证拨号失败会 ReportProxy 标 down、换号容灾、不写全局退避、不向客户端泄露代理地址。
+	badProxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "connect refused", http.StatusBadGateway)
+	}))
+	defer badProxyServer.Close()
+
+	reg, err := proxies.Open(filepath.Join(t.TempDir(), "proxies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolID, err := reg.CreatePool(proxies.PoolInput{Name: "测试池"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := reg.Import(badProxyServer.URL+" 坏代理\nhttp://good-umid.invalid:8888 好代理", "http", poolID, nil)
+	if err != nil || len(added.Added) != 2 {
+		t.Fatalf("导入代理失败: %+v %v", added, err)
+	}
+	badID, goodID := added.Added[0], added.Added[1]
+
+	m, _ := testManager(t, filepath.Join(t.TempDir(), "providers.json"))
+	m.SetProxies(reg)
+	first, err := m.Import(t.Context(), AccountInput{Target: "qoder:cn", Name: "一号", ProxyID: badID, Priority: 1, Credential: Credential{UID: "first", AccessToken: "t1", UserType: "teams"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Import(t.Context(), AccountInput{Target: "qoder:cn", Name: "二号", ProxyID: goodID, Priority: 2, Credential: Credential{UID: "second", AccessToken: "t2", UserType: "teams"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.EnableQoderUMID(""); err != nil {
+		t.Fatal(err)
+	}
+	u := m.qoderMachine
+	now := time.Now()
+	u.now = func() time.Time { return now }
+	u.prepare = func(ctx context.Context, proxyURL string) (string, error) {
+		if proxyURL == badProxyServer.URL {
+			if _, dialErr := dialQoderUMIDProxy(ctx, proxyURL, "tcp", "registry.npmjs.org:443"); dialErr != nil {
+				return "", dialErr
+			}
+		}
+		return "fixture-helper", nil
+	}
+	u.run = func(_ context.Context, _ string, _ int, proxyURL string) (qoderMachineInfo, error) {
+		if proxyURL != "http://good-umid.invalid:8888" {
+			return qoderMachineInfo{}, errors.New("未走好代理")
+		}
+		return qoderMachineInfo{Token: "good-umid-token", Code: "good-code", Type: "good-type"}, nil
+	}
+
+	// 场景一：首号代理在 UMID 阶段失败，自动 ReportProxy 标 down 且不污染全局 retryAt，次号立即成功接管。
+	res, err := m.Execute(t.Context(), Request{Target: "qoder:cn", Model: "model", Body: []byte(plainChat), MaxRotate: 2}, discardFrame)
+	if err != nil || res.AccountID != second || res.Attempts != 2 || res.ProxyName != "好代理" {
+		t.Fatalf("UMID 代理故障未正常换号容灾: res=%+v err=%v", res, err)
+	}
+	if _, _, usable, code := reg.CheckProxy(badID); usable || code != "proxy_not_available" {
+		t.Fatalf("坏代理未被 ReportProxy 标记 down: usable=%v code=%q", usable, code)
+	}
+	if !u.retryAt[0].IsZero() {
+		t.Fatalf("账号线路错误污染了全局 UMID 退避: %v", u.retryAt[0])
+	}
+	_ = first
+
+	// 场景二：仅有单号且走坏代理（隧道拨号路径），对外错误不得泄露真实代理 host:port，也不得污染全局 retryAt。
+	m2, _ := testManager(t, filepath.Join(t.TempDir(), "providers2.json"))
+	reg2, err := proxies.Open(filepath.Join(t.TempDir(), "proxies2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool2, err := reg2.CreatePool(proxies.PoolInput{Name: "单测池"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added2, err := reg2.Import(badProxyServer.URL+" 单坏代理", "http", pool2, nil)
+	if err != nil || len(added2.Added) != 1 {
+		t.Fatalf("导入代理失败: %+v %v", added2, err)
+	}
+	m2.SetProxies(reg2)
+	if _, err := m2.Import(t.Context(), AccountInput{Target: "qoder:cn", ProxyID: added2.Added[0], Credential: Credential{UID: "only", AccessToken: "t", UserType: "teams"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.EnableQoderUMID(""); err != nil {
+		t.Fatal(err)
+	}
+	u2 := m2.qoderMachine
+	u2.now = func() time.Time { return now }
+	u2.prepare = func(context.Context, string) (string, error) { return "fixture-helper", nil }
+	u2.run = func(ctx context.Context, _ string, _ int, proxyURL string) (qoderMachineInfo, error) {
+		_, dialErr := dialQoderUMIDProxy(ctx, proxyURL, "tcp", "pum.m.alibaba.com:443")
+		return qoderMachineInfo{}, dialErr
+	}
+	_, err = m2.Execute(t.Context(), Request{Target: "qoder:cn", Model: "model", Body: []byte(plainChat), MaxRotate: 1}, discardFrame)
+	var pubErr *Error
+	if !errors.As(err, &pubErr) || pubErr.Status != 503 || pubErr.Code != "proxy_not_available" {
+		t.Fatalf("全部代理失败未返回 503 proxy_not_available: %v", err)
+	}
+	if strings.Contains(err.Error(), "127.0.0.1") || strings.Contains(err.Error(), badProxyServer.Listener.Addr().String()) || strings.Contains(err.Error(), "单坏代理") {
+		t.Fatalf("对外错误泄露了代理地址或名称: %v", err)
+	}
+	if !u2.retryAt[0].IsZero() {
+		t.Fatalf("隧道拨号线路错误写入了全局退避: %v", u2.retryAt[0])
+	}
+}
+
+func TestQoderUMIDProxyIdempotentCloseAndKeepAlive(t *testing.T) {
+	// 模拟远端保持 keep-alive 长连接不主动关：客户端收到响应后关闭连接，p.close() 仍计为成功且重复调用幂等。
+	remoteLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remoteLn.Close()
+	remoteDone := make(chan struct{})
+	remoteSawEOF := make(chan struct{})
+	holdRemote := make(chan struct{})
+	defer func() {
+		select {
+		case <-holdRemote:
+		default:
+			close(holdRemote)
+		}
+	}()
+	go func() {
+		defer close(remoteDone)
+		conn, acceptErr := remoteLn.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 16)
+		if _, rErr := io.ReadFull(conn, buf[:4]); rErr != nil {
+			return
+		}
+		_, _ = io.WriteString(conn, "OK-KEEPALIVE")
+		// 客户端半关闭后，代理应把 FIN 透传给远端（CloseWrite），随后远端保持连接打开模拟 keep-alive。
+		_, _ = io.Copy(io.Discard, conn)
+		close(remoteSawEOF)
+		<-holdRemote
+	}()
+
+	p, err := newQoderMachineProxy(t.Context(), t.TempDir(), func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", remoteLn.Addr().String())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.DialTimeout("tcp", p.listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	_, err = fmt.Fprintf(client, "CONNECT pum.m.alibaba.com:443 HTTP/1.1\r\nHost: pum.m.alibaba.com:443\r\nProxy-Authorization: %s\r\n\r\n", p.authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(client)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("未建立隧道: %+v %v", resp, err)
+	}
+	if _, err := io.WriteString(client, "PING"); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, len("OK-KEEPALIVE"))
+	if _, err := io.ReadFull(reader, reply); err != nil || string(reply) != "OK-KEEPALIVE" {
+		t.Fatalf("未收到远端响应: %q %v", reply, err)
+	}
+	if cw, ok := client.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+	_ = client.Close()
+	select {
+	case <-remoteSawEOF:
+	case <-time.After(2 * time.Second):
+		t.Fatal("客户端关闭写端后未收到 CloseWrite 透传")
+	}
+
+	// 远端仍保持打开时调用 close()：仍应计入 completed 且重复调用幂等。
+	if err := p.close(); err != nil {
+		t.Fatalf("keep-alive 场景首次 close 失败: %v", err)
+	}
+	if err := p.close(); err != nil {
+		t.Fatalf("重复 close 不幂等: %v", err)
+	}
+	if _, err := os.Stat(p.config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("close 后遗留临时配置: %v", err)
+	}
+	close(holdRemote)
+	<-remoteDone
+}

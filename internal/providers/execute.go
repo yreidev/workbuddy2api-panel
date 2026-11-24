@@ -45,7 +45,9 @@ type Request struct {
 
 type Result struct {
 	ProxyID                        string
+	ProxyName                      string
 	AccountID                      string
+	AccountName                    string
 	Attempts                       int
 	PromptTokens, CompletionTokens int64
 	TokensKnown                    bool
@@ -232,6 +234,23 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 			log.Printf("[providers] 重试平台账本 request=%s: %v", req.RequestID, err)
 			return result, &Error{Status: 503, Code: "ledger_unavailable", Message: "平台账本暂时无法写入"}
 		}
+		// 先在锁外评估 req.Allow（避免持 Manager.mu 回调 apikeys.Store 锁），再持锁选号并校验分组未变。
+		var allowed map[string]bool
+		var snapped map[string][]string
+		if req.Allow != nil {
+			m.mu.Lock()
+			snapped = make(map[string][]string, len(m.data.Accounts))
+			for _, a := range m.data.Accounts {
+				if (!probing || a.ID == req.TestAccountID) && !tried[a.ID] && slices.Contains(a.Targets, req.Target) {
+					snapped[a.ID] = slices.Clone(a.Groups)
+				}
+			}
+			m.mu.Unlock()
+			allowed = make(map[string]bool, len(snapped))
+			for id, groups := range snapped {
+				allowed[id] = req.Allow(req.Target, groups)
+			}
+		}
 		m.mu.Lock()
 		now := time.Now()
 		var chosen *Account
@@ -244,14 +263,25 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 		}
 		waiting := false
 		modelMissing := false
+		groupsChanged := false
 		for _, a := range m.data.Accounts {
 			rt := m.running[a.ID]
 			if probing && a.ID != req.TestAccountID {
 				continue
 			}
 			blockedModel := slices.ContainsFunc(a.BlockedModels, func(pattern string) bool { return glob.Match(pattern, targets.Public(req.Target, req.Model)) })
-			if (a.Disabled || a.Paused) && !probing || blockedModel || rt.blocked || tried[a.ID] || !slices.Contains(a.Targets, req.Target) || req.Allow != nil && !req.Allow(req.Target, a.Groups) {
+			if (a.Disabled || a.Paused) && !probing || blockedModel || rt.blocked || tried[a.ID] || !slices.Contains(a.Targets, req.Target) {
 				continue
+			}
+			if req.Allow != nil {
+				snapGroups, existed := snapped[a.ID]
+				if !existed || !slices.Equal(a.Groups, snapGroups) {
+					groupsChanged = true
+					continue
+				}
+				if !allowed[a.ID] {
+					continue
+				}
 			}
 			if !probing && now.Before(rt.coolUntil) {
 				continue
@@ -273,6 +303,10 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 			if chosen == nil || a.ID == binding.AccountID && now.Before(binding.ExpiresAt) || chosen.ID != binding.AccountID && (a.Priority < chosen.Priority || a.Priority == chosen.Priority && rt.lastUsed.Before(m.running[chosen.ID].lastUsed)) {
 				chosen = &candidate
 			}
+		}
+		if chosen == nil && groupsChanged {
+			m.mu.Unlock()
+			continue
 		}
 		if chosen == nil {
 			if waiting {
@@ -334,7 +368,9 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 			md = models[index]
 		}
 		result.AccountID = a.ID
+		result.AccountName = a.Name
 		result.ProxyID = a.ProxyID
+		result.ProxyName = m.proxyName(a.ProxyID)
 		result.Attempts++
 		var credential Credential
 		routed := ctx
@@ -346,18 +382,28 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 		}
 		checkDispatch := func() error {
 			m.mu.Lock()
-			defer m.mu.Unlock()
+			var groups []string
+			eligible := false
 			for _, current := range m.data.Accounts {
 				if current.ID == a.ID && ((!current.Disabled && !current.Paused) || probing) && !rt.blocked &&
-					slices.Contains(current.Targets, req.Target) && (req.Allow == nil || req.Allow(req.Target, current.Groups)) {
-					return nil
+					slices.Contains(current.Targets, req.Target) {
+					eligible = true
+					groups = slices.Clone(current.Groups)
+					break
 				}
 			}
-			return &Error{Status: 403, Code: "target_not_allowed"}
+			m.mu.Unlock()
+			if !eligible || (req.Allow != nil && !req.Allow(req.Target, groups)) {
+				return &Error{Status: 403, Code: "target_not_allowed"}
+			}
+			return nil
 		}
 		if err == nil {
 			err = checkDispatch()
 			routed = context.WithValue(routed, dispatchCheckKey{}, checkDispatch)
+			routed = context.WithValue(routed, credentialRefreshKey{}, func(rctx context.Context) (Credential, error) {
+				return m.credential(rctx, a.ID, req.Target)
+			})
 		}
 		upstreamSession := uuid.NewString()
 		if req.Session != "" && binding.AccountID == a.ID && now.Before(binding.ExpiresAt) {
@@ -372,8 +418,9 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 		meter := requestMeter{target: req.Target}
 		if err == nil {
 			err = m.adapters[strings.Split(req.Target, ":")[0]].Chat(routed, req.Target, credential, md, req.Body, upstreamSession, func(frame map[string]any) error {
-				if usage := object(frame["usage"]); usage != nil {
-					if err := meter.observe(usage); err != nil {
+				u := object(frame["usage"])
+				if u != nil {
+					if err := meter.observe(u); err != nil {
 						result.Charge, result.ChargeKnown, result.Unit = 0, false, ""
 						return fmt.Errorf("读取平台计费 target=%s account=%s: %w", req.Target, a.ID, err)
 					}
@@ -381,14 +428,14 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 					if result.ChargeKnown {
 						result.Unit = "credits"
 					}
-					if usage["prompt_tokens"] != nil && usage["completion_tokens"] != nil {
+					if u["prompt_tokens"] != nil && u["completion_tokens"] != nil {
 						for _, field := range []string{"prompt_tokens", "completion_tokens"} {
-							value, ok := usage[field].(float64)
+							value, ok := u[field].(float64)
 							if !ok || value < 0 || value >= float64(math.MaxInt64) || math.Trunc(value) != value {
 								return fmt.Errorf("平台 usage.%s 必须为非负整数", field)
 							}
 						}
-						prompt, completion := number(usage["prompt_tokens"]), number(usage["completion_tokens"])
+						prompt, completion := number(u["prompt_tokens"]), number(u["completion_tokens"])
 						if prompt > math.MaxInt64-completion {
 							return errors.New("平台 usage token 总数溢出")
 						}
@@ -397,19 +444,40 @@ func (m *Manager) Execute(ctx context.Context, req Request, emit func(map[string
 						result.CompletionTokens = completion
 					}
 				}
+				hasOutput := false
 				if choices, ok := frame["choices"].([]any); ok {
 					for _, v := range choices {
-						if value := object(v)["finish_reason"]; value != nil {
+						choice := object(v)
+						if delta := object(choice["delta"]); len(delta) > 0 {
+							for _, dv := range delta {
+								if dv != nil {
+									hasOutput = true
+									break
+								}
+							}
+						}
+						if value := choice["finish_reason"]; value != nil {
 							reason, ok := value.(string)
 							if !ok {
 								return errors.New("平台 finish_reason 必须为字符串")
 							}
-							finished = finished || strings.TrimSpace(reason) != ""
+							if strings.TrimSpace(reason) != "" {
+								finished = true
+								hasOutput = true
+							}
 						}
 					}
 				}
+				hasTokens := u != nil && (u["prompt_tokens"] != nil || u["completion_tokens"] != nil || u["total_tokens"] != nil)
+				// 纯内部计费帧（如 TraeWork defer 查询的单次扣费）只更新 meter，不置 Started 也不下发客户端，
+				// 避免前置失败时把 HTTP 5xx 污染为 HTTP 200 空流。
+				if !hasOutput && !hasTokens {
+					return nil
+				}
 				frame["model"] = targets.Public(req.Target, req.Model)
-				result.Started = true
+				if hasOutput {
+					result.Started = true
+				}
 				return emit(frame)
 			})
 			if err == nil && !finished {

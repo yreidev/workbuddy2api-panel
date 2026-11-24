@@ -456,14 +456,22 @@ func (s *Store) List(now time.Time) []Key {
 	return out
 }
 
-// Get 按 id 取密钥副本（Today 同 List）。
+// Get 按 id 取密钥副本（Today 同 List），直接按 id 定位，不整表克隆。
 func (s *Store) Get(id string, now time.Time) (Key, bool) {
-	for _, k := range s.List(now) {
-		if k.ID == id {
-			return k, true
-		}
+	if s == nil || id == "" {
+		return Key{}, false
 	}
-	return Key{}, false
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := s.findLocked(id)
+	if k == nil {
+		return Key{}, false
+	}
+	c := cloneKey(k)
+	if day := cstDay(now); c.Day != day {
+		c.Today, c.Day = Usage{}, day
+	}
+	return c, true
 }
 
 // Lookup 按密钥原文查。

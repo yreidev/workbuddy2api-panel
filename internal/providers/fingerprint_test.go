@@ -40,8 +40,8 @@ func TestOfficialClientIdentity(t *testing.T) {
 		t.Fatal("Code 的 TTNet、版本与持久化设备身份不一致")
 	}
 	openapi := qoderAPIHeaders("fixture-access")
-	if openapi.Get("User-Agent") != "qoder/1.1.89" || openapi.Get("Cosy-Version") != "1.1.89" || openapi.Get("Cosy-Clienttype") != "5" || openapi.Get("Cosy-Machineos") != "x86_64_linux" {
-		t.Fatal("Qoder OpenAPI 身份与官方 CLI 1.1.89 样本不一致")
+	if openapi.Get("User-Agent") != "qoder/1.1.96" || openapi.Get("Cosy-Version") != "1.1.96" || openapi.Get("Cosy-Clienttype") != "5" || openapi.Get("Cosy-Machineos") != "x86_64_linux" {
+		t.Fatal("Qoder OpenAPI 身份与官方 CLI 1.1.96 对齐值不一致")
 	}
 	sess := cosy.NewSession(cosy.AuthIdentity{UID: c.UID, SecurityOauthToken: c.AccessToken}, c.MachineID, "fixture-machine-token", "")
 	h := cosy.Headers(sess, "/api/v2/model/list", "")
@@ -61,7 +61,7 @@ func TestOfficialClientIdentity(t *testing.T) {
 	if err = json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["cosyVersion"] != "1.1.89" || h.Get("Cosy-Version") != "1.1.89" || h.Get("User-Agent") != "Bun/1.4.2" || h.Get("Cosy-Machineid") != c.MachineID || h.Get("Accept-Language") != "" || h.Get("Sec-Fetch-Mode") != "" {
+	if payload["cosyVersion"] != "1.1.96" || h.Get("Cosy-Version") != "1.1.96" || h.Get("User-Agent") != "Bun/1.4.4" || h.Get("Cosy-Machineid") != c.MachineID || h.Get("Accept-Language") != "" || h.Get("Sec-Fetch-Mode") != "" {
 		t.Fatal("COSY 签名、请求头与设备身份发生混搭")
 	}
 }

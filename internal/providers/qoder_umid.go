@@ -52,6 +52,35 @@ type qoderMachine struct {
 	now          func() time.Time
 }
 
+type qoderUMIDRouteKey struct{}
+
+type qoderUMIDRoute struct {
+	id     string
+	name   string
+	report func(string, error)
+}
+
+// dialQoderUMIDProxy 统一包装 UMID 下载与隧道拨号：绑定代理拨号结果上报 ReportProxy，
+// 失败时包装为 *upstream.RouteError，既支持换号容灾又避免向客户端泄露代理地址。
+func dialQoderUMIDProxy(ctx context.Context, proxyURL, network, addr string) (net.Conn, error) {
+	conn, err := upstream.DialProxyContext(ctx, proxyURL, network, addr)
+	route, hasRoute := ctx.Value(qoderUMIDRouteKey{}).(qoderUMIDRoute)
+	if err != nil {
+		if hasRoute && route.id != "" && route.report != nil && ctx.Err() == nil {
+			route.report(route.id, err)
+		}
+		name := "默认代理"
+		if hasRoute && route.name != "" {
+			name = route.name
+		}
+		return nil, &upstream.RouteError{Proxy: name, Err: err}
+	}
+	if hasRoute && route.id != "" && route.report != nil {
+		route.report(route.id, nil)
+	}
+	return conn, nil
+}
+
 // EnableQoderUMID 由服务入口装配；首次 Qoder 请求才取得并运行官方外部组件。
 // 该组件不随本仓库或镜像分发，账号文件与组件缓存都放在持久化数据目录。
 func (m *Manager) EnableQoderUMID(defaultProxy string) error {
@@ -67,7 +96,7 @@ func (m *Manager) EnableQoderUMID(defaultProxy string) error {
 			return runQoderMachine(ctx, binary, environment)
 		}
 		return runQoderMachineProxy(ctx, binary, environment, func(ctx context.Context, address string) (net.Conn, error) {
-			return upstream.DialProxyContext(ctx, proxyURL, "tcp", address)
+			return dialQoderUMIDProxy(ctx, proxyURL, "tcp", address)
 		})
 	}
 	m.qoderMachine = u
@@ -85,13 +114,16 @@ func (m *Manager) qoderIdentity(ctx context.Context, target, proxyID string, c C
 	proxyURL := m.qoderMachine.defaultProxy
 	if proxyID != "" {
 		if m.proxies == nil {
-			return c, errors.New("Qoder UMID 代理管理未启用")
+			return c, &upstream.RouteError{Blocked: true, Err: errors.New("Qoder UMID 代理管理未启用")}
 		}
-		_, route, err := m.proxies.RouteProxy(proxyID)
-		if err != nil {
-			return c, fmt.Errorf("Qoder UMID 解析绑定代理: %w", err)
+		name, route, usable, code := m.proxies.CheckProxy(proxyID)
+		if !usable {
+			return c, proxyUnavailable(code)
 		}
 		proxyURL = route
+		ctx = context.WithValue(ctx, qoderUMIDRouteKey{}, qoderUMIDRoute{id: proxyID, name: name, report: m.proxies.ReportProxy})
+	} else if m.proxies != nil && m.proxies.Settings().RequireBound {
+		return c, proxyUnavailable("proxy_required")
 	}
 	info, err := m.qoderMachine.get(ctx, target, proxyURL)
 	if err != nil {
@@ -183,7 +215,10 @@ func (u *qoderMachine) get(ctx context.Context, target, proxyURL string) (qoderM
 	if ctx.Err() != nil {
 		return qoderMachineInfo{}, ctx.Err()
 	}
-	u.retryAt[environment] = now.Add(time.Minute)
+	// 账号代理线路故障只影响该线路，不写入全局环境退避，避免连坐同地区其他健康代理账号。
+	if !upstream.IsRouteError(err) {
+		u.retryAt[environment] = now.Add(time.Minute)
+	}
 	log.Printf("[providers] Qoder UMID environment=%d 更新失败：%v", environment, err)
 	// 只保留已经安全落盘的旧快照，不把本次写盘失败的新身份当作已保存。
 	old := u.cache[environment]
@@ -207,7 +242,7 @@ func validQoderMachineInfo(info qoderMachineInfo) bool {
 	return true
 }
 
-// qoderHostname 对照官方 1.1.89 的 NEi/Vdn：安全 ASCII、IDNA、替换并加摘要。
+// qoderHostname 对照官方 1.1.89／1.1.96 规范化实现：安全 ASCII、IDNA、替换并加摘要。
 func qoderHostname(host string) string {
 	host = strings.TrimSpace(host)
 	if host == "" {

@@ -414,3 +414,45 @@ func TestLookups(t *testing.T) {
 		t.Fatal("shortList 不对")
 	}
 }
+
+// TestCheckProxyAndMarkDue 平台账号热路径轻量检代理与 MarkDue 触发重测。
+func TestCheckProxyAndMarkDue(t *testing.T) {
+	tr := newReg(t)
+	p1 := tr.pool(t, PoolInput{Name: "池"})
+	ids := tr.add(t, p1, "http://u:p@h1:1 甲")
+	if _, _, usable, code := tr.CheckProxy("missing"); usable || code != "proxy_not_found" {
+		t.Fatalf("不存在的代理返回不对: usable=%v code=%q", usable, code)
+	}
+	if name, rawURL, usable, code := tr.CheckProxy(ids[0]); !usable || code != "" || name != "甲" || rawURL != "http://u:p@h1:1" {
+		t.Fatalf("健康代理返回不对: name=%q url=%q usable=%v code=%q", name, rawURL, usable, code)
+	}
+	tr.mu.Lock()
+	tr.proxyLocked(ids[0]).Health = Health{State: "down", DownSince: t0}
+	tr.mu.Unlock()
+	if name, _, usable, code := tr.CheckProxy(ids[0]); usable || code != "proxy_not_available" || name != "甲" {
+		t.Fatalf("down 代理未阻断: name=%q usable=%v code=%q", name, usable, code)
+	}
+	tr.MarkDue(ids[0])
+	tr.mu.Lock()
+	due := tr.due[ids[0]]
+	delete(tr.due, ids[0])
+	past := t0.Add(-time.Minute)
+	tr.proxyLocked(ids[0]).Health.State = "ok"
+	tr.proxyLocked(ids[0]).ExpiresAt = &past
+	tr.mu.Unlock()
+	if !due {
+		t.Fatal("MarkDue 未把非到期代理标为待重测")
+	}
+	if _, _, usable, code := tr.CheckProxy(ids[0]); usable || code != "proxy_not_available" {
+		t.Fatalf("到期代理未阻断: usable=%v code=%q", usable, code)
+	}
+	tr.MarkDue(ids[0])
+	tr.MarkDue("")
+	tr.MarkDue("missing")
+	tr.mu.Lock()
+	expiredDue := tr.due[ids[0]]
+	tr.mu.Unlock()
+	if expiredDue {
+		t.Fatal("已到期代理不应被 MarkDue 排入重测")
+	}
+}

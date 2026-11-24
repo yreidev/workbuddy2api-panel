@@ -546,3 +546,48 @@ func TestKeyGroups(t *testing.T) {
 		t.Fatalf("库里的分组被调用方改了: %v", again.Groups)
 	}
 }
+
+// TestGetClonesAndRollsToday Get 按 ID 直接查找，返回深拷贝，且跨日切与 List 口径一致。
+func TestGetClonesAndRollsToday(t *testing.T) {
+	var nilStore *Store
+	if _, ok := nilStore.Get("any", t0); ok {
+		t.Fatal("nil Store.Get 应返回 false")
+	}
+	s, _ := newStore(t)
+	k := mustCreate(t, s, Input{
+		Name:           "直查",
+		Enabled:        true,
+		Groups:         []string{"g1"},
+		Models:         []string{"qoder:cn:*"},
+		AllowedTargets: []string{"qoder:cn"},
+		DefaultTarget:  "qoder:cn",
+	})
+	if d := s.AdmitTarget(k.ID, "qoder:cn", "qoder:cn:model", t0); d != nil {
+		t.Fatalf("AdmitTarget 被意外拒绝: %+v", d)
+	}
+	s.Record(k.ID, t0, 50, 1.5, true)
+
+	if _, ok := s.Get("missing", t0); ok {
+		t.Fatal("不存在的 ID 应返回 false")
+	}
+	got, ok := s.Get(k.ID, t0)
+	if !ok || got.DefaultTarget != "qoder:cn" || got.Today != (Usage{Requests: 1, Tokens: 50, Credits: 1.5}) || got.Used != got.Today {
+		t.Fatalf("当天 Get 返回不对: ok=%v got=%+v", ok, got)
+	}
+	got.Groups[0] = "tampered"
+	got.Models[0] = "tampered"
+	got.AllowedTargets[0] = "tampered"
+
+	nextDay := t0.Add(24 * time.Hour)
+	rolled, ok := s.Get(k.ID, nextDay)
+	listed := s.List(nextDay)
+	if !ok || len(listed) != 1 {
+		t.Fatalf("跨日查询失败: ok=%v list=%d", ok, len(listed))
+	}
+	if rolled.Groups[0] != "g1" || rolled.Models[0] != "qoder:cn:*" || rolled.AllowedTargets[0] != "qoder:cn" {
+		t.Fatalf("Get 返回切片未深拷贝: %+v", rolled)
+	}
+	if rolled.Today != (Usage{}) || rolled.Day != "2026-10-21" || rolled.Used != listed[0].Used || rolled.Today != listed[0].Today {
+		t.Fatalf("跨日 Get 与 List 不一致: get=%+v list=%+v", rolled, listed[0])
+	}
+}
