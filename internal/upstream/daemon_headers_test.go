@@ -45,14 +45,15 @@ func TestBillingHeadersOfficialShape(t *testing.T) {
 	cnEnt := cnAuth()
 	cnEnt.EnterpriseID = "corp-cn"
 	cases := []struct {
-		name, method string
-		a            *auth.Auth
-		ua, domain   string
-		ent, ctype   string
+		name, method   string
+		a              *auth.Auth
+		ua, domain     string
+		ent, ctype     string
+		cliVer, cliPrd string
 	}{
-		{"国内版个人号 POST", http.MethodPost, cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "", "application/json"},
-		{"国内版企业号 POST", http.MethodPost, cnEnt, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "corp-cn", "application/json"},
-		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0", "www.workbuddy.ai", "", ""},
+		{"国内版个人号 POST", http.MethodPost, cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "", "application/json", "5.11.3", "WorkBuddy"},
+		{"国内版企业号 POST", http.MethodPost, cnEnt, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "corp-cn", "application/json", "5.11.3", "WorkBuddy"},
+		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0", "www.workbuddy.ai", "", "", "5.11.4", "workbuddy-ai"},
 	}
 	prevID := ""
 	for _, tc := range cases {
@@ -62,20 +63,23 @@ func TestBillingHeadersOfficialShape(t *testing.T) {
 			req, _ := http.NewRequest(tc.method, "https://x/v2/report", nil)
 			(&Client{}).BillingHeaders(req, a)
 			wantHeaders(t, req.Header, map[string]string{
-				"Accept":           "application/json, text/plain, */*",
-				"Content-Type":     tc.ctype,
-				"X-Requested-With": "XMLHttpRequest",
-				"User-Agent":       tc.ua,
-				"Authorization":    "Bearer tok",
-				"X-User-Id":        a.UID,
-				"X-Domain":         tc.domain,
-				"X-Enterprise-Id":  tc.ent,
-				"X-Tenant-Id":      tc.ent,
-				"X-Product":        "SaaS",
+				"Accept":            "application/json, text/plain, */*",
+				"Content-Type":      tc.ctype,
+				"X-Requested-With":  "XMLHttpRequest",
+				"User-Agent":        tc.ua,
+				"Authorization":     "Bearer tok",
+				"X-User-Id":         a.UID,
+				"X-Domain":          tc.domain,
+				"X-Enterprise-Id":   tc.ent,
+				"X-Tenant-Id":       tc.ent,
+				"X-Product":         "SaaS",
+				"X-Client-Version":  tc.cliVer,
+				"X-Client-Platform": "macos",
+				"X-Client-Product":  tc.cliPrd,
 				// 官方后台服务的请求里没有这些。
 				"Origin": "", "Referer": "", "Accept-Language": "", "X-CodeBuddy-Request": "",
 				"X-Machine-ID": "", "X-Session-ID": "", "X-Device-Token": "",
-				"X-Refresh-Token": "", "X-Client-Platform": "",
+				"X-Refresh-Token": "",
 			})
 			prevID = wantRequestID(t, req.Header, prevID)
 		})
@@ -122,13 +126,14 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 	auth.SetGlobalEnabled(true)
 	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
 	for _, tc := range []struct {
-		name       string
-		a          *auth.Auth
-		ua, domain string
+		name           string
+		a              *auth.Auth
+		ua, domain     string
+		cliVer, cliPrd string
 	}{
-		{"国内版", cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn"},
-		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.workbuddy.cn"},
-		{"国际版", globalAuth(), "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0", "www.workbuddy.ai"},
+		{"国内版", cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "5.11.3", "WorkBuddy"},
+		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.workbuddy.cn", "5.11.3", "WorkBuddy"},
+		{"国际版", globalAuth(), "workbuddy-ai/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0", "www.workbuddy.ai", "5.11.4", "workbuddy-ai"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := tc.a
@@ -146,6 +151,9 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 				"X-Refresh-Token":       "rt",
 				"X-Auth-Refresh-Source": "plugin",
 				"X-Product":             "SaaS",
+				"X-Client-Version":      tc.cliVer,
+				"X-Client-Platform":     "macos",
+				"X-Client-Product":      tc.cliPrd,
 				"Origin":                "", "Referer": "", "Accept-Language": "", "X-CodeBuddy-Request": "",
 				"X-Machine-ID": "", "X-Session-ID": "",
 			})
@@ -155,8 +163,9 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 }
 
 // TestAuthServiceHeadersOfficialShape 积分查询、企业用量、签到是后台服务 AuthService 自己的 axios 实例发的：
-// 只有 buildHeaders 那几个头 + X-Request-ID + axios 的 UA 与 Accept-Encoding，没有请求框架的 X-Requested-With、
-// X-Product、X-Department-Info；Accept-Language、X-Device-Token 由调用方另加。
+// 只有 buildHeaders 那几个头 + X-Request-ID + 客户端身份头（5.11.x 挂了统一出站头注入器）+ axios 的 UA 与
+// Accept-Encoding，没有请求框架的 X-Requested-With、X-Product、X-Department-Info；Accept-Language、
+// X-Device-Token 由调用方另加。
 func TestAuthServiceHeadersOfficialShape(t *testing.T) {
 	auth.SetGlobalEnabled(true)
 	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
@@ -164,17 +173,18 @@ func TestAuthServiceHeadersOfficialShape(t *testing.T) {
 	cnEnt.EnterpriseID = "corp-cn"
 	cnEnt.DepartmentFullName = "dept-a"
 	cases := []struct {
-		name       string
-		c          *Client
-		a          *auth.Auth
-		ua, domain string
-		ent        string
+		name                string
+		c                   *Client
+		a                   *auth.Auth
+		ua, domain          string
+		ent                 string
+		cliVer, cliPlt, prd string
 	}{
-		{"国内版个人号", &Client{}, cnAuth(), axiosUserAgent, "www.codebuddy.cn", ""},
-		{"国内版企业号", &Client{}, cnEnt, axiosUserAgent, "www.codebuddy.cn", "corp-cn"},
-		{"国际版个人号", &Client{}, globalAuth(), axiosUserAgent, "www.workbuddy.ai", ""},
-		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, cnAuth(), "MyUA/1", "www.codebuddy.cn", ""},
-		{"client_name=SaaS 不带 UA", &Client{ClientName: "SaaS"}, cnAuth(), "", "www.codebuddy.cn", ""},
+		{"国内版个人号", &Client{}, cnAuth(), axiosUserAgent, "www.codebuddy.cn", "", "5.11.3", "macos", "WorkBuddy"},
+		{"国内版企业号", &Client{}, cnEnt, axiosUserAgent, "www.codebuddy.cn", "corp-cn", "5.11.3", "macos", "WorkBuddy"},
+		{"国际版个人号", &Client{}, globalAuth(), axiosUserAgent, "www.workbuddy.ai", "", "5.11.4", "macos", "workbuddy-ai"},
+		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, cnAuth(), "MyUA/1", "www.codebuddy.cn", "", "5.11.3", "macos", "WorkBuddy"},
+		{"client_name=SaaS 不带 UA 与客户端身份头", &Client{ClientName: "SaaS"}, cnAuth(), "", "www.codebuddy.cn", "", "", "", ""},
 	}
 	prevID := ""
 	for _, tc := range cases {
@@ -184,15 +194,18 @@ func TestAuthServiceHeadersOfficialShape(t *testing.T) {
 			req, _ := http.NewRequest(http.MethodPost, "https://x/billing/meter/get-user-resource-summary", nil)
 			tc.c.authServiceHeaders(req, a)
 			wantHeaders(t, req.Header, map[string]string{
-				"Accept":          "application/json",
-				"Accept-Encoding": "gzip, compress, deflate, br",
-				"Content-Type":    "application/json",
-				"User-Agent":      tc.ua,
-				"Authorization":   "Bearer tok",
-				"X-User-Id":       a.UID,
-				"X-Domain":        tc.domain,
-				"X-Enterprise-Id": tc.ent,
-				"X-Tenant-Id":     tc.ent,
+				"Accept":            "application/json",
+				"Accept-Encoding":   "gzip, compress, deflate, br",
+				"Content-Type":      "application/json",
+				"User-Agent":        tc.ua,
+				"Authorization":     "Bearer tok",
+				"X-User-Id":         a.UID,
+				"X-Domain":          tc.domain,
+				"X-Enterprise-Id":   tc.ent,
+				"X-Tenant-Id":       tc.ent,
+				"X-Client-Version":  tc.cliVer,
+				"X-Client-Platform": tc.cliPlt,
+				"X-Client-Product":  tc.prd,
 				// AuthService 的请求里没有请求框架的头，也没有部门全名。
 				"X-Requested-With": "", "X-Product": "", "X-Department-Info": "",
 				"Origin": "", "Referer": "", "Accept-Language": "", "X-CodeBuddy-Request": "",
@@ -213,9 +226,9 @@ func TestRefreshUserAgent(t *testing.T) {
 		c    *Client
 		want string
 	}{
-		{"默认", &Client{}, "workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
+		{"默认", &Client{}, "workbuddy-ai/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0"},
 		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, "MyUA/1"},
-		{"client_name=SaaS", &Client{ClientName: "SaaS"}, "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"},
+		{"client_name=SaaS", &Client{ClientName: "SaaS"}, "WorkBuddy/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0"},
 	} {
 		if got := tc.c.refreshUserAgent(globalAuth()); got != tc.want {
 			t.Errorf("%s: refreshUserAgent = %q, want %q", tc.name, got, tc.want)

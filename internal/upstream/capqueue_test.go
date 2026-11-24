@@ -94,9 +94,13 @@ func TestCapacityQueueRequestShape(t *testing.T) {
 		"Accept-Encoding":           {"gzip, compress, deflate, br"},
 		"Authorization":             {"Bearer at-1"},
 		"X-Conversation-Request-Id": {queueMeta.ConversationRequestID},
+		"X-Client-Version":          {defaultClientVersionCN},
+		"X-Client-Platform":         {"macos"},
+		"X-Client-Product":          {"WorkBuddy"},
 	}
 	status := base.Clone()
 	status.Set("X-Conversation-ID", "conv-1")
+	prevReqID := ""
 	for i, want := range []struct {
 		url    string
 		header http.Header
@@ -108,22 +112,26 @@ func TestCapacityQueueRequestShape(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.String() != want.url {
 			t.Errorf("第 %d 个请求 = %s %s，应为 POST %s", i+1, r.Method, r.URL, want.url)
 		}
-		if !reflect.DeepEqual(r.Header, want.header) {
-			t.Errorf("第 %d 个请求头 = %v\n应为 %v", i+1, r.Header, want.header)
+		prevReqID = wantRequestID(t, r.Header, prevReqID)
+		h := r.Header.Clone()
+		h.Del("X-Request-ID")
+		if !reflect.DeepEqual(h, want.header) {
+			t.Errorf("第 %d 个请求头 = %v\n应为 %v", i+1, h, want.header)
 		}
 		if bodies[i] != `{"model":"glm-5.2"}` {
 			t.Errorf("第 %d 个请求体 = %s", i+1, bodies[i])
 		}
 	}
 
-	// 国际版号发到国际版入口；没有会话 id 时查询也不带 X-Conversation-ID。
+	// 国际版号发到国际版入口，带国际版客户端身份头；没有会话 id 时查询也不带 X-Conversation-ID。
 	got = nil
 	g := &auth.Auth{UID: "g1", AccessToken: "at-g", Domain: "www.workbuddy.ai"}
 	if _, err := c.CapacityQueueStatus(context.Background(), g, "m", ChatMeta{ConversationRequestID: "rid"}); err != nil {
 		t.Fatal(err)
 	}
-	if r := got[0]; r.URL.String() != "https://global.example/v2/chat/queue/status" || r.Header.Get("X-Conversation-ID") != "" {
-		t.Errorf("国际版查询 = %s，X-Conversation-ID=%q", r.URL, r.Header.Get("X-Conversation-ID"))
+	if r := got[0]; r.URL.String() != "https://global.example/v2/chat/queue/status" || r.Header.Get("X-Conversation-ID") != "" ||
+		r.Header.Get("X-Client-Version") != defaultClientVersionGlobal || r.Header.Get("X-Client-Platform") != "macos" || r.Header.Get("X-Client-Product") != "workbuddy-ai" {
+		t.Errorf("国际版查询 = %s，头=%v", r.URL, r.Header)
 	}
 }
 

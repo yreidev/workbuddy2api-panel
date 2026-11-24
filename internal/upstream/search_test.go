@@ -80,6 +80,9 @@ func TestSearchRequestShape(t *testing.T) {
 		"X-Ide-Version":             {defaultClientVersionCN},
 		"X-User-Id":                 {"u1"},
 		"X-Department-Info":         {""},
+		"X-Client-Version":          {defaultClientVersionCN},
+		"X-Client-Platform":         {"macos"},
+		"X-Client-Product":          {"WorkBuddy"},
 		"Accept-Language":           {"*"},
 		"Sec-Fetch-Mode":            {"cors"},
 		"Accept-Encoding":           {"br, gzip, deflate"},
@@ -99,7 +102,8 @@ func TestSearchRequestShape(t *testing.T) {
 	}
 	h := got.Header
 	if got.URL.String() != "https://global.example/agenttool/v1/search" || h.Get("X-Agent-Runtime") != "local-agent" ||
-		h.Get("User-Agent") != "CLI/"+defaultClientVersionGlobal || h.Get("X-IDE-Version") != defaultClientVersionGlobal {
+		h.Get("User-Agent") != "CLI/"+defaultClientVersionGlobal || h.Get("X-IDE-Version") != defaultClientVersionGlobal ||
+		h.Get("X-Client-Version") != defaultClientVersionGlobal || h.Get("X-Client-Platform") != "macos" || h.Get("X-Client-Product") != "workbuddy-ai" {
 		t.Errorf("国际版请求 = %s，头 %v", got.URL, h)
 	}
 	if h.Get("X-Department-Info") != "研发部" || h.Get("X-Enterprise-Id") != "" || h.Get("X-Domain") != "" {
@@ -109,19 +113,20 @@ func TestSearchRequestShape(t *testing.T) {
 		t.Errorf("没给会话时：会话 id = %q，轮次 id = %q", id, h.Get("X-Conversation-Request-ID"))
 	}
 
-	// user_agent 整体覆盖 UA；client_version 覆盖版本；client_name=SaaS 不带 X-IDE-*。
+	// user_agent 整体覆盖 UA；client_version 覆盖版本；client_name=SaaS 不带 X-IDE-* 与 X-Client-*。
 	c.ClientVersion = "9.9.9"
 	if _, err := c.Search(context.Background(), a, SearchQuery{Query: "ab"}, ChatMeta{}); err != nil {
 		t.Fatal(err)
 	}
-	if got.Header.Get("User-Agent") != "CLI/9.9.9" || got.Header.Get("X-IDE-Version") != "9.9.9" {
+	if got.Header.Get("User-Agent") != "CLI/9.9.9" || got.Header.Get("X-IDE-Version") != "9.9.9" || got.Header.Get("X-Client-Version") != "9.9.9" {
 		t.Errorf("client_version 覆盖后 = %v", got.Header)
 	}
 	c.UserAgent, c.ClientName = "custom-ua", "SaaS"
 	if _, err := c.Search(context.Background(), a, SearchQuery{Query: "ab"}, ChatMeta{}); err != nil {
 		t.Fatal(err)
 	}
-	if got.Header.Get("User-Agent") != "custom-ua" || got.Header.Get("X-IDE-Name") != "" || got.Header.Get("X-IDE-Type") != "" || got.Header.Get("X-IDE-Version") != "" {
+	if got.Header.Get("User-Agent") != "custom-ua" || got.Header.Get("X-IDE-Name") != "" || got.Header.Get("X-IDE-Type") != "" || got.Header.Get("X-IDE-Version") != "" ||
+		got.Header.Get("X-Client-Version") != "" || got.Header.Get("X-Client-Platform") != "" || got.Header.Get("X-Client-Product") != "" {
 		t.Errorf("user_agent、client_name=SaaS 之后 = %v", got.Header)
 	}
 }

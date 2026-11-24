@@ -82,6 +82,14 @@ func loginAssertHeaders(t *testing.T, h http.Header, kind loginKind, global bool
 	loginWantHeader(t, h, "X-Requested-With", "XMLHttpRequest")
 	loginWantHeader(t, h, "X-Product", "SaaS")
 	loginWantHeader(t, h, "User-Agent", loginTestUA(global))
+	if global {
+		loginWantHeader(t, h, "X-Client-Version", defaultClientVersionGlobal)
+		loginWantHeader(t, h, "X-Client-Product", "workbuddy-ai")
+	} else {
+		loginWantHeader(t, h, "X-Client-Version", defaultClientVersionCN)
+		loginWantHeader(t, h, "X-Client-Product", "WorkBuddy")
+	}
+	loginWantHeader(t, h, "X-Client-Platform", "macos")
 	if id := h.Get("X-Request-ID"); len(id) != 32 || strings.ToLower(id) != id || !isHexText(id) {
 		t.Errorf("X-Request-ID = %q，应为 32 位小写十六进制", id)
 	}

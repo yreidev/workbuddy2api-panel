@@ -23,36 +23,40 @@ func TestChatHeadersOfficialShape(t *testing.T) {
 	glEnt := globalAuth()
 	glEnt.EnterpriseID = "corp-g"
 	cases := []struct {
-		name   string
-		a      *auth.Auth
-		domain string
-		ent    string
+		name           string
+		a              *auth.Auth
+		domain         string
+		ent            string
+		cliVer, cliPrd string
 	}{
-		{"国内版个人号", cnAuth(), "www.codebuddy.cn", ""},
-		{"国内版企业号", cnEnt, "www.codebuddy.cn", "corp-cn"},
-		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "", ""},
-		{"国际版个人号", globalAuth(), "www.workbuddy.ai", ""},
-		{"国际版企业号", glEnt, "www.workbuddy.ai", "corp-g"},
+		{"国内版个人号", cnAuth(), "www.codebuddy.cn", "", "5.11.3", "WorkBuddy"},
+		{"国内版企业号", cnEnt, "www.codebuddy.cn", "corp-cn", "5.11.3", "WorkBuddy"},
+		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "", "", "5.11.3", "WorkBuddy"},
+		{"国际版个人号", globalAuth(), "www.workbuddy.ai", "", "5.11.4", "workbuddy-ai"},
+		{"国际版企业号", glEnt, "www.workbuddy.ai", "corp-g", "5.11.4", "workbuddy-ai"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req, _ := http.NewRequest(http.MethodPost, "https://x/v2/chat/completions", nil)
 			(&Client{}).ChatHeaders(req, tc.a, "", ChatMeta{})
 			want := map[string]string{
-				"Content-Type":     "application/json",
-				"Accept":           "application/json",
-				"X-Requested-With": "XMLHttpRequest",
-				"Authorization":    "Bearer tok",
-				"X-User-Id":        tc.a.UID,
-				"X-Domain":         tc.domain,
-				"X-Enterprise-Id":  tc.ent,
-				"X-Tenant-Id":      tc.ent,
-				"X-Agent-Intent":   "craft",
-				"X-Agent-Type":     "main",
-				"X-Agent-Runtime":  "local-agent",
-				"X-Agent-Purpose":  "conversation",
-				"X-Private-Data":   "true",
-				"X-Product":        "SaaS",
+				"Content-Type":      "application/json",
+				"Accept":            "application/json",
+				"X-Requested-With":  "XMLHttpRequest",
+				"Authorization":     "Bearer tok",
+				"X-User-Id":         tc.a.UID,
+				"X-Domain":          tc.domain,
+				"X-Enterprise-Id":   tc.ent,
+				"X-Tenant-Id":       tc.ent,
+				"X-Agent-Intent":    "craft",
+				"X-Agent-Type":      "main",
+				"X-Agent-Runtime":   "local-agent",
+				"X-Agent-Purpose":   "conversation",
+				"X-Private-Data":    "true",
+				"X-Product":         "SaaS",
+				"X-Client-Version":  tc.cliVer,
+				"X-Client-Platform": "macos",
+				"X-Client-Product":  tc.cliPrd,
 				// OpenAI SDK 的 8 个 X-Stainless-*（见 injectSDKHeaders）：两域内置 CLI 同一份 SDK，
 				// 设备指纹是 Mac arm64、Electron 内置 v22.21.1，取值与域无关。
 				"X-Stainless-Retry-Count":     "0",
@@ -178,9 +182,26 @@ func TestChatHeadersSDKHeaders(t *testing.T) {
 	for _, k := range []string{
 		"X-Stainless-Retry-Count", "X-Stainless-Timeout", "X-Stainless-Lang", "X-Stainless-Package-Version",
 		"X-Stainless-OS", "X-Stainless-Arch", "X-Stainless-Runtime", "X-Stainless-Runtime-Version",
+		"X-Client-Version", "X-Client-Platform", "X-Client-Product",
 	} {
 		if v := req.Header.Values(k); len(v) > 0 {
 			t.Errorf("SaaS 旧行为不应发 %s，实际 %q", k, v)
+		}
+	}
+	// injectClientIdentity 不覆盖调用方已设的 X-Client-* 头，clientPlatform 映射覆盖三大桌面平台。
+	preserve, _ := http.NewRequest(http.MethodPost, "https://x/", nil)
+	preserve.Header.Set("X-Client-Platform", "mp-weixin")
+	preserve.Header.Set("X-Client-Product", "workbuddy-mp")
+	preserve.Header.Set("X-Client-Version", "2.4.0")
+	(&Client{}).injectClientIdentity(preserve, cnAuth())
+	if preserve.Header.Get("X-Client-Platform") != "mp-weixin" || preserve.Header.Get("X-Client-Product") != "workbuddy-mp" || preserve.Header.Get("X-Client-Version") != "2.4.0" {
+		t.Errorf("injectClientIdentity 不应覆盖已有身份头: %v", preserve.Header)
+	}
+	for _, tc := range []struct{ in, want string }{
+		{"darwin", "macos"}, {"macOS", "macos"}, {"win32", "windows"}, {"linux", "linux"}, {"freebsd", ""},
+	} {
+		if got := clientPlatform(tc.in); got != tc.want {
+			t.Errorf("clientPlatform(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 

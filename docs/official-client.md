@@ -6,8 +6,8 @@ WorkBuddy 的出站请求按官方桌面端发送；TraeWork、Trae Code、Trae 
 
 | 项 | 国内版 | 国际版 |
 |---|---|---|
-| 桌面端安装包 | WorkBuddy 5.11.3.43806934（macOS arm64） | WorkBuddy AI 5.9.4（macOS arm64） |
-| 内置 CLI（`@tencent-ai/codebuddy-code`） | 2.176.0 | 2.165.0 |
+| 桌面端安装包 | WorkBuddy 5.11.3.43806934（macOS arm64） | WorkBuddy AI 5.11.4.44121853（macOS arm64） |
+| 内置 CLI（`@tencent-ai/codebuddy-code`） | 2.176.0 | 2.176.0 |
 | `applicationName`（product.json） | `WorkBuddy` | `workbuddy-ai` |
 
 2026-10-20 从官网下载两个安装包（当时国内版是 5.8.3、国际版是 5.8.4），只解包阅读，没有运行；国内版 5.9.3（2026-10-28）、国际版 5.9.4（2026-10-31）出来后照同样的做法重新对过，见[与桌面端 5.9.3 的对照](#与桌面端-593-的对照)和[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。要看的文件有三处：
@@ -20,13 +20,20 @@ WorkBuddy 的出站请求按官方桌面端发送；TraeWork、Trae Code、Trae 
 
 npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：用户实际跑的是安装包里的 CLI，网关在 UA 里报的也是它的版本号。npm 上的 CLI 几乎每天发一版，和桌面端不同步；只把 UA 里的 `CLI/<版本>` 换成 npm 的新版本，会凑出官方不存在的组合（5.8.3 的桌面端不会带 2.174.0 的 CLI），新版 CLI 多发或改发的头也对不上。
 
-### 与国内版桌面端 5.11.3 的对照
+### 与国内版桌面端 5.11.3 及国际版桌面端 5.11.4 的对照
 
-2026-11-16 查询官方更新清单并解开[国内 macOS arm64 稳定包](https://download.codebuddy.cn/workbuddy/saas/darwin-arm64/WorkBuddy-darwin-arm64-5.11.3.43806934-ecace0f7.zip)，确认桌面端为 `5.11.3.43806934`、内置 CLI 为 `2.176.0`。国际清单仍为 `5.9.4.42593613`／`2.165.0`，不随国内版改号。
+2026-11-16 先解开[国内 macOS arm64 稳定包](https://download.codebuddy.cn/workbuddy/saas/darwin-arm64/WorkBuddy-darwin-arm64-5.11.3.43806934-ecace0f7.zip)同步了国内版版本号与构建信息；2026-11-24 再次查询两域更新接口并完整解包[国内版 5.11.3.43806934](https://download.codebuddy.cn/workbuddy/saas/darwin-arm64/WorkBuddy-darwin-arm64-5.11.3.43806934-ecace0f7.zip)（SHA-256 `26a9e617c30bff038efb651ee5fc8eec7c188c37ec0f32231726793302a91156`）与[国际版 5.11.4.44121853](https://download.codebuddy.ai/workbuddy/saas/darwin-arm64/WorkBuddy-darwin-arm64-5.11.4.44121853-0026dff0.zip)（SHA-256 `fe5d9be52791bb10df320ff7f66a24923a279f588dfe55284911f30a64eaeef8`），只解包阅读、没有运行：
 
-- 国内 UA、`X-IDE-Version` 和上报版本同步到 `5.11.3`／`2.176.0`；上报 `commit` 是 `ecace0f7028166695994300182295329b8b95449`，`releaseDate` 是 `1794501984587`（台湾时间 2026-11-13 00:46:24.587）。
-- 包内 Electron Framework 仍为 `37.10.3`，SDK 仍为 OpenAI `6.25.0`，公共 UA 模板和 1200 秒 SDK 超时未变。用同版官方 Electron Linux runtime 的 Node `22.21.1`／BoringSSL 向本机回环发 `fetch`，新 ClientHello 的 JA3、JA4 与原基准一致；测试同时比对新旧样本。这是同版运行时的回环验证，没有直接执行 macOS 应用。
-- 本次核对版本、UA、运行时、SDK 和传输配置，不代表重新逐项验收全部任务、积分或新增业务功能。下文保留各次读包的历史依据与尚未确认的差异。
+- **版本与构建信息**：国内版 `5.11.3` / 内置 CLI `2.176.0`，上报 `commit` `ecace0f7028166695994300182295329b8b95449`、`releaseDate` `1794501984587`（`2026-11-12T16:46:24.587Z`）；国际版 `5.11.4` / 内置 CLI `2.176.0`，上报 `commit` `0026dff06ce8414140e6f2fa731049855c3ecc6f`、`releaseDate` `1794817062759`（`2026-11-16T08:17:42.759Z`）。两域安装包内置的 `cli/dist/codebuddy-lite-wb.mjs` 逐字节一致，`applicationName` 仍分别为 `WorkBuddy` 与 `workbuddy-ai`。
+- **运行时与 SDK**：两域包内 Electron Framework 均为 `37.10.3`、内置 Node `v22.21.1`、OpenAI SDK `6.25.0`（`3043.50ee4dca.mjs`）、后台 axios `1.16.1`，公共 UA 模板和 1200 秒 SDK 超时未变。同版 Electron Linux runtime 回环 `fetch` 验证 ClientHello 的 JA3、JA4 与原基准一致。
+- **客户端身份头组 `X-Client-Version` / `X-Client-Platform` / `X-Client-Product`**：5.11.x 新增 `app/main/client-identity.js` 与统一出站头注册表 `app/main/proxy-env2.js`，在 `index.js`、`server.js` 注册第一方来源（`[endpoint, ...trustedOrigins]`），同时由 `sidecar-manager.js` 通过 `CODEBUDDY_CUSTOM_HEADERS` 传给内置 CLI 子进程：
+  - 取值：`X-Client-Version` 为桌面端版本（`5.11.3` / `5.11.4`），`X-Client-Platform` 为平台映射（`darwin` → `macos`），`X-Client-Product` 取 `applicationName`（国内版 `WorkBuddy`、国际版 `workbuddy-ai`，不是 `productName`，也不是缺配置回退值 `workbuddy-desktop`）；
+  - 范围：后台 `restOperations`（登录、刷新、上报、外观、专家列表、模型目录）、`AuthService` axios（积分、企业用量、签到）、默认 axios（容量排队 `/v2/chat/queue/status` 与 `/cancel`，同时由 `tls-verification.js` 补 32 位 hex `X-Request-ID`），以及内置 CLI 的对话、模型目录、联网搜索（`performWebSearch` 调 `customHeadersProvider.applyTo`）全部发送；仅在目标头尚未设置时不覆盖已有值，不影响官网网页（`X-Client-Platform: web`）、网页上报（不带）与小程序（`workbuddy-mp` / `mp-weixin` / `miniprogram`）及静态公开 CDN（`scenes-v2.json`、`playbook`）。网关已全量对齐（`client_name="SaaS"` 旧行为不发）。
+- **请求体 `cache_retention`**：内置 CLI 2.176.0 的 `axiosToFetchAdapter` 对未带该字段的非自定义模型请求自动补 `cache_retention`，`resolveCacheRetention` 默认返回 `"long"`（仅 `CODEBUDDY_DISABLE_PROMPT_CACHING_1H` 为真时返回 `"short"`）并在会话内锁定。网关现按官方默认对缺少该字段的请求补 `"long"`，保留客户端显式传入值（注：1 小时缓存在部分模型上写入成本可能更高，尚未在真实账号逐模型对比成本）。
+- **请求体 `extra_vars.harnessMetadata` 与 `extra_vars.initiator`**：内置 CLI 2.176.0 对官方 `/v2/chat/completions`（带 `messages` 数组）合并写入 `extra_vars`（保留其他已有键）：
+  - `extra_vars.harnessMetadata` 为 JSON 字符串（`buildHarnessMetadata`）：`{"schemaVersion":1,"harnessVersion":"2.176.0","stepIndex":<n>[, "previous":{"conversationMessageId":"<上一步X-Conversation-Message-ID>"}],"agent":{"depth":0}}`；同一对话轮（同 `X-Conversation-Request-ID`）首步 `stepIndex=0` 不带 `previous`，工具调用续步依次递增并串联上一步消息 id，失败重试（`startRetriedModelAttempt`）复用同一消息 id 与步数不递增。网关通过 `internal/session/harness.go` 与 `ChatMeta.MessageID` / `HarnessStep` 精确对齐；
+  - `extra_vars.initiator`（`MessageInitiatorRequestProcessor`）：末尾消息为普通 `role: "user"` 时写入 `"user"`，末尾为 `role: "tool"` 等非 `user` 角色时不写入。网关已对齐。
+- **其他核实项**：`AuthService`（积分、签到）将 `X-Device-Token` 迁至全局 `device-token.js`；网关在 Linux 无法生成真图灵盾令牌，仍保持仅在用户配置了 `device_token` 时于登录发起授权、签到与对话按需发送。5.9.3 快照曾出现的 `x-real-ip` 仅属内置 CLI `isTrustedLocalRequest` 的入站本地请求代理头拒检列表，5.11.x 移除该列表，官方从未出站发送 `X-Real-IP`。`RequestBodyGzip` 在 5.9.3 起即已开启，网关照旧发明文 JSON 请求体。本次均为读包与离线单测对齐，未用真实账号逐项在线实测。
 
 ### 与 npm 2.174.0 的对照
 
@@ -140,7 +147,8 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - `Authorization`、`X-User-Id`，企业号再带 `X-Enterprise-Id` 与同值的 `X-Tenant-Id`；
 - `X-Domain`：登录域；
 - 账号有部门全名（`account.departmentFullName`，企业号才有）时带 `X-Department-Info`，值原样（`AuthenticationHttpInterceptor`）。网关从 1.1.2 起把它存进凭证文件的 `account.departmentFullName`：登录时取，刷新令牌后随取账号更新。官方用 Node 发请求，值里有超出 Latin-1 的字符（比如中文）时 Node 会直接报错，所以上游返回的大概是 ASCII 或编码过的值；没有企业号实测过，网关照原样发；
-- `Accept-Encoding: gzip, compress, deflate, br`：axios 的 http 适配器自动加的（内置 CLI 的 `advertiseZstdAcceptEncoding` 默认关，不带 zstd），官方没有在哪个请求上改写。网关按 `Content-Encoding` 解压（`encoding.go`）。
+- `Accept-Encoding: gzip, compress, deflate, br`：axios 的 http 适配器自动加的（内置 CLI 的 `advertiseZstdAcceptEncoding` 默认关，不带 zstd），官方没有在哪个请求上改写。网关按 `Content-Encoding` 解压（`encoding.go`）；
+- `X-Client-Version`、`X-Client-Platform: macos`、`X-Client-Product`（国内版 `WorkBuddy`、国际版 `workbuddy-ai`）：桌面端 5.11.3 / 5.11.4 起通过 `app/main/client-identity.js` 与 `proxy-env2.js` 对第一方来源统一注入，并由 `sidecar-manager.js` 经 `CODEBUDDY_CUSTOM_HEADERS` 透传给内置 CLI；网关在全部桌面端出站通道（对话、模型目录、登录、刷新、积分/签到、上报、外观、专家列表、联网搜索、容量排队）补齐，`client_name="SaaS"` 旧行为不发，且绝不覆盖小程序或官网网页自身的身份头。
 
 官方这两类请求都不发 `Origin`、`Referer`、`X-CodeBuddy-Request`、`X-Machine-ID`、`X-Session-ID`。个别请求另带的头：
 
@@ -167,16 +175,19 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - `X-Conversation-Request-ID`：轮次 id，每次用户发言开一轮时生成，是 `uuidv7()` 去掉连字符（`generateConversationRequestId`）；
 - `X-Conversation-Message-ID`、`X-Request-ID`：同一个模型消息 id，每次调模型新生成，同样是 `uuidv7()` 去掉连字符（`withModelMessageCorrelation`）。上报事件里的会话 id、轮次 id、消息 id 也是这三种形状。网关客户端没给会话 id 时的做法见[会话粘性](gateway.md#会话粘性)；
 - 链路头 `traceparent`、`b3` 与 `X-B3-*`；
-- 请求体带了思考档位（`reasoning_effort` 或 `reasoning.effort`）时补 `reasoning_summary: "auto"`（`injectReasoningSummaryIfNeeded`）。2.161.0、2.165.0 都不发 `cache_retention`，也不发 `prompt_cache_key`；
+- 请求体补充字段（`internal/upstream/official_body.go`）：
+  - 带了思考档位（`reasoning_effort` 或 `reasoning.effort`）时补 `reasoning_summary: "auto"`（`injectReasoningSummaryIfNeeded`）；
+  - `cache_retention`：2.161.0、2.165.0 不发；2.176.0（桌面端 5.11.3 / 5.11.4）由 `axiosToFetchAdapter` 对未带该字段的官方模型请求补 `"long"`（`resolveCacheRetention` 默认 `"long"`，仅 `CODEBUDDY_DISABLE_PROMPT_CACHING_1H` 为真时回落 `"short"`）。网关对未显式传该字段的请求默认补 `"long"`，保留客户端显式值，仍不发 `prompt_cache_key`；
+  - `extra_vars`：2.176.0 对官方对话请求（带 `messages` 数组）合并写入 `extra_vars.harnessMetadata`（JSON 字符串，含 `schemaVersion: 1`、`harnessVersion: <cliVersion>`、`stepIndex`、续步时 `previous.conversationMessageId` 与 `agent.depth: 0`；由 `internal/session/harness.go` 按 `X-Conversation-Request-ID` 跟踪并在失败重试时复用消息 id 与步数）及 `extra_vars.initiator`（仅末尾消息 `role == "user"` 且未显式指定时写 `"user"`，末尾为 `tool` 等非 `user` 角色时不写），保留已有其他 `extra_vars` 键；
 - 任务中心的专家对话就是一次普通对话，只多带 `X-Expert-Id`（专家插件激活时追加）；团队专家（专家列表里 `expertType` 为 `team`）另带 `X-Expert-Team-Task: true`（后台服务的 `applyPreparedExpertSettings`），网关按专家列表里的类型带。
 
 模型目录：网关用对话的 UA，按 GET 拉 `/v3/config`，带 `Connection: close`。官方后台服务也拉（`CloudProductProvider`，另带查询参数 `repos`），UA 跟时机有关，未确认，见[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。企业号另拉企业模型，见[企业号模型目录](#企业号模型目录)。
 
 ## 联网搜索
 
-内置 CLI 的 WebSearch 工具（2.165.0 的 `performWebSearch`，2026-10-31 读国内版 5.9.3 安装包核对；国际版 5.9.4 内置的是同一份 CLI）不经请求框架，用 Node 原生 `fetch` 发 `POST <对话入口>/agenttool/v1/search`，20 秒超时。网关照这份发（`upstream/search.go`），不复用对话的头（原版 linguo2625469 是复用 `ChatHeaders` 再改几项）：
+内置 CLI 的 WebSearch 工具（2.165.0 / 2.176.0 的 `performWebSearch`，2026-10-31 读国内版 5.9.3 与国际版 5.9.4 安装包、2026-11-24 复核国内版 5.11.3 与国际版 5.11.4）不经请求框架，用 Node 原生 `fetch` 发 `POST <对话入口>/agenttool/v1/search`，20 秒超时。网关照这份发（`upstream/search.go`），不复用对话的头（原版 linguo2625469 是复用 `ChatHeaders` 再改几项）：
 
-- 请求头只有这些：`Accept: application/json`、`Content-Type: application/json;charset=UTF-8`、`X-Requested-With: XMLHttpRequest`、`User-Agent: CLI/<版本>`（版本是客户端信息里的 `platformVersion`，取产品配置的 `productVersion`，在桌面端里就是桌面端版本；`CLI` 是默认平台名常量）、`Authorization`、`X-Agent-Intent`（会话的模式，默认 `craft`）、`X-Agent-Runtime`（同对话，见[几类请求](#几类请求)）、`X-Conversation-ID`、`X-Conversation-Request-ID`（没有时是空串）、`X-Conversation-Message-ID` 与同值的 `X-Request-ID`（每次新生成的 `uuidv7()` 去连字符）、`X-Product`、`X-IDE-Type`、`X-IDE-Name`、`X-IDE-Version`（同 UA 里的版本）、`X-User-Id`、`X-Department-Info`（总是带，没有部门时是空串）。不带企业头（`X-Enterprise-Id`、`X-Tenant-Id`）、`X-Domain`、`X-Stainless-*` 和链路头；`Accept-Language: *`、`Sec-Fetch-Mode: cors`、`Accept-Encoding: br, gzip, deflate` 是原生 fetch（undici）自己加的。内网版（IOA）的默认头、专家会话的自定义头官方另加，网关都不涉及。`client_name` 配成 `SaaS`（旧行为）时同对话，不带 `X-IDE-*`；
+- 请求头只有这些：`Accept: application/json`、`Content-Type: application/json;charset=UTF-8`、`X-Requested-With: XMLHttpRequest`、`User-Agent: CLI/<版本>`（版本是客户端信息里的 `platformVersion`，取产品配置的 `productVersion`，在桌面端里就是桌面端版本；`CLI` 是默认平台名常量）、`Authorization`、`X-Agent-Intent`（会话的模式，默认 `craft`）、`X-Agent-Runtime`（同对话，见[几类请求](#几类请求)）、`X-Conversation-ID`、`X-Conversation-Request-ID`（没有时是空串）、`X-Conversation-Message-ID` 与同值的 `X-Request-ID`（每次新生成的 `uuidv7()` 去连字符）、`X-Product`、`X-IDE-Type`、`X-IDE-Name`、`X-IDE-Version`（同 UA 里的版本）、`X-User-Id`、`X-Department-Info`（总是带，没有部门时是空串），5.11.3 / 5.11.4 起再经 `customHeadersProvider.applyTo` 带桌面端透传的 `X-Client-Version`、`X-Client-Platform: macos`、`X-Client-Product`（国内 `WorkBuddy`、国际 `workbuddy-ai`）。不带企业头（`X-Enterprise-Id`、`X-Tenant-Id`）、`X-Domain`、`X-Stainless-*` 和链路头；`Accept-Language: *`、`Sec-Fetch-Mode: cors`、`Accept-Encoding: br, gzip, deflate` 是原生 fetch（undici）自己加的。内网版（IOA）的默认头、专家会话的自定义头官方另加，网关都不涉及。`client_name` 配成 `SaaS`（旧行为）时同对话，不带 `X-IDE-*` 和 `X-Client-*`；
 - 请求体：`{"query": <搜索词>, "type": "text2text", "max_results": 5, "allowed_domains": [...], "freshness": "..."}`，后两个有才带，字段顺序照官方；域名黑名单不单独传，拼在搜索词后面：`<搜索词> (-site:a.com -site:b.com)`。搜索词至少 2 个字、`freshness` 的写法（`d`、`d1`～`d30`、`m`、`m1`～`m12`、`y`、`y1`～`y5`），官方在发请求前就校验，网关同样；
 - 回应：HTTP 不是 2xx，或回应体的 `code` 不是 0，官方都当失败；网关按[错误码](#错误码)归类，决定罚不罚号（见 [API 参考](api.md#联网搜索)）。结果按 `title`（空的写 `Untitled`）、`url`、`snippet`、`site`、`favicon` 整理，链接不是 http/https 的条目去掉，图标不安全的只去掉图标，去掉过条目时 `total_results` 改成剩下的条数（`filterUnsafeResults`）。官方还拿本地的恶意域名库再筛一遍，网关没有这个库，不筛；
 - 交给模型的文字照官方 `formatSearchResults`：`# Search Results for "<搜索词>"`，每条是 `## <序号>. [<标题>](<链接>)`、摘要、`**URL:** <链接>`、`---`，最后一行 `*Found N result(s) • Provider: <提供方> • Search performed on <UTC 日期>*`；没有结果时是 `No search results found for query: "<搜索词>"`，结果都被筛掉时是 `No safe search results found for query: "<搜索词>"`。
@@ -194,7 +205,8 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - `User-Agent: axios/1.16.1`：没人设 UA，axios 的 http 适配器补默认值（后台服务打包的 axios 是 1.16.1）；`Accept-Encoding: gzip, compress, deflate, br` 同样是 axios 补的；
 - `X-Request-ID`：每个请求新生成；
 - `Authorization`、`X-User-Id`（没有 uid 时是空串），企业号再带 `X-Enterprise-Id` 与同值的 `X-Tenant-Id`；有登录域时带 `X-Domain`；
-- 签到状态和签到另带 `X-Device-Token`（`buildHeadersWithTuringToken`，令牌和错误码的规则同对话，见[几类请求](#几类请求)）；积分查询另带 `Accept-Language`（`resolveAcceptLanguage`：界面语言是中文发 `zh`、英文发 `en`，都不是时国际版 `en`、国内版 `zh`，网关按域取）。
+- 5.11.3 / 5.11.4 起经 `proxy-env2.js` 对第一方来源统一补 `X-Client-Version`、`X-Client-Platform: macos`、`X-Client-Product`（`client_name="SaaS"` 旧行为不发）；
+- 签到状态和签到另带 `X-Device-Token`（5.9.x 为 `buildHeadersWithTuringToken`，5.11.x 迁至全局 `device-token.js` 注册表，令牌和错误码的规则同对话，见[几类请求](#几类请求)）；积分查询另带 `Accept-Language`（`resolveAcceptLanguage`：界面语言是中文发 `zh`、英文发 `en`，都不是时国际版 `en`、国内版 `zh`，网关按域取）。
 
 不带 `X-Requested-With`、`X-Product`、`X-Department-Info`、`X-IDE-*` 和链路头。网关照这组发（`authServiceHeaders`、`authServiceJSON`），配了 `upstream.user_agent` 时 UA 照配置；`client_name="SaaS"`（旧行为）时不带 UA，交给 Go 的默认值。1.8.0 及以前按请求框架的形状发，见[与国际版桌面端 5.9.4 的对照](#与国际版桌面端-594-的对照)。
 
@@ -294,7 +306,7 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 - `X-Client-Platform: web`；
 - 非 GET 请求带 `Origin`，`Referer` 是对应页面（成长中心 `/profile/growth-center`，积分补偿和新手礼包 `/profile/usage`，试用 `/profile`，账号资料 `/profile/account-settings`）；
 - 企业号只带 `X-Enterprise-Id`；不带 `X-User-Id`、`X-Domain`、`X-Tenant-Id`、`X-Product`、`X-Request-ID`、`X-Requested-With`；
-- 成长中心接口（地址含 `/activity/growth`，包括 `/v2/activity/growth/...`）另设 `Accept-Language`：官网 `config-*.js` 的请求拦截器对这类地址显式设语言头（2026-10-31 读 `ef3f6107` 这一版），取值只有 `zh-CN` 和 `en-US`，页面地址带 `lang=en…` 时才是 `en-US`，桌面端打开成长中心的地址不带 `lang`。网关国内版发 `zh-CN`，国际版按英文页面发 `en-US`（网关不对国际版调成长中心，国际版页面怎么带 `lang` 未确认）。1.8.0 及以前发的是 Chrome 自动带的 `zh-CN,zh;q=0.9`；
+- 成长中心接口（地址含 `/activity/growth`，包括 `/v2/activity/growth/...`）另设 `Accept-Language`：官网 `config-*.js` 的请求拦截器对这类地址显式设语言头（2026-10-31 读 `ef3f6107` 版，2026-11-24 复核当前 `7b25e1f2` 版 `config-sJViT0yz.js` 及 5 个成长中心懒加载 chunk，拦截器逻辑零变动），读取 `sessionStorage["growth-center-lang"]` 并归一化为 `en* → en-US` / `zh* → zh-CN`（默认 `zh-CN`），桌面端打开成长中心的地址不带 `lang`。网关国内版发 `zh-CN`，国际版按英文页面发 `en-US`（网关不对国际版调成长中心，国际版页面怎么带 `lang` 未确认）。1.8.0 及以前发的是 Chrome 自动带的 `zh-CN,zh;q=0.9`；
 - UA 是 Mac 上的 Chrome 152（和上报的桌面端同一台 Mac，见[设备与平台](#设备与平台)；版本取任务中心抓包里的网页上报），`Sec-CH-UA-Platform: "macOS"`，`upstream.user_agent` 配了时用它；
 - `Accept-Encoding: gzip, deflate, br, zstd`（Chrome 123 起的默认值；配了自定义 UA 时也发这个）。
 
@@ -481,7 +493,7 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 
 - 码：`6020` `WAITING` 排进队了；`6021` `FULL` 队列满，只提示；`6022` `USER_LIMIT` 这个用户排队的数量到上限，只提示。
 - 6020 回应里的排位 `queue_position` 和 `retry_after`（秒）：渲染层直接从错误数据里读，主进程先取 `data` 再看 `data.data`，网关按顶层、`data`、`data.data` 依次找。
-- 查询：`POST {对话入口}/v2/chat/queue/status`，请求体 `{"model":模型}`，头是 `Authorization: Bearer <token>`、`Content-Type: application/json`、`X-Conversation-Request-ID`（排进队的那一轮），有会话 id 时加 `X-Conversation-ID`。主进程用 axios 1.16.1 的默认实例发，没有官方请求框架的那些头，只多 axios 自带的 `Accept: application/json, text/plain, */*`、`Accept-Encoding: gzip, compress, deflate, br` 和 `User-Agent: axios/1.16.1`；超时 15 秒。回 `code 0` 且带 `data` 时看 `data.status`：`waiting`（带 `queue_position`）接着等，`ready` 到号，`expired` 过期；`code` 不是 0 或没有 `data` 都当过期，说明取 `msg`，没有就是 `Unknown error`。
+- 查询：`POST {对话入口}/v2/chat/queue/status`，请求体 `{"model":模型}`，头是 `Authorization: Bearer <token>`、`Content-Type: application/json`、`X-Conversation-Request-ID`（排进队的那一轮），有会话 id 时加 `X-Conversation-ID`。主进程用 axios 1.16.1 的默认实例发，没有官方请求框架的那些头，只多 axios 自带的 `Accept: application/json, text/plain, */*`、`Accept-Encoding: gzip, compress, deflate, br` 和 `User-Agent: axios/1.16.1`；5.11.3 / 5.11.4 起默认 axios 由 `tls-verification.js` 补 32 位 hex `X-Request-ID`，并由 `proxy-env2.js` 对第一方来源补 `X-Client-Version`、`X-Client-Platform: macos`、`X-Client-Product`（`client_name="SaaS"` 旧行为不发 `X-Client-*`）；超时 15 秒。回 `code 0` 且带 `data` 时看 `data.status`：`waiting`（带 `queue_position`）接着等，`ready` 到号，`expired` 过期；`code` 不是 0 或没有 `data` 都当过期，说明取 `msg`，没有就是 `Unknown error`。
 - 取消：`POST {对话入口}/v2/chat/queue/cancel`，请求体同上，头不带 `X-Conversation-ID`。只在使用者点取消时发，过期、超时都不发。
 - 节奏：第一次在 `retry_after` 秒后查（没带按 5 秒）；之后按排位隔一会儿查一次：前 5 名 2 秒、前 20 名 5 秒、前 50 名 10 秒、再往后 15 秒。`waiting` 用这次回的排位，没给按 50；查询出错（HTTP 出错、超时）按已知的排位再查。合计等满 20 分钟还没到号就停，提示超时。
 - 到号后原样重发：同一份提示词、同一份 `_meta`。
@@ -567,6 +579,7 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 - `X-Request-ID`（请求框架、`AuthService` 补的那个，不是对话的消息 id）：官方是 `crypto.randomUUID()` 去掉连字符，32 位十六进制里第 13 位固定是 `4`、第 17 位是 `8`～`b`；网关是 16 个随机字节的十六进制，长度一样，这两位不固定。没改。
 - 模型目录 `/v3/config`：官方后台服务拉的时候带 `repos` 参数，UA 跟启动时机有关（产品配置载入前是两段的 `WorkBuddy/<版本> CLI/<cli>`），内置 CLI 也可能自己拉，哪种是常态未确认；网关用对话的 UA、不带 `repos`。
 - 小程序的埋点事件（开学季活动）照的是一次 Windows 版 PC 微信的抓包，系统写 `windows`、`machineId` 是抓包里的固定值；小程序 web-view 的 UA 却是 iPhone 微信，开学季接口和埋点请求从 1.1.2 起也用这个 UA（以前没设，发的是 Go 默认的 `Go-http-client/1.1`）。没有小程序的包、也没有 PC 微信的 UA 抓包可对照，系统和 UA 两边都没改成一致，见[官网网页的请求](#官网网页的请求)。
+- 桌面端 5.11.3 / 5.11.4 对齐项（`X-Client-Version` / `X-Client-Platform` / `X-Client-Product`、容量排队 `X-Request-ID`、对话体 `cache_retention: "long"` 与 `extra_vars.harnessMetadata` / `extra_vars.initiator`）均依据真实安装包读包与离线单测验证，尚未在真实账号上在线回归，其中 `cache_retention: "long"` 在不同模型上的实际计费与缓存命中影响未实测（未确认）。
 
 ## 官方升级后怎么核对
 
@@ -574,8 +587,8 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 2. 在 `cli/product.json` 里读版本、`applicationName`、`commit`、`date` 与 `productFeatures`。
 3. 在内置 CLI 和 `main/` 里搜上文表格列出的函数名，逐项对照取值。压缩后的变量名、文件名每版都变，直接比文件看不出东西：先去掉变量名、按目录逐个文件比，有差别的文件再按函数切开比（2026-10-31 对国际版 5.9.4 就是这样比出 `main/` 只有三处不同）。
 4. 有变化就改这几处常量，再按改动补测试、写更新日志：
-   - `internal/upstream/headers.go` 的 `defaultClientVersionCN`、`defaultClientVersionGlobal`、`defaultCliVersionCN`、`defaultCliVersionGlobal`（两个域的桌面端不一定同时升级，CLI 的版本各取各的安装包）；
-   - 对话请求头在 `internal/upstream/headers.go` 的 `ChatHeaders`：内置 CLI 里搜 `getCustomHeaders`、`resolveAgentRuntime`、`axiosToFetchAdapter`，`X-Private-Data` 搜 `resolveModelOptimizationEnabled`、`isEnterpriseEditionAccount`；后台服务每次提问前加的头搜 `BeforePromptExpertActivation`、`getTuringDeviceToken`、`shouldProtectSession`；OpenAI SDK 的 `X-Stainless-*` 在 `lazy-lite-wb/` 里搜 `X-Stainless-Package-Version`（版本号）、`buildHeaders`（取值）、`normalizePlatform` / `normalizeArch`（OS / Arch 映射），`X-Stainless-Runtime-Version` 要按 Electron 内置的 Node 定——`unzip -p … 'Electron Framework' | strings | grep '^v2'` 读 `Electron Framework.framework`，`Info.plist` 里是 Electron 版本（改 `nodeRuntimeVersionCN` / `nodeRuntimeVersionGlobal`）；
+   - `internal/upstream/headers.go` 的 `defaultClientVersionCN`、`defaultClientVersionGlobal`、`defaultCliVersionCN`、`defaultCliVersionGlobal`（两个域的桌面端不一定同时升级，CLI 的版本各取各的安装包）；客户端身份头组在 `injectClientIdentity`，后台对应 `app/main/client-identity.js`、`app/main/proxy-env2.js` 与 `sidecar-manager.js`（`CODEBUDDY_CUSTOM_HEADERS`）；
+   - 对话请求头在 `internal/upstream/headers.go` 的 `ChatHeaders`，请求体补齐在 `internal/upstream/official_body.go`（步数跟踪在 `internal/session/harness.go`）：内置 CLI 里搜 `getCustomHeaders`、`resolveAgentRuntime`、`axiosToFetchAdapter`、`resolveCacheRetention`、`buildHarnessMetadata`、`MessageInitiatorRequestProcessor`，`X-Private-Data` 搜 `resolveModelOptimizationEnabled`、`isEnterpriseEditionAccount`；后台服务每次提问前加的头搜 `BeforePromptExpertActivation`、`getTuringDeviceToken`、`shouldProtectSession`；OpenAI SDK 的 `X-Stainless-*` 在 `lazy-lite-wb/` 里搜 `X-Stainless-Package-Version`（版本号）、`buildHeaders`（取值）、`normalizePlatform` / `normalizeArch`（OS / Arch 映射），`X-Stainless-Runtime-Version` 要按 Electron 内置的 Node 定——`unzip -p … 'Electron Framework' | strings | grep '^v2'` 读 `Electron Framework.framework`，`Info.plist` 里是 Electron 版本（改 `nodeRuntimeVersionCN` / `nodeRuntimeVersionGlobal`）；
    - 后台服务的 UA（`defaultDaemonUA`）：后台服务里搜 `WorkbuddyUserAgentHttpInterceptor`、`initClientInfo`，后台服务进程的环境变量搜 `buildDaemonProcessEnv`（有没有 `CLIENT_INFO_PLATFORM`）；
    - 积分、签到的请求头（`authServiceHeaders`）：后台服务里搜 `buildHeadersWithTuringToken`，同一个类里的 `get http`、`buildHeaders`；积分查询（`internal/upstream/resources.go`）搜 `getPersonalUsage`、`fetchUserResources`、`isFreeOnlySummary`、`excludeSuppressedPlanBase`，axios 的版本看 `main/axios.js`；
    - `internal/upstream/desktop.go` 的 `desktopCommitCN`、`desktopReleaseDateCN`、`desktopCommitGlobal`、`desktopReleaseDateGlobal`（按域各取各的安装包）；
@@ -679,8 +692,8 @@ HTTPDNS 用腾讯云的服务，照官方的做法：
 
 | 请求链路 | 官方来源与采样方式 | UA、版本与设备字段 | 传输基准 |
 |---|---|---|---|
-| WorkBuddy 国内／国际 | 上述官方安装包元数据；同版 Electron 37.10.3 的 Node 回环 `fetch` | 国内 `5.11.3`／CLI `2.176.0`，国际 `5.9.4`／CLI `2.165.0`；继续使用原有持久化设备身份 | Node 22.21.1／BoringSSL，ALPN `http/1.1`；JA3 MD5 `1a3153f314dc13e133dc71d113a81b16`，JA4 `t13d1812h1_5d04281c6031_ef7df7f74e48` |
-| Qoder 国内／国际 | 官方 [国内固定版本清单](https://static.qoder.com.cn/qoder-cli-cn/channels/1.1.89/manifest.json)与[国际固定版本清单](https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/channels/1.1.89/manifest.json)，Linux x64 原生包；按清单 SHA-256 校验，隔离网络、假凭证、回环 CONNECT/TLS 上游运行真实推理路径 | 运行时 Bun `1.4.2`；COSY 网关 `Bun/1.4.2`，OpenAPI `qoder/1.1.89`；`Cosy-Version: 1.1.89`、clienttype `5`、默认 machineos `x86_64_linux`；保留账号原 MachineID／MachineToken，支持导入原 MachineCode／MachineType／MachineOS／MachineHostname。目录压缩 `identity`，推理与 OpenAPI `gzip, deflate, br, zstd` | 两版原生推理样本一致；ALPN `http/1.1`；JA3 MD5 `1523504b38f0fae0d881d4b6554aac1b`，JA4 `t13d1713h1_5b57614c22b0_6a3d802a7139`；HTTP/1.1 应用头大小写、字典序及 Bun 尾部头序已校准。原 npm/Node 24 样本保留作历史参考，不再作为运行中的 Qoder 基准 |
+| WorkBuddy 国内／国际 | 上述官方安装包元数据；同版 Electron 37.10.3 的 Node 回环 `fetch` | 国内 `5.11.3`／CLI `2.176.0`，国际 `5.11.4`／CLI `2.176.0`；继续使用原有持久化设备身份 | Node 22.21.1／BoringSSL，ALPN `http/1.1`；JA3 MD5 `1a3153f314dc13e133dc71d113a81b16`，JA4 `t13d1812h1_5d04281c6031_ef7df7f74e48` |
+| Qoder 国内／国际 | 2026-11-24 核对 [`@qodercn-ai/qoderclicn@1.1.96`](https://www.npmjs.com/package/@qodercn-ai/qoderclicn/v/1.1.96)（tarball SHA-256 `40cfa531...`）、[`@qoder-ai/qodercli@1.1.96`](https://www.npmjs.com/package/@qoder-ai/qodercli/v/1.1.96)（`23b46bc0...`）及国内／国际原生 `1.1.96` 包（`Bun/1.4.4`），确认 `qoder_auth_wasm` COSY 签名算法、请求头、业务端点与双架构 UMID ELF 摘要均与 1.1.89 一致；传输采样沿用 1.1.89 [国内固定版本清单](https://static.qoder.com.cn/qoder-cli-cn/channels/1.1.89/manifest.json)与[国际固定版本清单](https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/channels/1.1.89/manifest.json) Linux x64 原生包隔离回环样本 | 运行时 Bun `1.4.4`；COSY 网关 `Bun/1.4.4`，OpenAPI `qoder/1.1.96`；`Cosy-Version: 1.1.96`、clienttype `5`、默认 machineos `x86_64_linux`；保留账号原 MachineID／MachineToken，支持导入原 MachineCode／MachineType／MachineOS／MachineHostname。目录压缩 `identity`，推理与 OpenAPI `gzip, deflate, br, zstd` | 两版原生推理样本一致；ALPN `http/1.1`；JA3 MD5 `1523504b38f0fae0d881d4b6554aac1b`，JA4 `t13d1713h1_5b57614c22b0_6a3d802a7139`（1.1.89 原生样本，1.1.96 `Bun/1.4.4` TLS 指纹未另行重采）；HTTP/1.1 应用头大小写、字典序及 Bun 尾部头序已校准。原 npm/Node 24 样本保留作历史参考，不再作为运行中的 Qoder 基准 |
 | Trae Code 国内 | [官方稳定清单](https://api.trae.cn/icube/api/v1/native/version/trae/cn/latest)与[Linux x64 包](https://lf-cdn.trae.com.cn/obj/trae-com-cn/pkg/app/releases/stable/2.3.103559/linux/TRAE_CN-linux-x64.tar.gz)；直接调用包内 `@aha-kit/net`、原生 binding 和 `libsscronet.so`，经回环代理采 TTNet ClientHello | `TraeClient/TTNet Cronet/TTNetVersion:a61b3479 2026-08-04 QuicVersion:40cc763c 2025-07-01`；产品 `3.4.20`、包 `2.3.103559`、AI 扩展 API version code `20260212`；设备类型 Linux，取不到硬件信息时发空串；不再固定写 Windows 品牌。原 MachineID、DeviceID、client ID、公私钥均保留 | ALPN `h2,http/1.1`；JA3 MD5 `cd08e31494f9531f560d64c695473da9`，JA4 `t13d1516h2_8daaf6152771_e5627efa2ab1`；HTTP/2 SETTINGS、窗口、优先级、应用头顺序、正文分帧以及 HTTP/1.1 回退已采样并校准，详见下文 |
 | Trae 国内授权／刷新／用户信息 | 同一包 `main.js` 的 `Qg.request` 使用 `electron.net.fetch`；官方 Electron 39.2.7、原包 name/version 的最小启动应用向回环 TLS 服务发相同网络调用 | `TraeCN/1.107.1 Chrome/142.0.7444.235 Electron/39.2.7` 的 Linux UA；`Sec-Fetch-Site: none`、mode `no-cors`、dest `empty`、语言 `en-US`、Priority `u=4, i`；JSON 与 `x-cloudide-token` 按官方调用设置 | JA4 `t13d1516h2_8daaf6152771_d8a2da3f94cd`；ALPN h2/h1；HTTP/2 参数见下文。这是运行时与调用形状的回环样本，不是已登录官方 UI 的线上完整抓包 |
 | TraeWork 国内网页 | 隔离 Chrome 156.0.8078.79 实际访问 [work.trae.cn](https://work.trae.cn/) 的 NetLog；取首次、不带 PSK 的 ClientHello，并核对网页 API 请求与 h2 帧 | 实际样本为 Linux `HeadlessChrome/156.0.0.0`，client hints 同 Chromium 156，语言 `zh-CN`、timezone `Asia/Taipei`、Priority `u=1, i`；不混入 IDE 的 MachineID 头；JSON 仅在有请求体时加，Origin 仅随创建会话 POST 发送 | JA4 `t13d1517h2_8daaf6152771_cb7bf5808d99`；ALPN h2/h1；Chrome 扩展顺序逐连接随机，JA3 不固定 |

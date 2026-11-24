@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/session"
 )
 
 const (
@@ -169,6 +170,11 @@ func (c *Client) queueCall(ctx context.Context, a *auth.Auth, path, model string
 	if withConv && meta.ConversationID != "" {
 		req.Header.Set("X-Conversation-ID", meta.ConversationID)
 	}
+	// 桌面端 5.11.x 主进程默认 axios 已挂 proxy-env2.js 统一出站头注入器（proxy-agents.js
+	// installAxiosGlobalProxy）：对第一方来源补 X-Client-*（client-identity.js）与
+	// X-Request-ID（tls-verification.js）。
+	req.Header.Set("X-Request-ID", session.NewMessageID())
+	c.injectClientIdentity(req, a)
 	resp, err := doDecoded(c.HTTP, req)
 	if err != nil {
 		return nil, err

@@ -229,6 +229,7 @@ func (c *Client) searchHeaders(req *http.Request, a *auth.Auth, meta ChatMeta) {
 	}
 	h.Set("X-User-Id", a.UID)
 	h.Set("X-Department-Info", a.DepartmentValue())
+	c.injectClientIdentity(req, a)
 	h.Set("Accept-Language", "*")
 	h.Set("Sec-Fetch-Mode", "cors")
 	h.Set("Accept-Encoding", acceptEncodingNodeFetch)

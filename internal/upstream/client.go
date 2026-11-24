@@ -28,6 +28,7 @@ import (
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
 	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
+	"github.com/yreidev/workbuddy2api-panel/internal/session"
 )
 
 // ErrKind 错误分类，pool 据此决定冷却时长。
@@ -717,11 +718,11 @@ type Client struct {
 	// 成长中心这类官网网页的请求用浏览器的 UA，见 headers.go、web.go。
 	UserAgent string
 
-	// ClientVersion 桌面端版本（UA 版本段 + X-IDE-Version），两域共用。
-	// 空 = 内置默认：国内版 5.9.3、国际版 5.9.4。
+	// ClientVersion 桌面端版本（UA 版本段、X-IDE-Version 与 X-Client-Version），两域共用。
+	// 空 = 内置默认：国内版 5.11.3、国际版 5.11.4。
 	ClientVersion string
 
-	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认 2.165.0（两域相同）。
+	// CliVersion 出站 UA 中 `CLI/<ver>` 段与 harnessMetadata 的版本。空 = 内置默认 2.176.0（两域相同）。
 	CliVersion string
 
 	// ClientName 对话请求的归属头 X-IDE-Name / X-IDE-Type 取值。空 = "WorkBuddy"（同官方桌面端）；
@@ -879,6 +880,20 @@ func (c *Client) chatBase(a *auth.Auth) string {
 // prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
 // realm 为账号 Realm()（cn/global），供 efforts 缓存分桶（跨域 effort 集合不互相污染）。
 func (c *Client) prepareBody(body []byte, realm string) []byte {
+	cliVer := defaultCliVersionCN
+	if realmKey(realm) == "global" {
+		cliVer = defaultCliVersionGlobal
+	}
+	if c != nil && c.CliVersion != "" {
+		cliVer = c.CliVersion
+	}
+	return c.prepareBodyWithOpts(body, realm, OfficialBodyOpts{
+		CliVersion:     cliVer,
+		CacheRetention: defaultCacheRetention,
+	})
+}
+
+func (c *Client) prepareBodyWithOpts(body []byte, realm string, opts OfficialBodyOpts) []byte {
 	efforts, defs := c.effortsSnapshot(realm), c.defaultEffortsSnapshot(realm)
 	if realmKey(realm) == "global" {
 		// global 域降级源 = 远端探测桶（权威）∪ 产品静态兜底表（全局 21 名内档位如
@@ -890,8 +905,8 @@ func (c *Client) prepareBody(body []byte, realm string) []byte {
 	// 不再自动补 prompt_cache_key（客户端自己带的照转）：官方客户端不发它；10-19 生产实测
 	// deepseek、glm、kimi 两域带不带都不多命中，glm 会话 id 每轮换新时带它反而更少命中。
 	// 前缀缓存靠稳定的 X-Conversation-ID，见 ChatHeaders。
-	// reasoning_summary 对齐官方 CLI，见 InjectOfficialBodyFields。
-	body = InjectOfficialBodyFields(body)
+	// cache_retention / reasoning_summary / extra_vars.{harnessMetadata,initiator} 对齐官方 CLI 2.176.0。
+	body = InjectOfficialBodyFieldsWithOpts(body, opts)
 	return body
 }
 
@@ -1450,7 +1465,14 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	prepared := c.prepareBody(body, a.Realm())
+	if meta.MessageID == "" {
+		meta.MessageID = session.NewUUIDv7Hex()
+	}
+	prepared := c.prepareBodyWithOpts(body, a.Realm(), OfficialBodyOpts{
+		CliVersion:     c.cliVersion(a),
+		CacheRetention: defaultCacheRetention,
+		HarnessStep:    meta.HarnessStep,
+	})
 	if c.globalOn(a) {
 		prepared = ensureConsoleSystem(prepared)
 	}

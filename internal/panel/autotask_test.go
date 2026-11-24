@@ -109,9 +109,14 @@ func (f *autoUpstream) RoundTrip(r *http.Request) (*http.Response, error) {
 		host = r.Host
 	}
 	req := autoReq{Method: r.Method, Host: host, Path: r.URL.Path, Header: r.Header.Clone(), Body: raw}
+	plat := r.Header.Get("X-Client-Platform")
 	f.mu.Lock()
 	f.reqs = append(f.reqs, req)
-	h := f.route[autoRouteKey(r.Method, host, r.URL.Path, r.Header.Get("X-Client-Platform"))]
+	h := f.route[autoRouteKey(r.Method, host, r.URL.Path, plat)]
+	if h == nil && plat == "macos" {
+		// 5.11.x 桌面请求默认带 X-Client-Platform: macos；其他测试文件按旧习惯登记 platform="" 时兼容命中。
+		h = f.route[autoRouteKey(r.Method, host, r.URL.Path, "")]
+	}
 	f.mu.Unlock()
 	if h == nil {
 		// 积分汇总 / 付费包 / 签到状态是每个账号维护流程都会发的伴随请求，各用例不必逐条登记。
@@ -163,23 +168,23 @@ func (f *autoUpstream) onAcceptMP(h autoHandler) {
 	f.on(http.MethodPost, autoWebHost, autoAcceptPath, "miniprogram", h)
 }
 func (f *autoUpstream) onBillingReport(h autoHandler) {
-	f.on(http.MethodPost, autoBillingHost, autoReportPath, "", h)
+	f.on(http.MethodPost, autoBillingHost, autoReportPath, "macos", h)
 }
 func (f *autoUpstream) onMPReport(h autoHandler) {
 	f.on(http.MethodPost, autoBillingHost, autoReportPath, "mp-weixin", h)
 }
 func (f *autoUpstream) onDesktopReport(h autoHandler) {
-	f.on(http.MethodPost, autoChatHost, autoReportPath, "", h)
+	f.on(http.MethodPost, autoChatHost, autoReportPath, "macos", h)
 }
 func (f *autoUpstream) onWebReport(h autoHandler) {
 	// 网页上报照官网 sendBeacon 形状，不带 X-Client-Platform。
 	f.on(http.MethodPost, autoWebHost, autoReportPath, "", h)
 }
 func (f *autoUpstream) onChat(h autoHandler) {
-	f.on(http.MethodPost, autoChatHost, autoChatPath, "", h)
+	f.on(http.MethodPost, autoChatHost, autoChatPath, "macos", h)
 }
 func (f *autoUpstream) onMarket(h autoHandler) {
-	f.on(http.MethodPost, autoChatHost, autoMarketPath, "", h)
+	f.on(http.MethodPost, autoChatHost, autoMarketPath, "macos", h)
 }
 func (f *autoUpstream) onMPClaim(code string, h autoHandler) {
 	f.on(http.MethodPost, autoWebHost, "/activity/growth/tasks/"+code+"/claim", "miniprogram", h)
@@ -215,11 +220,14 @@ func (f *autoUpstream) requests() []autoReq {
 	return append([]autoReq(nil), f.reqs...)
 }
 
-// requestsTo 过滤指定端点（platform 为空表示不带该头）。
+// requestsTo 过滤指定端点（platform 为空时匹配无平台头或桌面默认 macos，避免影响历史用例；
+// 指定 "macos"/"web"/"miniprogram"/"mp-weixin" 时严格相等）。
 func (f *autoUpstream) requestsTo(method, host, path, platform string) []autoReq {
 	var out []autoReq
 	for _, r := range f.requests() {
-		if r.Method == method && r.Host == host && r.Path == path && r.Header.Get("X-Client-Platform") == platform {
+		got := r.Header.Get("X-Client-Platform")
+		matched := got == platform || (platform == "" && got == "macos")
+		if r.Method == method && r.Host == host && r.Path == path && matched {
 			out = append(out, r)
 		}
 	}
@@ -2986,7 +2994,7 @@ func TestRunSequentialEventTask(t *testing.T) {
 				if r.Header.Get("X-Client-Platform") == "mp-weixin" && mpIdx < 0 {
 					mpIdx = i
 				}
-				if r.Header.Get("X-Client-Platform") == "" && pcIdx < 0 {
+				if r.Header.Get("X-Client-Platform") == "macos" && pcIdx < 0 {
 					pcIdx = i
 				}
 			}

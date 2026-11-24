@@ -225,9 +225,11 @@ func (c *Client) loginHeaders(req *http.Request, realm string, kind loginKind, t
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("X-Request-ID", session.NewMessageID())
 	req.Header.Set("X-Product", deploymentType)
-	if ua := c.daemonUserAgent(loginRealmAuth(realm)); ua != "" {
+	realmAuth := loginRealmAuth(realm)
+	if ua := c.daemonUserAgent(realmAuth); ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
+	c.injectClientIdentity(req, realmAuth)
 	dt := tr.daemon()
 	switch kind {
 	case loginKindState:
