@@ -121,6 +121,7 @@ func TestNormalizeDefaultsAndClamps(t *testing.T) {
 	c.Pool.ExpiringSoon = "-5m"
 	c.Pool.CreditFloor = -3
 	c.Pool.MaxRPM, c.Pool.MaxRPMGlobal = -1, -2
+	c.Pool.MaxTPM, c.Pool.MaxTPMGlobal = -100, -200
 	c.Pool.RestrictionWaveThreshold = -1
 	c.Pool.RestrictionWaveWindow = ""
 	c.Pool.RestrictionWavePause = "-5m"
@@ -145,6 +146,9 @@ func TestNormalizeDefaultsAndClamps(t *testing.T) {
 	}
 	if c.Pool.MaxRPM != 0 || c.Pool.MaxRPMGlobal != 0 {
 		t.Fatalf("每分钟请求数上限负值应钳 0（不限）: %+v", c.Pool)
+	}
+	if c.Pool.MaxTPM != 0 || c.Pool.MaxTPMGlobal != 0 {
+		t.Fatalf("每分钟 Token 数上限负值应钳 0（不限）: %+v", c.Pool)
 	}
 	if c.Upstream.TimeoutSeconds != 120 || c.Upstream.HeaderTimeoutSeconds != 120 || c.Upstream.IdleTimeoutSeconds != 300 {
 		t.Fatalf("上游超时应回落默认: %+v", c.Upstream)
@@ -296,5 +300,23 @@ func TestRestrictionWaveConfig(t *testing.T) {
 	}
 	if c.Pool.RestrictionWaveThreshold != 0 || c.RestrictionWaveWindowDur != 10*time.Minute || c.RestrictionWavePauseDur != time.Hour {
 		t.Fatalf("显式值应生效: %d %v %v", c.Pool.RestrictionWaveThreshold, c.RestrictionWaveWindowDur, c.RestrictionWavePauseDur)
+	}
+}
+
+// TestMaxTPMConfig 每号每分钟 Token 上限默认 0 不限，显式正值解析无损，负值钳 0。
+func TestMaxTPMConfig(t *testing.T) {
+	c, err := ParseConfig([]byte(`{"pool": {"max_tpm": 200000, "max_tpm_global": 80000}}`))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if c.Pool.MaxTPM != 200000 || c.Pool.MaxTPMGlobal != 80000 {
+		t.Fatalf("显式 max_tpm 应生效: cn=%d global=%d", c.Pool.MaxTPM, c.Pool.MaxTPMGlobal)
+	}
+	c, err = ParseConfig([]byte(`{"pool": {"max_tpm": -5, "max_tpm_global": -1}}`))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if c.Pool.MaxTPM != 0 || c.Pool.MaxTPMGlobal != 0 {
+		t.Fatalf("负值应钳 0: cn=%d global=%d", c.Pool.MaxTPM, c.Pool.MaxTPMGlobal)
 	}
 }

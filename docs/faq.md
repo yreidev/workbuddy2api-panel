@@ -55,10 +55,10 @@ docker run --user 0:0 ...
 
 ## 503「all accounts are busy」是什么
 
-能接这个请求的号都健康，只是在途请求都满了（国内版每个号默认 3 个、国际版 2 个，见 `pool.max_in_flight`、`pool.max_in_flight_global`），或者设了每号每分钟请求数上限（`pool.max_rpm`、`pool.max_rpm_global`）并且到了上限。网关先让请求排队，等有号放出名额再转发，最多等 `pool.in_flight_wait`（默认 30 秒）；等满还没有空位才回这个 503。有号是因为每分钟请求数到上限时，错误信息里写的是 `requests-per-minute`，`gateway_hint` 以 `rpm_full` 开头。
+能接这个请求的号都健康，只是在途请求都满了（国内版每个号默认 3 个、国际版 2 个，见 `pool.max_in_flight`、`pool.max_in_flight_global`），或者设了每号每分钟请求数上限（`pool.max_rpm`、`pool.max_rpm_global`）、每号每分钟 Token 数上限（`pool.max_tpm`、`pool.max_tpm_global`）并且到了上限。网关先让请求排队，等有号放出名额或滑动窗口恢复再转发，最多等 `pool.in_flight_wait`（默认 30 秒）；等满还没有空位才回这个 503。有号是因为每分钟请求数到上限时，错误信息写的是 `requests-per-minute`，`gateway_hint` 以 `rpm_full` 开头；有号是因为每分钟 Token 数到上限时，错误信息写的是 `tokens-per-minute`，`gateway_hint` 以 `tpm_full` 开头。
 
 - 偶尔出现：并发的高峰，稍等重试即可；
-- 经常出现：同时发的请求比号能接的多，加号，或者调大在途上限（国际版风控更紧，调大前先小幅试）；`rpm_full` 时调大每分钟请求数上限；
+- 经常出现：同时发的请求比号能接的多，加号，或者调大在途上限（国际版风控更紧，调大前先小幅试）；`rpm_full` 时调大每分钟请求数上限，`tpm_full` 时调大每分钟 Token 数上限；
 - 排队期间客户端收不到任何数据，流式请求的首字会晚到，客户端的超时要比排队上限长。
 
 ## 503「no account in this API key's groups」是什么
@@ -92,4 +92,4 @@ Claude Code、Codex 等客户端的系统提示词里有固定模板句，可能
 
 ## 官网积分记录的「使用端」显示什么
 
-官网按出站请求的 User-Agent 归因。默认 UA 按账号所在域对齐官方桌面端：国内版 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，国际版 `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`；需要时可用 `upstream.user_agent` 整体覆盖，或用 `upstream.client_version` / `upstream.cli_version` 只改版本号。改完需要重启。
+官网按出站请求的 User-Agent 归因。默认 UA 按账号所在域对齐官方桌面端：国内版 `WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0`，国际版 `WorkBuddy/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0`；需要时可用 `upstream.user_agent` 整体覆盖，或用 `upstream.client_version` / `upstream.cli_version` 只改版本号。改完需要重启。

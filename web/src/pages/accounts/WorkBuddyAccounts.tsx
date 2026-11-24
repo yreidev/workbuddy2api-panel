@@ -106,7 +106,7 @@ export function WorkBuddyAccounts({ data, fetchedAt, workBuddyOnly }: {
   // 企业版不限量的号没有可加的数，合计里不算，另外注明
   const creditSum = pool.total > 0 ? `${pool.remain} / ${pool.total}` : pool.remain
 
-  const loadNotice = data.in_flight_full ? `${data.in_flight_full} 个账号满载（在途或每分钟请求数到上限）` : ''
+  const loadNotice = data.in_flight_full ? `${data.in_flight_full} 个账号满载（在途、每分钟请求数或每分钟 Token 数到上限）` : ''
   const batchNotice = '全部签到、旅行巡检、活跃上报、全部保活与全部测活作用于全部 WorkBuddy 账号。'
   const description = workBuddyOnly && visibleAccounts.length === accounts.length
     ? loadNotice || undefined

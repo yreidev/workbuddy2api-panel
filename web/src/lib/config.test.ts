@@ -103,4 +103,22 @@ describe('配置表单', () => {
     expect(changedFields(a, { ...a, listen: ' :7863 ' })).toEqual([])
     expect(changedFields(a, { ...a, listen: ':8000', prefer_expiring: true })).toEqual(['listen', 'prefer_expiring'])
   })
+
+  it('每号每分钟 Token 上限（max_tpm / max_tpm_global）：在账号池标签页、热生效、支持 0 不限并拦截负值', () => {
+    expect(tabOfField('max_tpm')).toBe('pool')
+    expect(tabOfField('max_tpm_global')).toBe('pool')
+    expect(field('max_tpm').path).toEqual(['pool', 'max_tpm'])
+    expect(field('max_tpm_global').path).toEqual(['pool', 'max_tpm_global'])
+    expect(field('max_tpm').restart).toBeFalsy()
+    expect(field('max_tpm_global').restart).toBeFalsy()
+    expect(validateField(field('max_tpm'), '0')).toBeNull()
+    expect(validateField(field('max_tpm'), '200000')).toBeNull()
+    expect(validateField(field('max_tpm'), '-1')).not.toBeNull()
+    expect(validateField(field('max_tpm_global'), '-10')).not.toBeNull()
+    const form = toForm({ pool: { max_tpm: 120000, max_tpm_global: 60000 } })
+    expect(form.max_tpm).toBe('120000')
+    expect(form.max_tpm_global).toBe('60000')
+    const body = fromForm(form) as { pool: Record<string, unknown> }
+    expect(body.pool).toMatchObject({ max_tpm: 120000, max_tpm_global: 60000 })
+  })
 })

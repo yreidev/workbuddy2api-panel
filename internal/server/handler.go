@@ -150,6 +150,8 @@ type Handler struct {
 	wafIP wafIPGate
 	// turns 客户端没给会话 id 时的对话轮 ID 分配（session/turns.go）。进程内状态、重启清零。
 	turns *session.TurnIDs
+	// harness 同轮多步模型调用的 harnessMetadata 步骤状态（session/harness.go）。进程内状态、重启清零。
+	harness *session.HarnessTracker
 }
 
 // NewHandler 构建 handler。
@@ -166,7 +168,7 @@ func NewHandler(cfg Config) *Handler {
 	if cfg.PromptMode == "" {
 		cfg.PromptMode = "custom" // 缺省 custom：网关自有提示词
 	}
-	h := &Handler{cfg: cfg, mux: http.NewServeMux(), turns: session.NewTurnIDs()}
+	h := &Handler{cfg: cfg, mux: http.NewServeMux(), turns: session.NewTurnIDs(), harness: session.NewHarnessTracker()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withKeyAuth(sdktranslator.FormatOpenAI, false, h.chatCompletions))
 	h.registerBridgeRoutes()
 	h.mux.HandleFunc("GET /v1/models", h.withKeyAuth(sdktranslator.FormatOpenAI, false, h.models))
@@ -1007,6 +1009,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		chatMeta.ConversationRequestID = session.TurnRequestID("")
 	}
 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
+	// 消息级 ID 与 harnessMetadata 步骤在轮转循环外一次性定好（Peek 不推进）：
+	// 重试、换号、入口切换或排队重发沿用同一 messageID / stepIndex / previous（对齐官方
+	// startRetriedModelAttempt），仅在本次请求真正成功返回后 Commit 推进同轮下一步。
+	chatMeta.MessageID = session.NewUUIDv7Hex()
+	harnessStep := h.harness.Peek(chatMeta.ConversationRequestID)
+	chatMeta.HarnessStep = &harnessStep
 	// noteCache 把这一跳的前缀缓存观测交给未命中告警，按对话对照上一轮（见 cacheMissSignal）。
 	noteCache := func(acct *auth.Auth) {
 		if !st.hasCache {
@@ -1064,7 +1072,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.status = http.StatusServiceUnavailable
 			if slot.timedOut {
 				why := "在途都满"
-				if slot.rpm {
+				switch {
+				case slot.tpm && slot.rpm:
+					why = "在途满、每分钟请求数或每分钟 Token 数到上限"
+				case slot.tpm:
+					why = "在途满或每分钟 Token 数到上限"
+				case slot.rpm:
 					why = "在途满或每分钟请求数到上限"
 				}
 				log.Printf("WARN: [server] in-flight full: model=%s 能接的号%s，等了 %.1fs 仍没有空位，回 503",
@@ -1419,6 +1432,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				// 客户端写失败（断连）：上游帧无恙，账号健康——账号侧照常记成功
 				// （与 default 同语义），请求日志归为 Interrupted（人已走，未完成）。
 				st.outcome = reqlog.OutcomeInterrupted
+				h.harness.Commit(chatMeta.ConversationRequestID, chatMeta.MessageID)
 				h.cfg.Pool.NoteSuccess(acct.UID)
 				h.cfg.Pool.BlockModelClear(acct.UID, bareModel)
 				if sessKey != "" && h.cfg.Session != nil {
@@ -1427,6 +1441,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			default:
 				// 真成功：这一跳读完且上游没有报错，才记成功并让粘性跟上。
 				st.outcome = reqlog.OutcomeSuccess
+				h.harness.Commit(chatMeta.ConversationRequestID, chatMeta.MessageID)
 				h.cfg.Pool.NoteSuccess(acct.UID)
 				// 11102/11158 负缓存清命：该账号该模型实测成功，立即解除避让（不必等 TTL 到期）。
 				// BlockModelClear 按 reason 前缀识别，只清这两类条目、不碰 6004 独立冷却。
@@ -1498,6 +1513,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if rememberTurn {
 			h.turns.Remember(sessKey, turn, chatMeta.ConversationRequestID, upstream.ResponseToolCallIDs(resp))
 		}
+		h.harness.Commit(chatMeta.ConversationRequestID, chatMeta.MessageID)
 		credit, total, hasCredit := usageCreditTotal(resp)
 		if usage, ok := resp["usage"].(map[string]any); ok {
 			if hit, miss, okC := upstream.UsageCacheTokens(usage); okC {
@@ -1549,7 +1565,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 错误（无上游原文）固定 no_healthy_account hint。
 	hint := upstream.NoHealthyAccountHint()
 	if slot.timedOut && lastErr == nil {
-		// 号都在、只是都忙（在途满或每分钟请求数到上限）：说清楚是忙，不是号坏了（见 waitSlot）。
+		// 号都在、只是都忙（在途满、每分钟请求数或每分钟 Token 数到上限）：说清楚是忙，不是号坏了（见 waitSlot）。
 		msg, hint = h.busyError(&slot)
 	} else if keyGroups != nil && lastErr == nil {
 		// 客户端密钥绑了分组：说清楚是这个密钥能用的号里没有能接的，别让人以为整个池子都挂了。
@@ -1650,6 +1666,7 @@ type slotWait struct {
 	woke     bool      // 这次选号是刚等完醒来的
 	timedOut bool      // 等到上限仍没有空位，末端错误据此说明是号都在忙
 	rpm      bool      // 等满时有号是因为每分钟请求数到上限才忙（pool.max_rpm），末端错误据此说明
+	tpm      bool      // 等满时有号是因为每分钟 Token 数到上限才忙（pool.max_tpm），末端错误据此说明
 	logged   bool      // 「等到空位」的日志已经记过
 }
 
@@ -1670,7 +1687,7 @@ func (h *Handler) waitSlot(ctx context.Context, freed <-chan struct{}, sw *slotW
 		sw.giveUp(h.cfg.Pool, tried, model, realm)
 		return false
 	}
-	// 每分钟请求数到上限的号不会 Release 叫醒人，靠 slotPoll 定时重看。
+	// 每分钟请求数或每分钟 Token 数到上限的号不会 Release 叫醒人，靠 slotPoll 定时重看。
 	t := time.NewTimer(min(left, slotPoll))
 	defer t.Stop()
 	slotWaitStarted()
@@ -1688,15 +1705,24 @@ func (h *Handler) waitSlot(ctx context.Context, freed <-chan struct{}, sw *slotW
 	return true
 }
 
-// giveUp 等满上限：记下等满了，以及是不是有号因为每分钟请求数到上限而忙。
+// giveUp 等满上限：记下等满了，以及是不是有号因为每分钟请求数或每分钟 Token 数到上限而忙。
 func (sw *slotWait) giveUp(p *pool.Pool, tried map[string]bool, model, realm string) {
 	sw.timedOut = true
 	sw.rpm = p.RPMBusy(tried, model, realm)
+	sw.tpm = p.TPMBusy(tried, model, realm)
 }
 
 // busyError 号都在忙、等满仍没空位时回给客户端的说明与 gateway_hint（对话与搜索共用）。
 func (h *Handler) busyError(sw *slotWait) (msg, hint string) {
 	wait := h.cfg.Pool.InFlightWait()
+	if sw.tpm && sw.rpm {
+		return fmt.Sprintf("all accounts are busy: every account that can serve this request is at its tokens-per-minute, requests-per-minute, or in-flight limit, no free slot after waiting %s, please retry later", wait),
+			"tpm_full: raise pool.max_tpm / pool.max_tpm_global or pool.max_rpm / pool.max_rpm_global, add accounts, or retry later"
+	}
+	if sw.tpm {
+		return fmt.Sprintf("all accounts are busy: every account that can serve this request is at its tokens-per-minute or in-flight limit, no free slot after waiting %s, please retry later", wait),
+			"tpm_full: raise pool.max_tpm / pool.max_tpm_global, add accounts, or retry later"
+	}
 	if sw.rpm {
 		return fmt.Sprintf("all accounts are busy: every account that can serve this request is at its requests-per-minute or in-flight limit, no free slot after waiting %s, please retry later", wait),
 			"rpm_full: raise pool.max_rpm / pool.max_rpm_global, add accounts, or retry later"

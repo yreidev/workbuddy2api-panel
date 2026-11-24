@@ -109,12 +109,12 @@
 | `upstream.header_timeout_seconds` | 同 `timeout_seconds` | 聊天请求等到首字节的上限 |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中途无数据的上限 |
 | `upstream.user_agent` | 空 | 出站 User-Agent 整体覆盖（任务中心的桌面端上报、外观设置、专家列表除外）。空 = 按请求的来源取官方的 UA：对话、模型目录由桌面端内置的 CLI 发，形如 `WorkBuddy/<client_version> <应用名>/<client_version> CLI/<cli_version>`；联网搜索也由内置 CLI 发，但不经它的请求框架，是 `CLI/<client_version>`；登录、刷新令牌、上报由桌面端后台服务发，两段都是应用名：`<应用名>/<client_version> <应用名>/<client_version> CLI/<cli_version>`；积分、签到由后台服务另用 axios 发，是 `axios/1.16.1`；成长中心、积分补偿、新手礼包、试用只在官网网页上调，用 Mac 上 Chrome 的 UA。应用名国内版是 `WorkBuddy`，国际版是 `workbuddy-ai` |
-| `upstream.client_version` | 空（国内版 `5.11.3`，国际版 `5.9.4`） | UA 与 `X-IDE-Version` 里的桌面端版本；填了就两个域都用这个值 |
-| `upstream.cli_version` | 空（国内版 `2.176.0`，国际版 `2.165.0`） | UA 里 `CLI/` 段的版本，是各域桌面端内置 CLI 的版本；填了就两个域都用这个值。联网搜索的 UA 例外：官方在那里写的是桌面端版本（`client_version`） |
-| `upstream.client_name` | 空（= `WorkBuddy`） | 对话请求的归属头。空或 `WorkBuddy` 时按官方桌面端发送 `X-Agent-Purpose`、`X-IDE-Name`、`X-IDE-Type`、`X-IDE-Version`；配 `SaaS` 是旧行为，对话不带这几个头（联网搜索同样不带 `X-IDE-*`），积分、签到这类请求不带 UA。`X-Product` 不受这项影响，带它的请求和官方一样固定为 `SaaS` |
+| `upstream.client_version` | 空（国内版 `5.11.3`，国际版 `5.11.4`） | UA、`X-IDE-Version` 与 `X-Client-Version` 里的桌面端版本；填了就两个域都用这个值 |
+| `upstream.cli_version` | 空（两域均为 `2.176.0`） | UA 里 `CLI/` 段与 `extra_vars.harnessMetadata.harnessVersion` 的版本，是各域桌面端内置 CLI 的版本；填了就两个域都用这个值。联网搜索的 UA 例外：官方在那里写的是桌面端版本（`client_version`） |
+| `upstream.client_name` | 空（= `WorkBuddy`） | 对话请求的归属头。空或 `WorkBuddy` 时按官方桌面端发送 `X-Agent-Purpose`、`X-IDE-Name`、`X-IDE-Type`、`X-IDE-Version`，并对第一方桌面请求发送 `X-Client-Version`、`X-Client-Platform`、`X-Client-Product`；配 `SaaS` 是旧行为，不发这几组头（联网搜索同样不带 `X-IDE-*` 与 `X-Client-*`），积分、签到这类请求不带 UA。`X-Product` 不受这项影响，带它的请求和官方一样固定为 `SaaS` |
 | `upstream.device_token` | 空 | 设备风控头 `X-Device-Token` 的全局兜底值；单个凭证文件里的 `device_token` 优先。签到、登录的发起授权，以及对话都带（对话只在填了才带——网关在 Linux 做不出真令牌，没填就不发），见[官方客户端对照](official-client.md#几类请求) |
 | `upstream.device_token_file` | 空 | 从文件读取 device token（5 分钟缓存），优先级低于前两者 |
-| `upstream.passthrough_ip` | `false` | 是否把客户端 IP 透传给上游 |
+| `upstream.passthrough_ip` | `false` | 是否把客户端 IP 透传给上游（`X-Forwarded-For` / `X-Real-IP` / `X-Client-IP`）。官方客户端从不出站发这类头，严格对齐官方请保持默认关闭 |
 | `upstream.model_optimization` | `false` | 是否允许上游用对话做模型优化。关闭时每条对话都带 `X-Private-Data: true`（不允许），等于在桌面端手动关掉「模型优化」：国际版 5.9.4 没动过这个开关时也是这样，国内版 5.9.3 起没动过时个人号发 `false`（允许）。打开时个人号发 `false`，企业号（有企业 id，或账号类型是 `ultimate`、`exclusive`）仍发 `true`，和国内版 5.9.3 没动过开关时一样。面板「上游与高级 → 出站请求」可改，保存即生效 |
 | `upstream.tls_fingerprint` | `true` | 出站 TLS 是否按各平台采到的官方运行时 ClientHello 复刻（uTLS；WorkBuddy 桌面、Qoder CLI、Trae Code TTNet、Work 网页及 Trae 授权分别隔离，见[采样基准与边界](official-client.md#分平台传输与身份基准)）。默认开；关掉回落 Go 标准库握手。改 config 后重载生效，对新建连接起用；关闭此项不强制把各平台都改为 HTTP/1.1 |
 
@@ -134,7 +134,9 @@
 | `pool.max_in_flight_global` | `2` | 国际版单账号在途上限（国际版风控更紧） |
 | `pool.max_rpm` | `0` | 国内版单账号每分钟最多接几个请求（按最近 60 秒算），到了就当这个号忙，换号或排队；`0` = 不限，见[网关与选号](gateway.md#选号策略) |
 | `pool.max_rpm_global` | `0` | 国际版单账号每分钟请求数上限，只管国际版的号，不回落到 `pool.max_rpm`；`0` = 不限 |
-| `pool.in_flight_wait` | `30s` | 能接请求的号在途都满或每分钟请求数到上限时，请求最多排队等多久空位，等满才回 503，见[网关与选号](gateway.md#选号策略)。`0` = 不等。Trae／Qoder 的本地账号等位也使用此值，队满与上游排队见[多平台上游](multi-platform.md) |
+| `pool.max_tpm` | `0` | 国内版 WorkBuddy 单账号最近 60 秒累计 Token 上限（按上游返回的真实 `usage` 事后记账），到了就当这个号忙，换号或排队；`0` = 不限，见[网关与选号](gateway.md#选号策略) |
+| `pool.max_tpm_global` | `0` | 国际版 WorkBuddy 单账号最近 60 秒累计 Token 上限，只管国际版的号，不回落到 `pool.max_tpm`；`0` = 不限 |
+| `pool.in_flight_wait` | `30s` | 能接请求的号在途都满、每分钟请求数或每分钟 Token 数到上限时，请求最多排队等多久空位，等满才回 503，见[网关与选号](gateway.md#选号策略)。`0` = 不等。Trae／Qoder 的本地账号等位也使用此值，队满与上游排队见[多平台上游](multi-platform.md) |
 | `pool.cross_realm` | `off` | 跨域负载均衡：`off` 关闭、`merge` 合池、`cn_first` 国内版优先；老配置的 `true` 读成 `merge`、`false` 读成 `off`，见[网关与选号](gateway.md#跨域负载均衡) |
 | `pool.credit_floor` | `0` | 积分保底：余额低于该值的账号不再接实测收费的模型；`0` = 关闭 |
 | `pool.prefer_expiring` | `true` | 有积分快过期的账号选号权重 ×3，优先把快过期的积分用掉 |

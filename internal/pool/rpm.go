@@ -86,9 +86,9 @@ func (p *Pool) rpmLimit(e *entry) int {
 	return p.maxRPM
 }
 
-// busy 账号此刻接不了新请求：在途占满，或者最近 60 秒的请求数到了上限。调用方持 p.mu。
+// busy 账号此刻接不了新请求：在途占满，或者最近 60 秒的请求数 / Token 数到了上限。调用方持 p.mu。
 func (p *Pool) busy(e *entry, now time.Time) bool {
-	return p.inFlightFull(e) || e.rpm.full(p.rpmLimit(e), now)
+	return p.inFlightFull(e) || e.rpm.full(p.rpmLimit(e), now) || e.tpm.full(p.tpmLimit(e), now)
 }
 
 // RPMBusy 报告 tried 以外、除了忙以外都能接这个请求的号里（口径同 ServableIgnoringInFlight），

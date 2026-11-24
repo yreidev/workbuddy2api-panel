@@ -301,7 +301,8 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 }
 
 // RecordTokenUsage 记录一次实际发起的聊天账号尝试及上游返回的 usage 增量。
-// usage 字段缺失时仍累计请求次数，但只累计明确存在的 token 字段。
+// usage 字段缺失时仍累计请求次数，但只累计明确存在的 token 字段；若开着每号 TPM 上限，
+// 同时把本次真实消耗的 token 数写入该号最近 60 秒滑动窗（见 tpm.go）。
 func (p *Pool) RecordTokenUsage(uid string, delta TokenUsageDelta) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -309,9 +310,10 @@ func (p *Pool) RecordTokenUsage(uid string, delta TokenUsageDelta) {
 	if !ok {
 		return
 	}
+	now := time.Now()
 	usage := &e.tokenUsage
 	usage.RequestCount++
-	usage.LastUsedAt = time.Now()
+	usage.LastUsedAt = now
 	if delta.Model != "" {
 		usage.LastModel = delta.Model
 	}
@@ -330,6 +332,9 @@ func (p *Pool) RecordTokenUsage(uid string, delta TokenUsageDelta) {
 	}
 	if known {
 		usage.UsageCount++
+	}
+	if tokens := deltaTokens(delta); tokens > 0 {
+		e.tpm.add(p.tpmLimit(e), tokens, now)
 	}
 	if delta.HasLatencyMs && delta.LatencyMs >= 0 {
 		usage.LastLatencyMs = delta.LatencyMs
@@ -473,7 +478,7 @@ func (p *Pool) HasAccounts() bool {
 // CountsDetailed 返回 total/healthy/cooling/disabled/inFlightFull 五类计数。
 // cooling 含常规冷却（until）与熔断期（breakerUntil）。
 // 注意：healthy 口径不含 inFlight 维度（是状态机权威判定，只看 disabled/until/breakerUntil）；
-// inFlightFull 是 healthy 的子集——healthy 里已达在途上限或每分钟请求数上限（busy）的账号数，供 /status 透出满载度。
+// inFlightFull 是 healthy 的子集——healthy 里已达在途上限、每分钟请求数上限或每分钟 Token 上限（busy）的账号数，供 /status 透出满载度。
 // 与 ServableNow 的区别见该函数注释。
 // 保持既有语义：paused 并入 disabled（= /status 的「不可用」口径）。监控/脚本只
 // 关心"还能不能用"，这个口径对它们是稳定契约，不因面板展示需要而改变。

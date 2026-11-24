@@ -169,6 +169,8 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	p.SetInFlightWait(cfg.InFlightWaitDur)             // 号都在途占满时排队等空位（默认 30s；0 不等）
 	p.SetMaxRPM(cfg.Pool.MaxRPM)                       // 每号每分钟请求数上限（0 不限），超了同在途满
 	p.SetMaxRPMGlobal(cfg.Pool.MaxRPMGlobal)
+	p.SetMaxTPM(cfg.Pool.MaxTPM) // 每号每分钟 Token 数上限（0 不限），超了同在途满
+	p.SetMaxTPMGlobal(cfg.Pool.MaxTPMGlobal)
 	p.SetDegrade(cfg.Pool.DegradeThreshold, cfg.DegradeCooldownDur, cfg.DegradeCooldownMaxD)
 	p.SetSoftRateMax(cfg.SoftRateMaxDur)                 // 软冷却指数退避封顶（soft_rate_max，默认 2h）
 	p.SetCostExploreInterval(cfg.CostExploreIntervalDur) // costTier 探索窗口（issue #136，默认 30m；0 关停）
@@ -357,6 +359,11 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		}
 	}
 	defer flushProviderActivity()
+	defer func() {
+		if err := providerManager.Close(); err != nil {
+			log.Printf("[providers] 关闭本地授权回调失败: %v", err)
+		}
+	}()
 	providerManager.SetProxies(proxyReg)
 	providerManager.SetUsage(rec)
 	if err := providerManager.EnableQoderUMID(up.EnvProxyURL()); err != nil {
@@ -521,8 +528,10 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			// Models 自己按 30 分钟缓存节流；新加账号下一轮补拉，不发推理请求。
-			providerManager.Catalog(ctx, nil)
+			// Models 自己按 30 分钟缓存节流；新加账号下一轮补拉，不发推理请求。套 30s 超时防上游卡死长期占槽。
+			catCtx, catCancel := context.WithTimeout(ctx, 30*time.Second)
+			providerManager.Catalog(catCtx, nil)
+			catCancel()
 			select {
 			case <-ctx.Done():
 				return
@@ -774,7 +783,7 @@ var renameConfig = os.Rename
 // 热生效范围（设计取舍）：
 //   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints / pool.cross_realm / panel.update_check / model_routes / models.hidden → livecfg 快照
 //   - features.sanitize_blacklist_fingerprints / upstream.model_optimization → upstream.Client 的 atomic 开关
-//   - pool.* → pool.SetBreaker/SetMaxInFlight/SetMaxRPM/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor/SetRestrictionWave
+//   - pool.* → pool.SetBreaker/SetMaxInFlight/SetMaxRPM/SetMaxTPM/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor/SetRestrictionWave
 //   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetExpiringSoonWindow
 //   - logging.*（日志留存的开关、保留天数、容量上限）→ logStores.apply
 //
@@ -863,6 +872,8 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	p.SetInFlightWait(newCfg.InFlightWaitDur)
 	p.SetMaxRPM(newCfg.Pool.MaxRPM)
 	p.SetMaxRPMGlobal(newCfg.Pool.MaxRPMGlobal)
+	p.SetMaxTPM(newCfg.Pool.MaxTPM)
+	p.SetMaxTPMGlobal(newCfg.Pool.MaxTPMGlobal)
 	p.SetDegrade(newCfg.Pool.DegradeThreshold, newCfg.DegradeCooldownDur, newCfg.DegradeCooldownMaxD)
 	p.SetSoftRateMax(newCfg.SoftRateMaxDur)
 	p.SetCostExploreInterval(newCfg.CostExploreIntervalDur) // costTier 探索窗口热生效（0 关停）

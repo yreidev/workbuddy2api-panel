@@ -283,6 +283,8 @@ type entry struct {
 	inFlight atomic.Int64
 	// rpm 最近 60 秒占到名额的时刻（每号每分钟请求数上限，见 rpm.go），运行态，不持久化。
 	rpm rpmCounter
+	// tpm 最近 60 秒累计消耗的 token 样本（每号每分钟 Token 上限，见 tpm.go），运行态，不持久化。
+	tpm tpmCounter
 }
 
 // modelCostOf 返回该账号在指定 model 上的有效成本观测；无观测或观测过期返回 ok=false。

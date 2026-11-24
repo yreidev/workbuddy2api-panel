@@ -188,10 +188,10 @@ type Config struct {
 		// 内置 CLI 发的请求 `WorkBuddy/<ver> <applicationName>/<ver> CLI/<cli>`，后台服务发的
 		// 请求前两段对调（applicationName 国内版 WorkBuddy、国际版 workbuddy-ai）。
 		UserAgent string `json:"user_agent"`
-		// ClientVersion 桌面端版本（UA 的版本段与 X-IDE-Version），两域共用一个值。
-		// 空 = 内置默认：国内版 5.9.3、国际版 5.9.4（官方安装包）。
+		// ClientVersion 桌面端版本（UA 的版本段、X-IDE-Version 与 X-Client-Version），两域共用一个值。
+		// 空 = 内置默认：国内版 5.11.3、国际版 5.11.4（官方安装包）。
 		ClientVersion string `json:"client_version"`
-		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认 2.165.0（两域桌面端内置的 CLI）。
+		// CliVersion 出站 UA 中 `CLI/<ver>` 段与 harnessMetadata 的版本。空 = 内置默认 2.176.0（两域桌面端内置的 CLI）。
 		CliVersion string `json:"cli_version"`
 		// ClientName 对话请求的归属头 X-IDE-Name / X-IDE-Type 取值。空 = "WorkBuddy"，同官方
 		// 桌面端（带 X-Agent-Purpose 与 X-IDE-*）；配 "SaaS" 还原旧行为：对话不带这几个头，
@@ -241,6 +241,8 @@ type Config struct {
 		InFlightWait       string `json:"in_flight_wait"`       // 能接的号在途都满时请求最多等多久空位，默认 "30s"，"0" = 不等直接 503
 		MaxRPM             int    `json:"max_rpm"`              // 国内版单号每分钟请求数上限（最近 60 秒），0 = 不限
 		MaxRPMGlobal       int    `json:"max_rpm_global"`       // 国际版单号每分钟请求数上限，0 = 不限；两档各管各的域
+		MaxTPM             int64  `json:"max_tpm"`              // 国内版单号每分钟 Token 数上限（最近 60 秒），0 = 不限
+		MaxTPMGlobal       int64  `json:"max_tpm_global"`       // 国际版单号每分钟 Token 数上限，0 = 不限；两档各管各的域
 		BreakerThreshold   int    `json:"breaker_threshold"`    // 连续失败次数触发熔断，默认 3
 		BreakerCooldown    string `json:"breaker_cooldown"`     // 基础熔断时长，默认 "30m"
 		BreakerCooldownMax string `json:"breaker_cooldown_max"` // 指数退避封顶，默认 "6h"
@@ -688,8 +690,9 @@ func (c *Config) normalize() error {
 	if c.RestrictionWavePauseDur, err = parseDurationOr(c.Pool.RestrictionWavePause, "30m"); err != nil {
 		return fmt.Errorf("pool.restriction_wave_pause: %w", err)
 	}
-	// 每号每分钟请求数上限：0 是合法默认（不限），负值钳 0。
+	// 每号每分钟请求数与 Token 数上限：0 是合法默认（不限），负值钳 0。
 	c.Pool.MaxRPM, c.Pool.MaxRPMGlobal = max(c.Pool.MaxRPM, 0), max(c.Pool.MaxRPMGlobal, 0)
+	c.Pool.MaxTPM, c.Pool.MaxTPMGlobal = max(c.Pool.MaxTPM, 0), max(c.Pool.MaxTPMGlobal, 0)
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0

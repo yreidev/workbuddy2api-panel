@@ -78,6 +78,9 @@ type Pool struct {
 	// maxRPM / maxRPMGlobal 国内版、国际版单号每分钟请求数上限；0 = 不限（见 rpm.go）。
 	maxRPM       int
 	maxRPMGlobal int
+	// maxTPM / maxTPMGlobal 国内版、国际版单号每分钟 Token 数上限；0 = 不限（见 tpm.go）。
+	maxTPM       int64
+	maxTPMGlobal int64
 	// inFlightWait 能接请求的号在途都满时，请求最多等多久空位（SetInFlightWait 注入；默认
 	// defaultInFlightWait 30s，0 = 不等）。见 slotwait.go。
 	inFlightWait time.Duration
@@ -338,7 +341,8 @@ func (p *Pool) SetStore(s StoreSnapshotter) {
 // Acquire 为 uid 占一个在途名额（会话粘性命中后调用）；池上限内返回 true。
 // 名额用 entry.inFlight 原子自增，满额返回 false。上限按账号 realm 分档
 // （global 档 maxInFlightGlobal，P1-1；未设置回落 maxInFlight）。
-// 同时记一次每分钟请求数（见 rpm.go），最近 60 秒已到上限也返回 false。
+// 同时检查最近 60 秒 Token 上限（见 tpm.go）与记一次每分钟请求数（见 rpm.go），任一到上限返回 false；
+// 先查 TPM 再扣 RPM，避免 TPM 已满时白白消耗 RPM 名额。
 func (p *Pool) Acquire(uid string) bool {
 	p.mu.RLock()
 	e, ok := p.byUID[uid]
@@ -346,13 +350,14 @@ func (p *Pool) Acquire(uid string) bool {
 		p.mu.RUnlock()
 		return false
 	}
-	limit, rpm := p.inFlightLimit(e), p.rpmLimit(e)
+	limit, rpm, tpm := p.inFlightLimit(e), p.rpmLimit(e), p.tpmLimit(e)
 	p.mu.RUnlock()
 	if !acquireSlot(e, limit) {
 		return false
 	}
-	// 每分钟请求数到上限：退回刚占的在途名额。没真正放出名额，不叫醒排队的请求。
-	if !e.rpm.take(rpm, time.Now()) {
+	now := time.Now()
+	// 先检每分钟 Token 上限再扣 RPM 名额：任一超限都退回刚占的在途名额；没真正放出名额，不叫醒排队的请求。
+	if e.tpm.full(tpm, now) || !e.rpm.take(rpm, now) {
 		e.inFlight.Add(-1)
 		return false
 	}

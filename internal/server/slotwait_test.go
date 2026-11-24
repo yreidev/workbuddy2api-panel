@@ -124,7 +124,7 @@ func TestChatRPMFullTimesOut(t *testing.T) {
 	}
 }
 
-// TestWaitSlotAlreadyExpired 醒来再选号仍没选到、而合计已经等满：不再等，记下等满了和是不是 RPM 的原因。
+// TestWaitSlotAlreadyExpired 醒来再选号仍没选到、而合计已经等满：不再等，记下等满了和是不是 RPM/TPM 的原因。
 func TestWaitSlotAlreadyExpired(t *testing.T) {
 	h, p, waiting := newSlotWaitHandler(t, 50*time.Millisecond)
 	p.Release("u1")
@@ -136,14 +136,95 @@ func TestWaitSlotAlreadyExpired(t *testing.T) {
 	if h.waitSlot(context.Background(), p.SlotFreed(), &sw, map[string]bool{}, "glm-5.2", "") {
 		t.Fatal("合计已经等满，不应再等")
 	}
-	if !sw.timedOut || !sw.rpm {
-		t.Fatalf("应记下等满了、u1 的 RPM 也到上限了: %+v", sw)
+	if !sw.timedOut || !sw.rpm || sw.tpm {
+		t.Fatalf("应记下等满了、u1 的 RPM 也到上限了（非 TPM）: %+v", sw)
 	}
 	select {
 	case <-waiting:
 		t.Fatal("不应开始等")
 	default:
 	}
+}
+
+// TestSlotWaitTPM 覆盖每号每分钟 Token 数上限（pool.max_tpm）与排队/超时/唤醒/双限流联动：
+// 1. 仅 TPM 满载超时回 503，文案与 gateway_hint 标明 tokens-per-minute / tpm_full；
+// 2. TPM + RPM 同时满载超时回 503，标明两者与 tpm_full；
+// 3. 排队期间放宽上限（无需 Release）由 slotPoll 唤醒并转发成功；
+// 4. 合计已等满时不再等待并准确标记 sw.tpm=true、sw.rpm=false。
+func TestSlotWaitTPM(t *testing.T) {
+	t.Run("TPM满载超时回503", func(t *testing.T) {
+		shortSlotPoll(t, 20*time.Millisecond)
+		h, p, waiting := newSlotWaitHandler(t, 150*time.Millisecond)
+		p.Release("u1")
+		p.SetMaxTPM(1000)
+		p.RecordTokenUsage("u1", pool.TokenUsageDelta{HasTotalTokens: true, TotalTokens: 1000})
+		rec := waitFor(t, serveChatAsync(h, context.Background()), "返回")
+		waitFor(t, waiting, "开始等空位")
+		body := rec.Body.String()
+		if rec.Code != http.StatusServiceUnavailable ||
+			!strings.Contains(body, "tokens-per-minute") ||
+			!strings.Contains(body, "tpm_full: raise pool.max_tpm / pool.max_tpm_global, add accounts, or retry later") {
+			t.Fatalf("应排队后回 503 并说明 TPM 满了: code=%d body=%s", rec.Code, body)
+		}
+	})
+
+	t.Run("TPM与RPM同时满载超时回503", func(t *testing.T) {
+		shortSlotPoll(t, 20*time.Millisecond)
+		h, p, waiting := newSlotWaitHandler(t, 150*time.Millisecond)
+		p.Release("u1")
+		p.SetMaxRPM(1)
+		if !p.Acquire("u1") {
+			t.Fatal("Acquire 应成功")
+		}
+		p.Release("u1")
+		p.SetMaxTPM(1000)
+		p.RecordTokenUsage("u1", pool.TokenUsageDelta{HasTotalTokens: true, TotalTokens: 1000})
+		rec := waitFor(t, serveChatAsync(h, context.Background()), "返回")
+		waitFor(t, waiting, "开始等空位")
+		body := rec.Body.String()
+		if rec.Code != http.StatusServiceUnavailable ||
+			!strings.Contains(body, "tokens-per-minute") ||
+			!strings.Contains(body, "requests-per-minute") ||
+			!strings.Contains(body, "tpm_full:") {
+			t.Fatalf("双满载应回 503 并同时说明 TPM 与 RPM: code=%d body=%s", rec.Code, body)
+		}
+	})
+
+	t.Run("放宽上限后由slotPoll唤醒", func(t *testing.T) {
+		shortSlotPoll(t, 10*time.Millisecond)
+		h, p, waiting := newSlotWaitHandler(t, 5*time.Second)
+		p.Release("u1")
+		p.SetMaxTPM(1000)
+		p.RecordTokenUsage("u1", pool.TokenUsageDelta{HasTotalTokens: true, TotalTokens: 1000})
+		done := serveChatAsync(h, context.Background())
+		waitFor(t, waiting, "开始等空位")
+		time.Sleep(30 * time.Millisecond)
+		// 热更新调大 TPM 上限（无 Release 通知，纯靠 slotPoll 定时重看唤醒）。
+		p.SetMaxTPM(5000)
+		rec := waitFor(t, done, "返回")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("放宽 TPM 后应由 slotPoll 唤醒并成功: code=%d body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("已等满直接退出并记TPM原因", func(t *testing.T) {
+		h, p, waiting := newSlotWaitHandler(t, 50*time.Millisecond)
+		p.Release("u1")
+		p.SetMaxTPM(500)
+		p.RecordTokenUsage("u1", pool.TokenUsageDelta{HasTotalTokens: true, TotalTokens: 600})
+		sw := slotWait{since: time.Now().Add(-time.Second)}
+		if h.waitSlot(context.Background(), p.SlotFreed(), &sw, map[string]bool{}, "glm-5.2", "") {
+			t.Fatal("合计已经等满，不应再等")
+		}
+		if !sw.timedOut || !sw.tpm || sw.rpm {
+			t.Fatalf("应记下等满了且为 TPM 原因: %+v", sw)
+		}
+		select {
+		case <-waiting:
+			t.Fatal("不应开始等")
+		default:
+		}
+	})
 }
 
 // TestChatNoSlotWait 设成不等，或者号用不了不是因为在途满（这里是暂停选号）：不排队，直接回 503。
