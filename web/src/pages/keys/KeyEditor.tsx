@@ -18,7 +18,7 @@ import {
 } from '../../lib/keys'
 import { qk, useGroups, useModels } from '../../lib/queries'
 import type { ApiKey } from '../../lib/types'
-import { TARGETS, targetName } from '../../lib/targets'
+import { TARGETS, WORKBUDDY_TARGETS, targetName } from '../../lib/targets'
 import { TargetSelect } from '../../components/TargetSelect'
 import { ExpiryField } from '../../components/ExpiryField'
 import { BusyButton } from '../../components/Feedback'
@@ -128,7 +128,15 @@ function EditorBody({ editing, onClose, onCreated }: { editing: ApiKey | null; o
               <Label>允许的上游</Label>
               {TARGETS.map((t) => <Checkbox key={t.id} value={t.id}><Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>{t.name}</Checkbox.Content></Checkbox>)}
             </CheckboxGroup>
-            <TargetSelect label="裸模型名的默认上游" value={form.defaultTarget || 'legacy'} onChange={(v) => set({ defaultTarget: v === 'legacy' ? '' : v })} targets={[{ id: 'legacy', name: '沿用 WorkBuddy 国内／国际选路' }, ...TARGETS.filter((t) => form.allowedTargets.includes(t.id))]} />
+            <TargetSelect
+              label="裸模型名的默认上游"
+              value={form.defaultTarget || 'legacy'}
+              onChange={(v) => set({ defaultTarget: v === 'legacy' ? '' : v })}
+              targets={[
+                { id: 'legacy', name: form.allowedTargets.some((t) => WORKBUDDY_TARGETS.includes(t)) ? '沿用 WorkBuddy 国内／国际选路' : '不设默认（请求须带上游前缀）' },
+                ...TARGETS.filter((t) => form.allowedTargets.includes(t.id)),
+              ]}
+            />
             <p className="text-xs text-muted">请求次数和 token 上限跨平台合计；积分上限仅用于 WorkBuddy。新平台的模型白名单填写完整名称，如 qoder:global:模型名。</p>
           </div></Disclosure.Content>
         </Disclosure>
@@ -188,7 +196,12 @@ function ModelsField({ value, allowedTargets, onChange }: { value: string[]; all
           </TagGroup.List>
         </TagGroup>
       )}
-      <ModelPatternInput value={value} onChange={onChange} />
+      <ModelPatternInput
+        value={value}
+        onChange={onChange}
+        allowedTargets={allowedTargets}
+        providerOnly={!allowedTargets.some((t) => WORKBUDDY_TARGETS.includes(t))}
+      />
       {value.length > 0 && catalog.length > 0 && (
         <p className={`text-xs ${allowed.length ? 'text-muted' : 'text-warning'}`}>
           {allowed.length
@@ -228,11 +241,12 @@ export function KeyUsageGuide({ k: open, onClose }: { k: ApiKey | null; onClose:
   const origin = location.origin
   const copy = (text: string, what: string) =>
     void copyText(text).then(() => toast.success('已复制' + what), (e: unknown) => toastError(e, '复制失败：'))
+  const allowsWorkBuddy = !k?.allowed_targets?.length || k.allowed_targets.some((t) => WORKBUDDY_TARGETS.includes(t))
   const items = k ? [
     { title: '密钥', text: k.secret, what: '密钥' },
     { title: 'OpenAI 兼容客户端、Codex 的 Base URL', text: origin + '/v1', what: 'Base URL' },
     { title: 'Claude Code', text: `export ANTHROPIC_BASE_URL=${origin}\nexport ANTHROPIC_AUTH_TOKEN=${k.secret}`, what: 'Claude Code 配置' },
-    { title: 'Codex 联网搜索（MCP，写进 ~/.codex/config.toml）', text: `[mcp_servers.wb2api]\nurl = "${origin}/mcp"\nbearer_token_env_var = "WB2API_KEY"`, what: 'Codex 联网搜索配置' },
+    ...(allowsWorkBuddy ? [{ title: 'Codex 联网搜索（MCP，写进 ~/.codex/config.toml）', text: `[mcp_servers.wb2api]\nurl = "${origin}/mcp"\nbearer_token_env_var = "WB2API_KEY"`, what: 'Codex 联网搜索配置' }] : []),
   ] : []
   return (
     <Modal.Backdrop isOpen={open != null} onOpenChange={(v) => { if (!v) onClose() }}>
@@ -254,7 +268,9 @@ export function KeyUsageGuide({ k: open, onClose }: { k: ApiKey | null; onClose:
               </div>
             ))}
             <p className="text-xs text-muted">
-              Claude Code 的 Base URL 不带 /v1，其余客户端带 /v1。Codex 把 Base URL 写进 config.toml 的 base_url，env_key 指向的环境变量填密钥；联网搜索那段的 bearer_token_env_var 用同一个变量。Claude Code 自带的 WebSearch 不用配，直接可用。
+              {allowsWorkBuddy
+                ? 'Claude Code 的 Base URL 不带 /v1，其余客户端带 /v1。Codex 把 Base URL 写进 config.toml 的 base_url，env_key 指向的环境变量填密钥；联网搜索那段的 bearer_token_env_var 用同一个变量。Claude Code 自带的 WebSearch 不用配，直接可用。'
+                : `Claude Code 的 Base URL 不带 /v1，其余客户端带 /v1。Codex 把 Base URL 写进 config.toml 的 base_url，env_key 指向的环境变量填密钥。该密钥未允许 WorkBuddy 上游，不包含 WorkBuddy 专属 MCP 联网搜索与内置 WebSearch；未设默认上游时模型名须带完整前缀（如 ${k?.allowed_targets?.[0] || 'qoder:cn'}:模型名）。`}
             </p>
           </Modal.Body>
           <Modal.Footer>

@@ -34,6 +34,10 @@ export function UsagePage() {
   const query = useUsage(range, key, target)
   const d = query.data
   const showTarget = !!target || hasProviderData(providers.data) || (d?.by_realm?.length ?? 0) > 1 || !!d?.by_realm?.some((r) => r.key.includes(':') && !r.key.startsWith('workbuddy:'))
+  const providerUsage = useMemo(
+    () => (providers.data?.usage ?? []).filter((u) => matchesUsageFilter(u, target, key)),
+    [providers.data, target, key],
+  )
   // 显式区间（今天 / 自定义）以服务端回显的实际区间为准；滚动窗口没有回显，用控件自己的标签
   const windowText = d?.window_from ? echo(d.window_from) + ' → ' + (d.window_to ? echo(d.window_to) : '现在') : rangeLabel(range)
 
@@ -74,7 +78,7 @@ export function UsagePage() {
           <CreditHistory data={d} />
         </>
       )}
-      {!!providers.data?.usage.length && <ProviderUsagePanel usage={providers.data.usage.filter((u) => matchesUsageFilter(u, target, key))} />}
+      {providerUsage.length > 0 && <ProviderUsagePanel usage={providerUsage} />}
     </>
   )
 }

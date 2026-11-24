@@ -10,7 +10,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { post } from '../../lib/api'
 import { toastError } from '../../lib/hooks'
 import { badExitURL, settingsForm, settingsInput, type SettingsForm } from '../../lib/proxies'
-import { qk, useOverview } from '../../lib/queries'
+import { qk, useOverview, useProviders } from '../../lib/queries'
 import type { ProxyAccount, ProxySettings } from '../../lib/types'
 import { BusyButton } from '../../components/Feedback'
 import { Panel } from '../../components/Panel'
@@ -33,13 +33,21 @@ export function ProxySettingsPanel({ settings, accounts }: { settings: ProxySett
 function SettingsBody({ settings, accounts }: { settings: ProxySettings; accounts: Record<string, ProxyAccount> }) {
   const qc = useQueryClient()
   const overview = useOverview()
+  const providers = useProviders()
   const [confirmEl, ask] = useConfirm()
   const [form, setForm] = useState<SettingsForm>(() => settingsForm(settings))
   const [saving, setSaving] = useState(false)
   const set = (patch: Partial<SettingsForm>) => setForm((f) => ({ ...f, ...patch }))
   const dirty = JSON.stringify(settingsInput(form)) !== JSON.stringify(settingsInput(settingsForm(settings)))
   const bad = badExitURL(form.exit_ip_urls)
-  const unbound = (overview.data?.accounts || []).filter((a) => !accounts[a.uid]?.pool).length
+  const unboundWorkBuddy = (overview.data?.accounts || []).filter((a) => !accounts[a.uid]?.pool).length
+  const unboundProviders = (providers.data?.accounts || []).filter((a) => !a.proxy_id).length
+  const unbound = unboundWorkBuddy + unboundProviders
+  const unboundText = unboundProviders > 0 && unboundWorkBuddy > 0
+    ? `${unbound} 个账号（含 WorkBuddy ${unboundWorkBuddy} 个、Trae / Qoder ${unboundProviders} 个）`
+    : unboundProviders > 0
+      ? `${unbound} 个平台账号（Trae / Qoder）`
+      : `${unbound} 个号`
 
   const save = async () => {
     setSaving(true)
@@ -48,6 +56,7 @@ function SettingsBody({ settings, accounts }: { settings: ProxySettings; account
       toast.success('代理池设置已保存')
       void qc.invalidateQueries({ queryKey: qk.proxies })
       void qc.invalidateQueries({ queryKey: qk.overview })
+      void qc.invalidateQueries({ queryKey: qk.providers })
     } catch (e) {
       toastError(e, '保存失败：')
     } finally {
@@ -58,7 +67,7 @@ function SettingsBody({ settings, accounts }: { settings: ProxySettings; account
     if (form.require_bound && !settings.require_bound && unbound > 0) {
       ask({
         title: '打开「只许走号的代理」？',
-        body: `现在有 ${unbound} 个号没绑代理，保存后它们马上不接请求、不跑定时任务（签到、保活等），命令行工具也跳过，直到绑上代理。`,
+        body: `现在有 ${unboundText}没绑代理，保存后它们马上不接请求、不跑定时任务（签到、保活等），命令行工具也跳过，直到绑上代理。`,
         confirmLabel: '打开并保存',
         onConfirm: () => void save(),
       })
@@ -81,7 +90,7 @@ function SettingsBody({ settings, accounts }: { settings: ProxySettings; account
         </Switch.Content>
         <Description>
           开了以后没绑代理的号不接请求、不跑定时任务，命令行工具也跳过，卡片上标「没绑代理」；关着时没绑的号走服务器自己的网络（或环境变量里的全局代理）。
-          {unbound > 0 && ` 现在没绑代理的号有 ${unbound} 个。`}
+          {unbound > 0 && ` 现在没绑代理的有 ${unboundText}。`}
         </Description>
       </Switch>
 

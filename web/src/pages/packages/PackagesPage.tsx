@@ -6,7 +6,7 @@
 // 数据逐账号实时查上游（慢），与账号池页的到期提醒共用一份缓存：第一次进来自动查，之后切回来直接用缓存
 // 并标出数据年龄，点「刷新」才实时查（同上游 8391a05）。
 import { useMemo } from 'react'
-import { Accordion, Card, Label, ListBox, Select, Table } from '@heroui/react'
+import { Accordion, Card, Chip, Label, ListBox, Select, Table } from '@heroui/react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ChevronDown } from '@gravity-ui/icons'
 import { accountName } from '../../lib/accounts'
@@ -19,6 +19,7 @@ import {
   type PkSortMode,
 } from '../../lib/packages'
 import { useAccountNames, useConfig, useOverview, usePackages, useProviders } from '../../lib/queries'
+import { targetName } from '../../lib/targets'
 import type { CreditPackage, PackageAccount } from '../../lib/types'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { Hint } from '../../components/Hint'
@@ -43,7 +44,11 @@ export function PackagesPage() {
       <Loaded query={providers} rows={2}>{({ accounts }) => (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {accounts.map((a) => <Card key={a.account_id} variant="secondary" className="gap-2 p-4">
-            <Card.Title>{a.name}</Card.Title><ProviderQuota account={a} />
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Card.Title>{a.name}</Card.Title>
+              {a.targets.map((t) => <Chip key={t} size="sm" variant="soft">{targetName(t)}</Chip>)}
+            </div>
+            <ProviderQuota account={a} />
           </Card>)}
         </div>
       )}</Loaded>

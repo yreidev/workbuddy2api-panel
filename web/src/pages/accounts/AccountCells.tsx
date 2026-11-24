@@ -5,6 +5,7 @@
 // 账号的各个展示单元（名称、状态、积分、用量），账号表、账号卡片、详情抽屉共用。
 import { Chip, ProgressBar } from '@heroui/react'
 import { activeRateLimits, creditPercent, groupLine, isUnlimited, livenessSummary, rateLimitInfo, type Health } from '../../lib/accounts'
+import { chargeText } from '../../lib/billing'
 import { ago, dateTime, dur, formatLatency, formatRate, formatTokenCount, fmtTok, timeMs, until } from '../../lib/format'
 import { useGroups } from '../../lib/queries'
 import type { Account, ProxyAccount } from '../../lib/types'
@@ -100,7 +101,7 @@ export function LivenessLine({ a, now, className = '' }: { a: Pick<Account, 'las
   const tip = [
     (r.scheduled ? '定时测活' : '手动测活') + ' · ' + dateTime(at),
     r.model && '模型 ' + r.model,
-    !!r.credit && '扣了 ' + r.credit + ' 积分',
+    !!r.credit && '扣了 ' + chargeText(r.credit) + (r.credit_unit ? ' ' + r.credit_unit : ' 积分'),
     r.recovered && '测通后解除了冷却、熔断或网关自动加的禁用',
     !r.ok && r.error,
   ].filter(Boolean).join('\n')

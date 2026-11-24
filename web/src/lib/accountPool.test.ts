@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { filterAccountPool, matchesPoolTarget, providerCardUsage, type PoolFilter } from './accountPool'
 import { NO_GROUP } from './accounts'
+import { hasProviderData } from './queries'
 import type { Account, ProviderAccount, ProviderUsage } from './types'
 
 const wb: Account[] = [
@@ -71,4 +72,15 @@ it('卡片按账号累计不同通道的请求与已知 token，保留未知和�
   expect(sums.get('trae')).toEqual({ requests: 2, failed: 1, tokens: 10, tokensKnown: 1 })
   expect(sums.get('qoder')).toEqual({ requests: 1, failed: 0, tokens: 0, tokensKnown: 1 })
   expect(providerCardUsage([rows[1]]).get('trae')?.tokensKnown).toBe(0)
+})
+
+it('hasProviderData 在仅有账号或仅有历史用量时均返回 true', () => {
+  const usage: ProviderUsage = {
+    account_id: 'old-qoder', target: 'qoder:cn', model: 'qwen3', requests: 1, failed: 0,
+    prompt_tokens: 10, completion_tokens: 5, tokens_known: 1, charge_known: 0, charge: 0,
+  }
+  expect(hasProviderData(undefined)).toBe(false)
+  expect(hasProviderData({ accounts: [], usage: [] })).toBe(false)
+  expect(hasProviderData({ accounts: [providers[0]], usage: [] })).toBe(true)
+  expect(hasProviderData({ accounts: [], usage: [usage] })).toBe(true)
 })

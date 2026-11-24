@@ -11,6 +11,7 @@ import { fmtCreditRatio, fmtModelRate, fmtTok } from '../../lib/format'
 import { chargeText, creditUnitName } from '../../lib/billing'
 import { useAccountNames } from '../../lib/queries'
 import { cacheLevel, cacheRate, cacheRateText } from '../../lib/requests'
+import { targetName } from '../../lib/targets'
 import type { CreditUsage, UsageAgg, UsageResp } from '../../lib/types'
 import { Empty } from '../../components/Feedback'
 import { Panel, Stat } from '../../components/Panel'
@@ -128,7 +129,9 @@ function CreditTable({ kind, rows }: { kind: Kind; rows: CreditUsage[] }) {
                   {kind === 'account' ? (
                     <div className="flex flex-col">
                       <span className="font-medium">{names.name(r.key, r.nickname) || '—'}</span>
-                      <span className="font-mono text-xs text-muted">{[r.realm, r.key.slice(0, 8)].filter(Boolean).join(' · ')}</span>
+                      <span className="font-mono text-xs text-muted">
+                        {[r.realm ? targetName(r.realm.includes(':') ? r.realm : 'workbuddy:' + r.realm) : '', r.key.slice(0, 8)].filter(Boolean).join(' · ')}
+                      </span>
                     </div>
                   ) : <span className="break-all">{r.key || '—'}</span>}
                 </Table.Cell>

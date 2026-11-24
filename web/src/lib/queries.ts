@@ -4,11 +4,12 @@
 
 // 所有读接口的查询（TanStack Query）。打上游的接口（模型、积分包、任务、券码、补偿）不随窗口聚焦自动重查，
 // 只读网关内存的接口（总览、日志、队列、版本）按页面需要轮询；标签页切到后台时轮询自动暂停。
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { accountName, namesOf, relabel } from './accounts'
 import { ApiError, acct, api, errorMessage, post } from './api'
 import { creditLogQuery } from './credits'
+import { timeMs } from './format'
 import { logArchiveQuery, type LevelFilter, type LogChannel } from './logs'
 import { rangeKey, rangeQuery, type TimeRange } from './timerange'
 import { SEEN_VERSION_KEY, readStored, updateBusy } from './update'
@@ -78,20 +79,32 @@ export function useHasProviderData() {
   return hasProviderData(useProviders().data)
 }
 
-/** 首次查看才查额度；切页和轮询使用缓存，手动刷新才再次请求上游。 */
+/** 首次查看才查额度；切页和轮询使用缓存，他处更新 checked_at 时自动同步，手动刷新才再次请求上游。 */
 export function useProviderQuota(account: ProviderAccount) {
   const qc = useQueryClient()
-  const key = qk.providerQuota(account.account_id)
+  const accountID = account.account_id
+  const quota = account.quota
+  const key = qk.providerQuota(accountID)
+  useEffect(() => {
+    if (!quota) return
+    const cacheKey = qk.providerQuota(accountID)
+    const current = qc.getQueryData<ProviderQuotaStatus>(cacheKey)
+    const incomingAt = timeMs(quota.checked_at)
+    const currentAt = timeMs(current?.checked_at)
+    if (!current || (incomingAt != null && (currentAt == null || incomingAt > currentAt))) {
+      qc.setQueryData(cacheKey, quota)
+    }
+  }, [accountID, quota, qc])
   const query = useQuery({
     queryKey: key,
-    queryFn: () => post<ProviderQuotaStatus>(`providers/accounts/${account.account_id}/quota`, {}),
-    initialData: account.quota,
+    queryFn: () => post<ProviderQuotaStatus>(`providers/accounts/${accountID}/quota`, {}),
+    initialData: quota,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
   })
   const refresh = useMutation({
-    mutationFn: () => post<ProviderQuotaStatus>(`providers/accounts/${account.account_id}/quota`, { force: true }),
+    mutationFn: () => post<ProviderQuotaStatus>(`providers/accounts/${accountID}/quota`, { force: true }),
     onSuccess: (status) => { qc.setQueryData(key, status); void qc.invalidateQueries({ queryKey: qk.providers }) },
   })
   return { query, refresh }

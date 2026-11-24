@@ -11,7 +11,7 @@ import { Chip, Label, ListBox, SearchField, Select, Table, useMediaQuery } from 
 import { dayClock, fmtMs, fmtTok } from '../../lib/format'
 import { useAccountNames, useRequestMetrics } from '../../lib/queries'
 import {
-  OUTCOME_LABEL, cacheRateText, matchRequest, outcomeLevel, requestCredit, requestLogText, requestTokens,
+  OUTCOME_LABEL, cacheRateText, matchRequest, outcomeLevel, requestCredit, requestCreditCell, requestLogText, requestTokens,
 } from '../../lib/requests'
 import { retentionText, storageProblem, storageSummary } from '../../lib/storage'
 import { initialRange } from '../../lib/timerange'
@@ -166,7 +166,7 @@ export function RequestMetrics() {
                       </Table.Cell>
                       <Table.Cell className="text-right font-mono tabular-nums">{fmtMs(e.duration_ms)}</Table.Cell>
                       <Table.Cell className="text-right font-mono tabular-nums"><Tokens e={e} /></Table.Cell>
-                      <Table.Cell className="whitespace-nowrap text-right font-mono tabular-nums">{e.credit_known ? requestCredit(e).replace(' credit', '') : '—'}</Table.Cell>
+                      <Table.Cell className="whitespace-nowrap text-right font-mono tabular-nums">{requestCreditCell(e)}</Table.Cell>
                       <Table.Cell><span className="select-all font-mono text-xs text-muted">{e.request_id || '—'}</span></Table.Cell>
                     </Table.Row>
                   ))}

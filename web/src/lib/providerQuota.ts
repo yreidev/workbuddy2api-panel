@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-const amount = new Intl.NumberFormat('zh-TW', { maximumSignificantDigits: 15 })
+const amount = new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 15 })
 
 export function quotaNumber(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? '未知' : amount.format(value)

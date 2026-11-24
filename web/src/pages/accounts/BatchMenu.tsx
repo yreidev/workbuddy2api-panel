@@ -33,8 +33,10 @@ export function BatchMenu({ selected, nameOf, onRemoved, provider = false }: { s
   const [confirmEl, ask] = useConfirm()
   const actions = groups.length ? BATCH_ACTIONS : BATCH_ACTIONS.filter((a) => batchParam(a.id) !== 'group')
 
+  const actionLabel = (id: BatchAction) => (provider && id === 'disable' ? '停止派发' : BATCH_ACTIONS.find((a) => a.id === id)!.label)
+
   const exec = async (action: BatchAction, params?: BatchParams) => {
-    let label = BATCH_ACTIONS.find((a) => a.id === action)!.label
+    let label = actionLabel(action)
     if (params?.group) label += '「' + (groups.find((g) => g.id === params.group)?.name ?? params.group) + '」'
     setBusy(true)
     try {
@@ -53,7 +55,16 @@ export function BatchMenu({ selected, nameOf, onRemoved, provider = false }: { s
     } finally {
       setBusy(false)
       void qc.invalidateQueries({ queryKey: qk.overview })
-      if (provider) void qc.invalidateQueries({ queryKey: qk.providers })
+      if (provider) {
+        void qc.invalidateQueries({ queryKey: qk.providers })
+        if (action === 'remove') {
+          for (const id of selected) qc.removeQueries({ queryKey: qk.providerQuota(id) })
+        }
+        if (action === 'remove' || action === 'disable' || action === 'revive' || action === 'pause' || action === 'resume') {
+          void qc.invalidateQueries({ queryKey: qk.proxies })
+          void qc.invalidateQueries({ queryKey: qk.models })
+        }
+      }
       if (batchParam(action) === 'group' || action === 'remove') void qc.invalidateQueries({ queryKey: qk.groups })
     }
   }
@@ -71,9 +82,11 @@ export function BatchMenu({ selected, nameOf, onRemoved, provider = false }: { s
     }
     if (action === 'disable') {
       return ask({
-        title: `禁用选中的 ${n} 个账号？`,
-        body: '禁用后这些账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。',
-        confirmLabel: '禁用',
+        title: provider ? `停止派发选中的 ${n} 个平台账号？` : `禁用选中的 ${n} 个账号？`,
+        body: provider
+          ? '停止派发后这些账号不再参与选号，需手动解冻后才能恢复使用。若只是临时让位，请改用「暂停选号」。'
+          : '禁用后这些账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。',
+        confirmLabel: provider ? '停止派发' : '禁用',
         onConfirm: () => void exec(action),
       })
     }
@@ -87,16 +100,19 @@ export function BatchMenu({ selected, nameOf, onRemoved, provider = false }: { s
         <Button size="sm" variant="secondary" isPending={busy}>批量操作</Button>
         <Dropdown.Popover placement="bottom end">
           <Dropdown.Menu onAction={(id) => onAction(id as BatchAction)}>
-            {actions.map((a) => (
-              <Dropdown.Item key={a.id} id={a.id} textValue={a.label} variant={a.id === 'remove' || a.id === 'disable' ? 'danger' : undefined}>
-                <Label>{a.label}</Label>
-              </Dropdown.Item>
-            ))}
+            {actions.map((a) => {
+              const label = actionLabel(a.id)
+              return (
+                <Dropdown.Item key={a.id} id={a.id} textValue={label} variant={a.id === 'remove' || a.id === 'disable' ? 'danger' : undefined}>
+                  <Label>{label}</Label>
+                </Dropdown.Item>
+              )
+            })}
           </Dropdown.Menu>
         </Dropdown.Popover>
       </Dropdown>
       {confirmEl}
-      <Modal.Backdrop isOpen={binding} onOpenChange={setBinding}><Modal.Container><Modal.Dialog><Modal.CloseTrigger /><Modal.Header><Modal.Heading>为 {selected.length} 个平台账号绑定代理</Modal.Heading></Modal.Header><Modal.Body><TargetSelect label="出站代理" value={proxyID} onChange={setProxyID} targets={[{ id: 'default', name: '默认线路' }, ...proxies.map((p) => ({ id: p.id, name: p.name }))]} /></Modal.Body><Modal.Footer><Button variant="tertiary" onPress={() => setBinding(false)}>取消</Button><Button onPress={() => { setBinding(false); setBusy(true); void post<BatchResp>('providers/batch', { ids: selected, action: 'proxy', proxy_id: proxyID === 'default' ? '' : proxyID }).then((r) => { const result = batchSummary('绑定代理', r, nameOf); if (result.lines.length) toast.warning(result.title, { description: result.lines.join('；') }); else toast.success(result.title) }).catch((e: unknown) => toastError(e)).finally(() => { setBusy(false); void qc.invalidateQueries({ queryKey: qk.providers }); void qc.invalidateQueries({ queryKey: qk.proxies }) }) }}>保存</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop>
+      <Modal.Backdrop isOpen={binding} onOpenChange={setBinding}><Modal.Container><Modal.Dialog><Modal.CloseTrigger /><Modal.Header><Modal.Heading>为 {selected.length} 个平台账号绑定代理</Modal.Heading></Modal.Header><Modal.Body><TargetSelect label="出站代理" value={proxyID} onChange={setProxyID} targets={[{ id: 'default', name: '默认线路' }, ...proxies.map((p) => ({ id: p.id, name: p.name }))]} /></Modal.Body><Modal.Footer><Button variant="tertiary" onPress={() => setBinding(false)}>取消</Button><Button onPress={() => { setBinding(false); setBusy(true); void post<BatchResp>('providers/batch', { ids: selected, action: 'proxy', proxy_id: proxyID === 'default' ? '' : proxyID }).then((r) => { const result = batchSummary('绑定代理', r, nameOf); if (result.lines.length) toast.warning(result.title, { description: result.lines.join('；'), timeout: 8000 }); else toast.success(result.title) }).catch((e: unknown) => toastError(e)).finally(() => { setBusy(false); void qc.invalidateQueries({ queryKey: qk.providers }); void qc.invalidateQueries({ queryKey: qk.proxies }) }) }}>保存</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop>
       <ParamModal
         provider={provider}
         action={paramAction}
@@ -170,7 +186,7 @@ function ModelsForm({ adding, onClose, onSubmit, provider }: { adding: boolean; 
             </TagGroup.List>
           </TagGroup>
         )}
-        <ModelPatternInput value={models} onChange={setModels} workbuddyOnly={!provider} />
+        <ModelPatternInput value={models} onChange={setModels} workbuddyOnly={!provider} providerOnly={provider} />
       </Modal.Body>
       <Modal.Footer>
         <Button variant="tertiary" onPress={onClose}>取消</Button>

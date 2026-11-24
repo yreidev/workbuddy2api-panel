@@ -4,7 +4,7 @@
 
 // 从上游 internal/panel/frontend_test.go 的 TestAppJSRequestLogFormatting / TestAppJSRequestMatch 平移（期望值原样保留）。
 import { describe, expect, it } from 'vitest'
-import { cacheLevel, cacheRateText, matchRequest, outcomeLevel, requestCredit, requestLogText, requestTokens, type RequestFilter } from './requests'
+import { cacheLevel, cacheRateText, matchRequest, outcomeLevel, requestCredit, requestCreditCell, requestLogText, requestTokens, type RequestFilter } from './requests'
 import type { RequestEvent } from './types'
 
 describe('请求指标', () => {
@@ -45,6 +45,10 @@ describe('请求指标', () => {
     expect(requestLogText(e)).toBe('— | 200 成功 | — | — | — | — | — | 7 tok | credit — | —')
     // 扣了 0 积分：后端 omitempty 省掉 credit 字段，但 credit_known 为真
     expect(requestCredit({ ...e, credit_known: true })).toBe('0 credit')
+    expect(requestCreditCell(e)).toBe('—')
+    expect(requestCreditCell({ ...e, credit_known: true, credit: 0.12 })).toBe('0.12')
+    expect(requestCreditCell({ ...e, target: 'qoder:cn', credit_known: true, credit_unit: 'credits', credit: 0.5 })).toBe('0.5 credits')
+    expect(requestCreditCell({ ...e, target: 'traework:cn', credit_known: true, credit: 0.00025 })).toBe('0.00025 credits')
   })
 
   it('缓存命中率：没有样本显示 —，按 90% / 80% 分级', () => {
@@ -69,8 +73,11 @@ describe('请求指标', () => {
     expect(pick({ q: '', outcome: 'http_error' })).toEqual(['req-2'])
     expect(pick({ q: '198.51', outcome: 'http_error' })).toEqual(['req-2'])
     expect(pick({ q: 'prompt too', outcome: '' })).toEqual(['req-2'])
-    // 账号现在的显示名（换成了备注）也能搜到，记录里的旧昵称照样能搜
+    // 账号现在的显示名（换成了备注）也能搜到，记录里的旧昵称与平台 account_id 照样能搜
     expect([base, other].filter((e) => matchRequest(e, { q: '主力', outcome: '' }, e === base ? '主力(uid8)' : '')).map((e) => e.request_id)).toEqual(['req-1'])
     expect(matchRequest(base, { q: '示例', outcome: '' }, '主力(uid8)')).toBe(true)
+    const providerEvent = { ...base, account: '', account_id: 'qoder-cn-42', target: 'qoder:cn' } as RequestEvent
+    expect(requestLogText(providerEvent)).toContain('| qoder-cn-42 |')
+    expect(matchRequest(providerEvent, { q: 'qoder-cn-42', outcome: '' })).toBe(true)
   })
 })

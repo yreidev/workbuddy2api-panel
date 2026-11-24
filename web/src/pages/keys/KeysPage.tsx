@@ -15,7 +15,8 @@ import { copyText } from '../../lib/clipboard'
 import { ago, fmtCredit, fmtLocalDateTime, fmtTok, timeMs, until } from '../../lib/format'
 import { toastError } from '../../lib/hooks'
 import { KEY_STATUS, fmtLimit, keyFormFrom, keyInput, keyStatus, limitRows, maskSecret } from '../../lib/keys'
-import { qk, useGroups, useKeys } from '../../lib/queries'
+import { qk, useGroups, useHasProviderData, useKeys } from '../../lib/queries'
+import { WORKBUDDY_TARGETS, targetName } from '../../lib/targets'
 import type { ApiKey, KeyLimits, KeysResp, KeyUsage } from '../../lib/types'
 import { Empty, Loaded } from '../../components/Feedback'
 import { InfoTip, Panel } from '../../components/Panel'
@@ -102,7 +103,10 @@ function KeyRow({ k, onEdit, onShowGuide }: { k: ApiKey; onEdit: () => void; onS
   const [reveal, setReveal] = useState(false)
   const status = KEY_STATUS[keyStatus(k)]
   const groups = useGroups().data
+  const hasProvider = useHasProviderData()
   const groupName = (id: string) => groups?.find((g) => g.id === id)?.name ?? id
+  const allowedTargets = k.allowed_targets?.length ? k.allowed_targets : WORKBUDDY_TARGETS
+  const customTargets = !!k.default_target || allowedTargets.length !== WORKBUDDY_TARGETS.length || !WORKBUDDY_TARGETS.every((t) => allowedTargets.includes(t))
 
   const run = async (path: string, body: unknown, done: string) => {
     try {
@@ -201,6 +205,20 @@ function KeyRow({ k, onEdit, onShowGuide }: { k: ApiKey; onEdit: () => void; onS
               <span className="mt-1 text-xs text-muted">只用这些分组的号</span>
               <div className="flex flex-wrap gap-1">
                 {k.groups!.map((id) => <Chip key={id} size="sm" variant="secondary">{groupName(id)}</Chip>)}
+              </div>
+            </>
+          )}
+          {(hasProvider || customTargets) && (
+            <>
+              <span className="mt-1 text-xs text-muted">
+                允许的上游{k.default_target ? ` · 默认 ${targetName(k.default_target)}` : ''}
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {allowedTargets.map((t) => (
+                  <Chip key={t} size="sm" variant="secondary" color={t === k.default_target ? 'accent' : 'default'}>
+                    {targetName(t)}
+                  </Chip>
+                ))}
               </div>
             </>
           )}

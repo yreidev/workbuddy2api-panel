@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  addModelPattern, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, keyStatus, limitRows, maskSecret, validateKeyForm,
+  addModelPattern, allowedModels, bareModelIds, emptyKeyForm, keyFormFrom, keyInput, keyStatus, limitRows, maskSecret, modelPatternCandidates, validateKeyForm,
 } from './keys'
 import type { ApiKey } from './types'
 
@@ -105,10 +105,27 @@ describe('模型白名单', () => {
     expect(allowedModels([], bare, ['workbuddy:cn'])).toEqual(bare)
     expect(allowedModels(['GLM-*', 'gpt-5.5'], bare, ['workbuddy:cn'])).toEqual(['glm-5.2', 'gpt-5.5'])
   })
+  it('平台模型校验与目录候选按上游范围过滤', () => {
+    expect(addModelPattern([], 'glm-*', { providerOnly: true })).toMatch(/完整上游前缀/)
+    expect(addModelPattern([], 'cn:glm-5.2', { providerOnly: true })).toMatch(/完整上游前缀/)
+    expect(addModelPattern([], 'qoder:cn:', { providerOnly: true })).toMatch(/完整上游前缀/)
+    expect(addModelPattern([], 'qoder:global:claude-*', { providerOnly: true, allowedTargets: ['traework:cn', 'traecode:cn'] })).toMatch(/允许的上游范围/)
+    expect(addModelPattern([], 'traework:cn:glm-*', { providerOnly: true, allowedTargets: ['traework:cn', 'traecode:cn'] })).toEqual(['traework:cn:glm-*'])
+    expect(addModelPattern([], 'qoder:global:vendor:model-*', { providerOnly: true })).toEqual(['qoder:global:vendor:model-*'])
+    expect(addModelPattern([], 'glm-*', { allowedTargets: ['qoder:global'] })).toMatch(/完整上游前缀/)
+    expect(addModelPattern([], 'traecode:cn:claude-*', { allowedTargets: ['workbuddy:cn', 'qoder:global'] })).toMatch(/允许的上游范围/)
+    expect(addModelPattern([], 'glm-*', { allowedTargets: ['workbuddy:cn', 'qoder:global'] })).toEqual(['glm-*'])
+
+    const ids = ['cn:glm-5.2', 'global:gpt-5.5', 'bare-wb', 'traework:cn:doubao', 'qoder:cn:qwen3', 'qoder:global:claude-4']
+    expect(modelPatternCandidates(ids, { workbuddyOnly: true })).toEqual(['bare-wb', 'glm-5.2', 'gpt-5.5'])
+    expect(modelPatternCandidates(ids, { providerOnly: true })).toEqual(['qoder:cn:qwen3', 'qoder:global:claude-4', 'traework:cn:doubao'])
+    expect(modelPatternCandidates(ids, { providerOnly: true, allowedTargets: ['traework:cn'] })).toEqual(['traework:cn:doubao'])
+    expect(modelPatternCandidates(ids, { allowedTargets: ['workbuddy:cn', 'qoder:global'] })).toEqual(['bare-wb', 'glm-5.2', 'qoder:global:claude-4'])
+  })
 })
 
- describe('上游权限', () => {
- it('编辑旧密钥不会扩大到新平台', () => { expect(keyInput(keyFormFrom(key())).allowed_targets).toEqual(['workbuddy:cn','workbuddy:global']) })
- it('保留平台范围与默认上游并校验交集', () => { const f = keyFormFrom(key({ allowed_targets: ['qoder:global'], default_target: 'qoder:global' })); expect(keyInput(f).default_target).toBe('qoder:global'); f.allowedTargets = ['traecode:cn']; expect(validateKeyForm(f)).toMatch(/默认上游/) })
- it('允许完整新平台模型白名单', () => { expect(addModelPattern([], 'qoder:global:claude-*')).toEqual(['qoder:global:claude-*']) })
+describe('上游权限', () => {
+  it('编辑旧密钥不会扩大到新平台', () => { expect(keyInput(keyFormFrom(key())).allowed_targets).toEqual(['workbuddy:cn', 'workbuddy:global']) })
+  it('保留平台范围与默认上游并校验交集', () => { const f = keyFormFrom(key({ allowed_targets: ['qoder:global'], default_target: 'qoder:global' })); expect(keyInput(f).default_target).toBe('qoder:global'); f.allowedTargets = ['traecode:cn']; expect(validateKeyForm(f)).toMatch(/默认上游/) })
+  it('允许完整新平台模型白名单', () => { expect(addModelPattern([], 'qoder:global:claude-*')).toEqual(['qoder:global:claude-*']) })
 })

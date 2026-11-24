@@ -144,16 +144,50 @@ export function validateKeyForm(f: KeyForm): string | null {
   return null
 }
 
-/** 往模型名单（密钥的白名单、账号不接的模型）里加一项：去首尾空白，带域前缀、中间有空格的拒绝，不区分大小写去重。
+export interface ModelPatternOptions {
+  /** 仅允许非 WorkBuddy 平台完整模型名（须带 traework:cn: / traecode:cn: / qoder:cn: / qoder:global: 前缀） */
+  providerOnly?: boolean
+  /** 限定允许的上游前缀（如账号的 targets 或密钥的 allowed_targets） */
+  allowedTargets?: readonly string[]
+}
+
+/** 往模型名单（密钥的白名单、账号不接的模型）里加一项：去首尾空白，校验上游前缀与空格，不区分大小写去重。
  * 返回新列表或错误文案 */
-export function addModelPattern(list: string[], raw: string): string[] | string {
+export function addModelPattern(list: string[], raw: string, opts?: ModelPatternOptions): string[] | string {
   const p = raw.trim()
   if (!p) return list
-  if (p.includes(':') && !/^(traework:cn|traecode:cn|qoder:cn|qoder:global):.+$/.test(p)) return '按模型名填，不带 cn: / global: 前缀'
+  const { target, native } = parseModelTarget(p)
+  const isProviderTarget = !!target && !WORKBUDDY_TARGETS.includes(target)
+  const allowed = opts?.allowedTargets?.length ? opts.allowedTargets : null
+  if (opts?.providerOnly) {
+    if (!isProviderTarget || !native) return '平台模型须带完整上游前缀（如 qoder:cn:模型名）'
+    if (allowed && !allowed.includes(target)) return '上游前缀不在允许的上游范围内'
+  } else if (p.includes(':')) {
+    if (!isProviderTarget || !native) return '按模型名填，不带 cn: / global: 前缀'
+    if (allowed && !allowed.includes(target)) return '上游前缀不在允许的上游范围内'
+  } else if (allowed && !allowed.some((t) => WORKBUDDY_TARGETS.includes(t))) {
+    return '平台模型须带完整上游前缀（如 qoder:cn:模型名）'
+  }
   if (/\s/.test(p)) return '模型名里不能有空格'
   if (p.length > 128) return '一项最长 128 个字符'
   if (list.some((x) => x.toLowerCase() === p.toLowerCase())) return list
   return [...list, p]
+}
+
+/** 按上游范围筛选目录里的模型候选：WorkBuddy 去掉域前缀，其他平台保留完整上游前缀 */
+export function modelPatternCandidates(ids: readonly string[], opts?: ModelPatternOptions & { workbuddyOnly?: boolean }): string[] {
+  const allowed = opts?.allowedTargets?.length ? opts.allowedTargets : null
+  const out: string[] = []
+  for (const id of ids) {
+    const { target, native } = parseModelTarget(id)
+    const resolved = target || 'workbuddy:cn'
+    const workbuddy = WORKBUDDY_TARGETS.includes(resolved)
+    if (opts?.workbuddyOnly && !workbuddy) continue
+    if (opts?.providerOnly && workbuddy) continue
+    if (allowed && !allowed.includes(resolved)) continue
+    out.push(workbuddy ? native : id)
+  }
+  return [...new Set(out)].sort()
 }
 
 /** 目录里的模型名去掉域前缀、去重、排序（白名单的候选） */

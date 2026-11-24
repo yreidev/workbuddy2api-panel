@@ -107,7 +107,7 @@ function AddAccountBody({ onClose }: { onClose: () => void }) {
         <Tabs.Panel id="login" className="pt-4"><LoginPanel realm={target === 'workbuddy:global' ? 'global' : 'cn'} onClose={onClose} /></Tabs.Panel>
         <Tabs.Panel id="import" className="pt-4"><ImportPanel /></Tabs.Panel>
       </Tabs> : <>
-        <p className="text-sm text-muted">当前为实验接入，尚未完成真实对话与额度验收。添加后统一在「账号池」管理。</p>
+        <p className="text-sm text-muted">当前为实验接入，各通道与模型的实测进度见多平台说明文档（docs/multi-platform.md）。添加后统一在「账号池」管理。</p>
         <ProviderAccountForm key={target} target={target} />
       </>}
     </Modal.Body>

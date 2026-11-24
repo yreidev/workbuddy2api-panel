@@ -31,6 +31,12 @@ export function requestCredit(e: RequestEvent): string {
   return Number.isFinite(v) && v >= 0 ? chargeText(v) + ' ' + unit : unit + ' —'
 }
 
+/** 桌面表「积分」列的单元格文案：WorkBuddy 省掉末尾单数 credit，其他平台保留原单位（如 0.5 credits） */
+export function requestCreditCell(e: RequestEvent): string {
+  if (!e.credit_known) return '—'
+  return requestCredit(e).replace(/ credit$/, '')
+}
+
 /** 缓存命中率 = 命中 / (命中 + 未命中)，百分数；上游没返回这一项时为 null */
 export function cacheRate(hit?: number | null, miss?: number | null): number | null {
   const h = Number(hit || 0), total = h + Number(miss || 0)
@@ -57,7 +63,7 @@ export function requestLogText(e: RequestEvent): string {
     String(e.status || '—') + ' ' + (OUTCOME_LABEL[e.outcome] || e.outcome || '—'),
     e.error ? '原因 ' + e.error : '',
     e.model || '—',
-    e.account || '—',
+    e.account || e.account_id || '—',
     e.proxy ? '代理 ' + e.proxy : '',
     e.api_key ? '密钥 ' + e.api_key : '',
     e.client_ip || '—',
@@ -85,6 +91,6 @@ export function matchRequest(e: RequestEvent, f: RequestFilter, account = ''): b
   if (f.outcome && e.outcome !== f.outcome) return false
   const kws = f.q.toLowerCase().split(/\s+/).filter(Boolean)
   if (!kws.length) return true
-  const text = [e.client_ip, e.user_agent, e.model, e.account, account, e.proxy, e.api_key, e.error, e.request_id].filter(Boolean).join(' ').toLowerCase()
+  const text = [e.client_ip, e.user_agent, e.model, e.account, e.account_id, account, e.proxy, e.api_key, e.error, e.request_id].filter(Boolean).join(' ').toLowerCase()
   return kws.every((kw) => text.includes(kw))
 }

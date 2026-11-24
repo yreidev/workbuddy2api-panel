@@ -4,12 +4,16 @@
 
 import { expect, it } from 'vitest'
 import { chargeText, creditUnitName, providerChargeText } from './billing'
-import { requestCredit } from './requests'
+import { requestCredit, requestCreditCell } from './requests'
 import type { ProviderUsage, RequestEvent } from './types'
 
 it('单次费用区分未知、真实零和小额扣费，保留单位及精度', () => {
   const event = { target: 'qoder:cn', credit_known: true, credit_unit: 'credits', credit: 0.000012345 } as RequestEvent
   expect(requestCredit(event)).toBe('0.000012345 credits')
+  expect(requestCreditCell(event)).toBe('0.000012345 credits')
+  expect(requestCreditCell({ target: 'qoder:cn', credit_known: true, credit_unit: 'credits', credit: 0.5 } as RequestEvent)).toBe('0.5 credits')
+  expect(requestCreditCell({ credit_known: true, credit: 1.5 } as RequestEvent)).toBe('1.5')
+  expect(requestCreditCell({ ...event, credit_known: false })).toBe('—')
   expect(requestCredit({ ...event, credit_known: false })).toBe('credit —')
   expect(requestCredit({ ...event, credit: undefined })).toBe('0 credits')
   expect(requestCredit({ ...event, credit: Number.NaN })).toBe('credits —')

@@ -215,7 +215,7 @@ export function ModelsPage() {
         actions={<BusyButton size="sm" variant="secondary" busy={models.isFetching} onPress={refresh}>重新获取</BusyButton>}
         contentClassName="flex flex-col gap-3"
       >
-        {!!models.data?.warnings?.length && <div role="status" className="rounded-xl bg-warning/10 p-3 text-sm text-warning">部分目录获取失败，其余模型仍可使用：{models.data.warnings.map((warning) => <p key={warning} className="break-all">{warning}</p>)}</div>}
+        {!!models.data?.warnings?.length && <div role="status" className="rounded-xl bg-warning/10 p-3 text-sm text-warning">部分目录获取失败，其余模型仍可使用：{models.data.warnings.map((warning, i) => <p key={`${i}:${warning}`} className="break-all">{warning}</p>)}</div>}
         <div className="flex flex-wrap items-center gap-3">
           <SearchField aria-label="搜索模型" value={filter.q} onChange={(v) => set('q', v)} className="w-full sm:w-72">
             <SearchField.Group>
