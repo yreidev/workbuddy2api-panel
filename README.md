@@ -106,7 +106,7 @@ GitHub 上叫 workbuddy2api-panel 的仓库有好几个。本仓库是在原版 
 
 ## 快速开始
 
-**1. 启动**（Docker，Linux x64）
+**1. 启动**（Docker，Linux x64 / ARM64）
 
 ```bash
 mkdir -p workbuddy2api/auths workbuddy2api/data && cd workbuddy2api
@@ -124,7 +124,7 @@ docker run -d --name workbuddy2api --restart unless-stopped \
 **3. 接入客户端**：Base URL 填 `http://localhost:7863/v1`，API Key 填上面的密钥，见下一节。
 
 > [!TIP]
-> 不用 Docker？到[最新构建](https://github.com/yreidev/workbuddy2api-panel/releases/tag/latest)下载对应平台的包（Windows / Linux / macOS），解压后直接运行 `wb2api`。Docker Compose、源码构建、升级与备份见[部署与运维](docs/deployment.md)。
+> 不用 Docker？Linux 服务器可用[一键安装脚本（systemd）](docs/deployment.md#linux-一键安装systemd)，或到[最新构建](https://github.com/yreidev/workbuddy2api-panel/releases/tag/latest)下载对应平台的包（Windows / Linux / macOS），解压后直接运行 `wb2api`。Docker Compose、源码构建、升级与备份见[部署与运维](docs/deployment.md)。
 
 ## 接入客户端
 
@@ -234,7 +234,7 @@ flowchart LR
 
 | 文档 | 内容 |
 |---|---|
-| [部署与运维](docs/deployment.md) | Docker、Compose、二进制、源码构建；添加账号、升级、备份、优雅停机、工具脚本 |
+| [部署与运维](docs/deployment.md) | Docker（x64 / ARM64）、Compose、Linux 一键安装（systemd）、二进制、源码构建；添加账号、升级、备份、优雅停机、工具脚本 |
 | [配置](docs/configuration.md) | 全部配置项与默认值、上游超时、环境变量、热生效规则 |
 | [网关与选号](docs/gateway.md) | 选号策略、跨域负载均衡、会话粘性、错误处置、提示词与内容审核、工具调用还原 |
 | [按号代理与代理池](docs/proxy.md) | 代理池分组、批量导入、分配与上限、代理不通与到期、出口 IP、只许走号的代理、风控波按出口分开算 |

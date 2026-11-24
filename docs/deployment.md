@@ -1,10 +1,11 @@
 # 部署与运维
 
-本篇覆盖四种部署方式、添加账号、升级与备份，以及随仓库附带的工具脚本。只想先跑起来的话，看 README 的[快速开始](../README.md#快速开始)就够了。
+本篇覆盖五种部署方式、添加账号、升级与备份，以及随仓库附带的工具脚本。只想先跑起来的话，看 README 的[快速开始](../README.md#快速开始)就够了。
 
 - [部署方式一览](#部署方式一览)
 - [Docker 镜像（推荐）](#docker-镜像推荐)
 - [Docker Compose](#docker-compose)
+- [Linux 一键安装（systemd）](#linux-一键安装systemd)
 - [单文件二进制](#单文件二进制)
 - [从源码构建](#从源码构建)
 - [添加账号](#添加账号)
@@ -16,8 +17,9 @@
 
 | 方式 | 适合 | 需要 |
 |---|---|---|
-| Docker 镜像 | 服务器、NAS，免克隆免构建 | Docker；镜像只有 `linux/amd64` |
+| Docker 镜像 | 服务器、NAS，免克隆免构建 | Docker；支持 `linux/amd64`、`linux/arm64` |
 | Docker Compose | 想改源码再部署、或习惯 compose 管理 | Docker + Compose，需要克隆仓库 |
+| Linux 一键安装（systemd） | Linux 服务器常驻运行、不想装 Docker | `curl`、`tar`、`sha256sum`、`systemd`（`linux/amd64` / `linux/arm64`） |
 | 单文件二进制 | Windows / macOS / Linux，不想装 Docker | 无；面板前端已打进二进制 |
 | 从源码构建 | 开发调试 | Go 1.26+、Node.js 22+ |
 
@@ -46,6 +48,8 @@ docker run -d --name workbuddy2api --restart unless-stopped \
 
 镜像标签：`latest`（同 `main`）跟随 `main` 分支最近的正式构建；每个正式版本有 `x.y.z`、`x.y`、`x` 三个标签（如 `1.0.0`、`1.0`、`1`），想固定版本或只跟随某个主版本就用它们；正式构建另有一个 `sha-xxxxxxx` 标签。预发布镜像只使用完整候选版本号，例如 `1.14.0-rc.1`。各版本的变更见[更新日志](CHANGELOG.md)。
 
+镜像同时发布 `linux/amd64` 与 `linux/arm64` 两种架构。WorkBuddy、Trae 以及导入设备身份的 Qoder 账号均为纯静态 Go 程序运行；当前多架构 `Dockerfile` 已实测通过 `linux/amd64` 完整构建、服务启动 `/readyz` 及容器内直连／`proxychains4`（国内／国际）Qoder 自动 UMID，并已验证 `linux/arm64` Go 交叉编译阶段（`EM_AARCH64` + 双架构缓存共享）及 Alpine 3.20 `aarch64` 运行依赖包与 `gcompat` ABI 符号对称性。Qoder **自动 UMID 初始化**在 Alpine 3.20 `linux/arm64` 实际运行及原生 ARM64 物理机上**尚未实测（未确认）**，若遇不兼容可改为导入官方设备身份，详见[Qoder 设备身份](qoder-device-identity.md)。
+
 ## Docker Compose
 
 ```bash
@@ -67,6 +71,44 @@ docker compose logs -f      # 跟踪日志
 docker compose restart      # 重启
 docker compose down         # 停止并移除容器，./auths 与 ./data 不受影响
 ```
+
+## Linux 一键安装（systemd）
+
+适合在 Linux 服务器（`linux/amd64`、`linux/arm64`）上直接运行预编译二进制并托管给 `systemd`，免装 Docker。脚本会自动识别架构、从 GitHub Releases 下载包并强制校验 `checksums.txt`（SHA-256），保留 `LICENSE`/`NOTICE`，创建专用系统用户与 `auths/`、`data/`、`data/qoder-umid/sdk`（`0700`）目录，并在安装目录下建立 `.config -> data/qoder-umid/sdk` 软链以持久化 Qoder UMID SDK 状态。
+
+```bash
+# 安装最新正式构建并配置 systemd 服务（默认装到 /opt/workbuddy2api）
+curl -fsSL https://raw.githubusercontent.com/yreidev/workbuddy2api-panel/main/scripts/install-linux.sh | sudo bash
+
+# 安装指定版本、监听本机端口并通过代理下载与出站
+curl -fsSL https://raw.githubusercontent.com/yreidev/workbuddy2api-panel/main/scripts/install-linux.sh \
+  | sudo bash -s -- --version 1.14.0 --listen 127.0.0.1:7863 --proxy http://127.0.0.1:7890
+
+# 仅预览计划与 systemd 单元内容（不联网、不改文件）
+bash scripts/install-linux.sh --dry-run
+```
+
+常用参数：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--version <ver>` | `latest` | 指定版本（如 `1.14.0`、`v1.14.0`、`1.14.0-rc.1`）；`latest` 对应 Releases 滚动构建 |
+| `--dir <path>` | `/opt/workbuddy2api` | 安装目录（绝对路径；若位于 `/home` 或 `/root` 下会自动把 systemd `ProtectHome` 设为 `false`） |
+| `--user <name>` | `wb2api` | systemd 运行用户，不存在时自动建系统用户 |
+| `--service <name>` | `workbuddy2api` | systemd 服务名 |
+| `--listen <addr>` | — | 写入 systemd 环境变量 `WB2A_LISTEN`（不传则走 `config.json` 默认 `:7863`） |
+| `--proxy <url>` | — | 下载代理，同时写入 systemd 的 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` |
+| `--no-systemd` | 关 | 仅下载校验并解包布置目录，不写 systemd 单元也不启动服务 |
+| `--uninstall` | 关 | 停止并移除服务与主程序，**默认保留 `auths/` 与 `data/`** |
+| `--purge` | 关 | 必须与 `--uninstall` 联用，连同 `auths/` 与 `data/` 一并删除 |
+| `--dry-run` | 关 | 只打印安装/卸载计划和预计生成的单元文件，不做任何改动 |
+
+几点说明：
+
+- **查看生成的管理员密钥**：脚本不会把 `api_key` 明文打印到终端或日志，首次启动后执行 `sudo grep api_key /opt/workbuddy2api/data/config.json` 查看。
+- **重复运行即安全升级**：再次执行脚本会先停服替换主程序，不触碰 `auths/` 与 `data/`；主程序启动时如检测到比旧版面板一键更新（`data/bin/`）更新的版本，会自动以主程序为准并清理旧缓存。
+- **systemd 单元与一键更新 / Qoder UMID 兼容**：仓库同时提供参考模板 [`deploy/systemd/workbuddy2api.service`](../deploy/systemd/workbuddy2api.service)，不启用 `MemoryDenyWriteExecute` 也不对 `data/` 设 `NoExecPaths`，以兼容面板一键更新原地 `execve` 与 Qoder UMID helper 执行。
+- **Qoder 自动 UMID 运行依赖**：独立二进制需宿主机具备 glibc 与 `libstdc++`（经代理初始化/刷新还需 `proxychains4`）；原生 ARM64 硬件尚未实测（未确认），见[Qoder 设备身份](qoder-device-identity.md)。
 
 ## 单文件二进制
 

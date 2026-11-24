@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 yreidev 与贡献者（见 NOTICE）
+# SPDX-License-Identifier: AGPL-3.0-only
+# 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
+#
+# WorkBuddy2API Panel systemd 服务单元参考模板。
+# 一键安装脚本 scripts/install-linux.sh 会按传入参数生成同类配置到 /etc/systemd/system/。
+
+[Unit]
+Description=WorkBuddy2API Panel 网关服务
+Documentation=https://github.com/yreidev/workbuddy2api-panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wb2api
+Group=wb2api
+WorkingDirectory=/opt/workbuddy2api
+# 官方 Qoder UMID SDK 读取 $HOME/.config/.locale_cfg，一键脚本会在安装目录下建立 .config -> data/qoder-umid/sdk 软链
+Environment=HOME=/opt/workbuddy2api
+Environment=TZ=Asia/Shanghai
+# 如需自定义监听地址或全局出站代理，建议使用 `systemctl edit workbuddy2api` 添加 drop-in：
+# Environment=WB2A_LISTEN=127.0.0.1:7863
+# Environment=HTTPS_PROXY=http://127.0.0.1:7890
+ExecStart=/opt/workbuddy2api/wb2api -config /opt/workbuddy2api/data/config.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+# 兼顾优雅停机与回收可能存在的子进程
+KillMode=mixed
+LimitNOFILE=65535
+
+# 基础安全加固：兼顾面板一键更新（原地 execve 执行 data/bin/ 下新版，不换 PID）与 Qoder UMID helper（执行 data/qoder-umid/.bin/ 下官方组件），
+# 因此不设 MemoryDenyWriteExecute，也不对 data/ 设 NoExecPaths。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# 若安装目录位于 /home 或 /root 下，请将本项改为 false
+ProtectHome=true
+ReadWritePaths=/opt/workbuddy2api/auths /opt/workbuddy2api/data
+
+[Install]
+WantedBy=multi-user.target

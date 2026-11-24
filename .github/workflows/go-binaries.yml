@@ -199,7 +199,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
+        run: go build -trimpath -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
 
       # 版本断言：二进制内嵌的更新日志必须有这一版（防交叉编译矩阵里编错树）。版本号本身太短，
       # 直接 grep 容易误中；更新日志最新一版 == appVersion 由 go test 保证。

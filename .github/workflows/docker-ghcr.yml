@@ -1,12 +1,12 @@
 name: docker-ghcr
 
-# 镜像（只构建 linux/amd64）构建并发布到 ghcr.io。不单独触发，由 go-binaries 在 gofmt / go vet /
+# 镜像（linux/amd64、linux/arm64 双架构）构建并发布到 ghcr.io。不单独触发，由 go-binaries 在 gofmt / go vet /
 # golangci-lint / go test 都通过后调用，检查没过的提交不出镜像；触发条件与并发组都跟随 go-binaries：
 #   - push 到 main → 按渠道构建发布
 #   - PR / 手动运行 → 仅构建验证
 # 正式版在默认分支更新 latest、main 和 sha 标签，升版本时再打完整版本、主次版本和主版本标签。
 # 预发布只推完整的候选版标签。
-# 只构建 amd64：部署机都是 x64；arm64 要在 QEMU 里模拟编译，曾占整次构建的大部分时间（约 5 分钟）。
+# 双架构构建：前端与 Go 编译都在构建机原生平台（$BUILDPLATFORM）交叉编译，仅 Alpine 运行层借助轻量 QEMU（arm64）。
 # 这里不设并发组：被调用的工作流里 github.workflow 是调用方的名字，和调用方同组会互相卡住。
 on:
   workflow_call:
@@ -30,6 +30,11 @@ jobs:
       - name: 核对版本标签与发布渠道
         id: policy
         run: bash .github/scripts/release-policy.sh "${{ inputs.version }}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -60,7 +65,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: ${{ steps.policy.outputs.rolling == 'true' || steps.policy.outputs.versioned == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
