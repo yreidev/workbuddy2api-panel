@@ -36,7 +36,7 @@ func TestOfficialClientIdentity(t *testing.T) {
 		t.Fatal("Work 网页身份与官方 Chrome 156 样本不一致")
 	}
 	code := traeHeaders(c, false)
-	if code.Get("User-Agent") != "TraeClient/TTNet Cronet/TTNetVersion:a61b3479 2026-08-04 QuicVersion:40cc763c 2025-07-01" || code.Get("Accept-Encoding") != "gzip, deflate" || code.Get("X-Ide-Version") != "3.4.20" || code.Get("X-Ide-Version-Code") != "20260212" || code.Get("X-Device-Type") != "linux" || code.Get("X-Machine-Id") != c.MachineID || code.Get("X-Device-Id") != c.DeviceID {
+	if code.Get("User-Agent") != "TraeClient/TTNet Cronet/TTNetVersion:a61b3479 2026-08-04 QuicVersion:40cc763c 2025-07-01" || code.Get("Accept-Encoding") != "gzip, deflate" || code.Get("X-Ide-Version") != "3.4.24" || code.Get("X-Ide-Version-Code") != "20260212" || code.Get("X-Device-Type") != "linux" || code.Get("X-Machine-Id") != c.MachineID || code.Get("X-Device-Id") != c.DeviceID {
 		t.Fatal("Code 的 TTNet、版本与持久化设备身份不一致")
 	}
 	openapi := qoderAPIHeaders("fixture-access")

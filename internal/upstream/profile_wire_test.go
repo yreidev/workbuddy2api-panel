@@ -143,7 +143,7 @@ func TestNativeHTTP1HeaderWire(t *testing.T) {
 				r.Header.Set("Connection", "keep-alive")
 			}
 			if profile == ProfileTraeCode {
-				r.Header = http.Header{"Accept": {"application/json"}, "Authorization": {"Cloud-IDE-JWT fixture"}, "Content-Type": {"application/json"}, "X-Ide-Version": {"3.4.20"}, "X-Machine-Id": {"fixture"}, "User-Agent": {"TraeClient/TTNet"}, "Accept-Encoding": {"gzip, deflate"}}
+				r.Header = http.Header{"Accept": {"application/json"}, "Authorization": {"Cloud-IDE-JWT fixture"}, "Content-Type": {"application/json"}, "X-Ide-Version": {"3.4.24"}, "X-Machine-Id": {"fixture"}, "User-Agent": {"TraeClient/TTNet"}, "Accept-Encoding": {"gzip, deflate"}}
 			}
 			resp, requestErr := tr.RoundTrip(r)
 			if wireErr := <-done; wireErr != nil {
@@ -255,7 +255,7 @@ func TestTTNetRequestHeadersAndDataFrames(t *testing.T) {
 	defer tr.CloseIdleConnections()
 	for range 2 {
 		r, _ := http.NewRequest("POST", "https://"+ln.Addr().(*net.TCPAddr).String()+"/api/ide/v1/get_detail_param", strings.NewReader("{}"))
-		r.Header = http.Header{"Accept": {"application/json"}, "Authorization": {"Cloud-IDE-JWT fixture"}, "Content-Type": {"application/json"}, "X-Ide-Version": {"3.4.20"}, "X-Ide-Version-Code": {"20260212"}, "X-Machine-Id": {"fixture"}, "User-Agent": {"TraeClient/TTNet"}, "Accept-Encoding": {"gzip, deflate"}}
+		r.Header = http.Header{"Accept": {"application/json"}, "Authorization": {"Cloud-IDE-JWT fixture"}, "Content-Type": {"application/json"}, "X-Ide-Version": {"3.4.24"}, "X-Ide-Version-Code": {"20260212"}, "X-Machine-Id": {"fixture"}, "User-Agent": {"TraeClient/TTNet"}, "Accept-Encoding": {"gzip, deflate"}}
 		resp, err := tr.RoundTrip(r)
 		if err != nil {
 			select {

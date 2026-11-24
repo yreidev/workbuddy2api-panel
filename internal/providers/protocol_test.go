@@ -219,10 +219,10 @@ func TestTraeDeviceRefreshProof(t *testing.T) {
 			t.Error("设备刷新使用了旧接口")
 		}
 		device := object(body["DeviceInfo"])
-		if device["DeviceID"] != "d" || device["MachineID"] != "m" || device["ClientVersion"] != "3.4.20" || device["OSInfo"] != "linux" || device["OSVersion"] != "Linux" {
+		if device["DeviceID"] != "d" || device["MachineID"] != "m" || device["ClientVersion"] != "3.4.24" || device["OSInfo"] != "linux" || device["OSVersion"] != "Linux" {
 			t.Error("官方 Linux 设备描述与持久化身份不一致")
 		}
-		if body["IDEVersion"] != "3.4.20" || !strings.Contains(r.UserAgent(), "Chrome/142.0.7444.235 Electron/39.2.7") {
+		if body["IDEVersion"] != "3.4.24" || !strings.Contains(r.UserAgent(), "Chrome/142.0.7444.235 Electron/39.2.7") {
 			t.Error("授权运行时版本未对齐")
 		}
 		block, _ := pem.Decode([]byte(text(device["DevicePublicKey"])))

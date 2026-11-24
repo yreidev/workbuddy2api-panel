@@ -20,9 +20,9 @@ import (
 	"github.com/yreidev/workbuddy2api-panel/internal/upstream"
 )
 
-// 官方 Linux 稳定包 3.4.20（2.3.103559）的产品信息与 AI 扩展配置。
-const traeVersion = "3.4.20"
-const traePluginVersion = "2.3.103559"
+// 官方 Linux 稳定包 3.4.24（2.3.106768）的产品信息与 AI 扩展配置。
+const traeVersion = "3.4.24"
+const traePluginVersion = "2.3.106768"
 const traeAPIVersionCode = "20260212"
 const traeWebUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
 
