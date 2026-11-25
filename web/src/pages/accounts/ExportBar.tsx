@@ -3,7 +3,7 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 // 凭证导出：账号表多选后的操作（已选 N 个 / 导出凭证 / 绑定代理 / 批量操作 / 取消选择）、勾选框，以及详情抽屉里的单个导出按钮。
-// 宽屏操作放在搜索框旁；窄屏卡片列表很长，操作改放底部吸附条（同配置页的保存条），滚到哪都看得到。
+// 多选后的批量操作统一由底部悬浮操作栏（FloatingActionBar）承载，滚到任意位置都可直接触发。
 import type { ReactNode } from 'react'
 import { Button, Checkbox } from '@heroui/react'
 import { BatchMenu } from './BatchMenu'

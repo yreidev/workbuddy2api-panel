@@ -5,7 +5,9 @@
 // 用量：所选时间范围内的请求数与 token 用量（卡片、时序图、按账号 / 模型 / 域 / 密钥明细同一口径）。
 // 选了密钥时整页（含积分扣除）只算这个密钥的请求。
 import { useMemo, useState, type ReactNode } from 'react'
+import { ChartColumn, Pulse, ShieldExclamation, Thunderbolt } from '@gravity-ui/icons'
 import { Chip, Label, ListBox, Select, Table, ToggleButton, ToggleButtonGroup, type SortDescriptor } from '@heroui/react'
+import { useReducedMotion } from 'motion/react'
 import { Bar, BarChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { fmtMs, fmtRate, fmtTok } from '../../lib/format'
 import type { TipProps } from '../../lib/chart'
@@ -15,6 +17,7 @@ import { TARGETS, targetName } from '../../lib/targets'
 import { initialRange, rangeLabel } from '../../lib/timerange'
 import type { KeyedUsage, UsagePoint, UsageResp } from '../../lib/types'
 import { chartPoints, chartStats, dayBoundaries, matchesUsageFilter, minGap, nearestTicks, share, tickLabel, usageTokenText, type ChartPoint } from '../../lib/usage'
+import { ChartTooltipCard, ChartTooltipRow } from '../../components/ChartTooltip'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { MixBar, Panel, Stat } from '../../components/Panel'
 import { TimeRangePicker } from '../../components/TimeRangePicker'
@@ -115,17 +118,18 @@ function Totals({ u }: { u: UsageResp }) {
   const pp = share(t.prompt_tokens, t.total_tokens), cp = share(t.completion_tokens, t.total_tokens)
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-      <Stat label="请求数" value={fmtTok(reqs)} sub={errs ? `其中失败 ${errs} 次` : '全部成功'} />
-      <Stat label="总 token" value={usageTokenText(t, t.total_tokens)} sub={`prompt ${pct(pp)} · completion ${pct(cp)}`}>
+      <Stat label="请求数" value={fmtTok(reqs)} icon={<Pulse className="size-4" />} sub={errs ? `其中失败 ${errs} 次` : '全部成功'} />
+      <Stat label="总 token" value={usageTokenText(t, t.total_tokens)} icon={<ChartColumn className="size-4" />} sub={`prompt ${pct(pp)} · completion ${pct(cp)}`}>
         <MixBar prompt={t.prompt_tokens} completion={t.completion_tokens} total={t.total_tokens} className="mt-1" />
       </Stat>
       <Stat label="prompt" value={usageTokenText(t, t.prompt_tokens)} sub={'占比 ' + pct(pp)} />
       <Stat label="completion" value={usageTokenText(t, t.completion_tokens)} sub={'占比 ' + pct(cp)} />
       <Stat
         label="失败尝试" value={errs} tone={errs ? 'warning' : undefined}
+        icon={errs ? <ShieldExclamation className="size-4" /> : undefined}
         sub={reqs ? '成功率 ' + pct((reqs - errs) / reqs * 100) : '—'}
       />
-      <Stat label="平均延迟" value={fmtMs(t.avg_latency_ms)} sub={t.avg_tokens_per_second ? '吐字 ' + fmtRate(t.avg_tokens_per_second) : '无速率样本'} />
+      <Stat label="平均延迟" value={fmtMs(t.avg_latency_ms)} icon={<Thunderbolt className="size-4" />} sub={t.avg_tokens_per_second ? '吐字 ' + fmtRate(t.avg_tokens_per_second) : '无速率样本'} />
     </div>
   )
 }
@@ -134,16 +138,18 @@ function ChartTip({ active, payload }: TipProps) {
   const p = payload?.[0]?.payload as ChartPoint | undefined
   if (!active || !p) return null
   return (
-    <div className="rounded-xl border border-separator bg-overlay px-3 py-2 text-xs shadow-lg">
-      <div className="mb-1 font-medium">{p.raw.replace('T', ' ') + (p.scope === 'hour' ? ':00' : '')}</div>
-      <div className="flex items-center gap-2"><span className="size-2 rounded-sm bg-(--viz-1)" />prompt <b className="ml-auto pl-3 tabular-nums">{fmtTok(p.prompt)}</b></div>
-      <div className="flex items-center gap-2"><span className="size-2 rounded-sm bg-(--viz-2)" />completion <b className="ml-auto pl-3 tabular-nums">{fmtTok(p.completion)}</b></div>
-      <div className="mt-1 text-muted">{p.requests} 次请求</div>
-    </div>
+    <ChartTooltipCard
+      title={p.raw.replace('T', ' ') + (p.scope === 'hour' ? ':00' : '')}
+      footer={`${p.requests} 次请求`}
+    >
+      <ChartTooltipRow color="var(--viz-1)" label="prompt" value={fmtTok(p.prompt)} />
+      <ChartTooltipRow color="var(--viz-2)" label="completion" value={fmtTok(p.completion)} />
+    </ChartTooltipCard>
   )
 }
 
 function UsageChart({ series }: { series: UsagePoint[] }) {
+  const reducedMotion = useReducedMotion()
   const pts = useMemo(() => chartPoints(series), [series])
   const byT = useMemo(() => new Map(pts.map((p) => [p.t, p])), [pts])
   const stats = chartStats(pts)
@@ -173,8 +179,8 @@ function UsageChart({ series }: { series: UsagePoint[] }) {
           <YAxis tickFormatter={(v: number) => fmtTok(v)} width={48} tick={tickStyle} tickLine={false} axisLine={false} />
           <Tooltip content={ChartTip} cursor={{ fill: 'var(--surface-secondary)' }} />
           {dayBoundaries(pts).map((x) => <ReferenceLine key={x} x={x - pad} stroke="var(--separator)" />)}
-          <Bar dataKey="prompt" stackId="tok" fill="var(--viz-1)" stroke="var(--surface)" strokeWidth={seam} maxBarSize={30} isAnimationActive={false} />
-          <Bar dataKey="completion" stackId="tok" fill="var(--viz-2)" stroke="var(--surface)" strokeWidth={seam} maxBarSize={30} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+          <Bar dataKey="prompt" stackId="tok" fill="var(--viz-1)" stroke="var(--surface)" strokeWidth={seam} maxBarSize={30} isAnimationActive={!reducedMotion} animationDuration={420} />
+          <Bar dataKey="completion" stackId="tok" fill="var(--viz-2)" stroke="var(--surface)" strokeWidth={seam} maxBarSize={30} radius={[4, 4, 0, 0]} isAnimationActive={!reducedMotion} animationDuration={420} />
           {/* 均值参考线：一眼看出哪根异常高；只有一个点（均值 = 峰值）时不画 */}
           {pts.length > 1 && (
             <ReferenceLine

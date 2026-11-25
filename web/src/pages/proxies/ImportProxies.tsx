@@ -5,7 +5,7 @@
 // 批量导入代理：粘贴或上传 txt，一行一个（认常见写法，行尾可以跟名字），选导入到哪个池、没写协议的行按
 // http 还是 socks5、这批的到期时间；先预览（认不出的行、和已有的重复的行标出来、不导入），再确认导入。
 // 导入后网关马上测连通和出口 IP，测不通的照样导入、标「不可用」，代理表上可以一键删掉。
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Alert, Button, Description, Label, ListBox, Modal, Radio, RadioGroup, Select, TextArea, TextField, toast } from '@heroui/react'
 import { post } from '../../lib/api'
 import { toastError } from '../../lib/hooks'
@@ -13,6 +13,7 @@ import { defaultForLabels, lineCounts, lineResult } from '../../lib/proxies'
 import type { ProxyImportResp, ProxyLine, ProxyPool } from '../../lib/types'
 import { ExpiryField } from '../../components/ExpiryField'
 import { BusyButton } from '../../components/Feedback'
+import { FileDropZone } from '../../components/FileDropZone'
 
 const PLACEHOLDER = `一行一个，行尾可以空一格写名字，# 开头的行跳过。认这几种写法：
 socks5://用户名:密码@203.0.113.10:1080 香港1
@@ -39,7 +40,6 @@ export function ImportProxies({ open, pools, onClose, onDone }: { open: boolean;
 }
 
 function ImportBody({ pools, onClose, onDone }: { pools: ProxyPool[]; onClose: () => void; onDone: () => void }) {
-  const file = useRef<HTMLInputElement>(null)
   const [text, setText] = useState('')
   const [scheme, setScheme] = useState('http')
   const [pool, setPool] = useState(pools[0]?.id ?? '')
@@ -53,15 +53,12 @@ function ImportBody({ pools, onClose, onDone }: { pools: ProxyPool[]; onClose: (
     setText(t)
     setLines(null)
   }
-  const onFile = async (f: File | undefined) => {
-    if (!f) return
+  const onFile = async (f: File) => {
     try {
       const t = await f.text()
       edit(text.trim() ? text.replace(/\n*$/, '\n') + t : t)
     } catch (e) {
       toastError(e, '读不了文件：')
-    } finally {
-      if (file.current) file.current.value = ''
     }
   }
   const preview = async () => {
@@ -98,10 +95,14 @@ function ImportBody({ pools, onClose, onDone }: { pools: ProxyPool[]; onClose: (
           <TextArea rows={7} placeholder={PLACEHOLDER} className="font-mono text-xs" spellCheck={false} />
           <Description>也可以上传 txt 文件（追加到上面的内容后面）。网关导出的文件能原样导回来。</Description>
         </TextField>
-        <input ref={file} type="file" accept=".txt,text/plain" hidden onChange={(e) => void onFile(e.target.files?.[0])} />
-        <div className="-mt-2">
-          <Button size="sm" variant="secondary" onPress={() => file.current?.click()}>上传 txt</Button>
-        </div>
+        <FileDropZone
+          accept=".txt,text/plain"
+          title="拖拽 txt 代理文件到这里"
+          hint="读取后追加到上方文本框，网关导出文件可原样导回"
+          buttonLabel="选择 txt 文件"
+          busy={busy}
+          onFile={onFile}
+        />
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Select value={pool} onChange={(k) => k != null && setPool(String(k))}>

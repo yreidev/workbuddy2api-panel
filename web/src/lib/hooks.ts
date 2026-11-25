@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { toast } from '@heroui/react'
 import { errorMessage } from './api'
@@ -18,14 +18,17 @@ export function useStoredChoice<T extends string>(key: string, choices: readonly
       return fallback
     }
   })
-  const set = (v: T) => {
-    setValue(v)
-    try {
-      localStorage.setItem(key, v)
-    } catch {
-      // 无痕模式等拿不到存储：只在本次会话生效
-    }
-  }
+  const set = useCallback((next: T | ((prev: T) => T)) => {
+    setValue((prev) => {
+      const v = typeof next === 'function' ? next(prev) : next
+      try {
+        localStorage.setItem(key, v)
+      } catch {
+        // 无痕模式等拿不到存储：只在本次会话生效
+      }
+      return v
+    })
+  }, [key])
   return [value, set] as const
 }
 

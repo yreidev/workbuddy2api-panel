@@ -31,19 +31,31 @@ export function Panel({ title, desc, actions, children, className = '', contentC
   )
 }
 
-/** 统计数字。sub 放「占比 / 成功率」这类解释性的小字，children 放卡片内的构成条 */
-export function Stat({ label, value, tone, sub, children, className = '' }: {
+/** 统计数字。icon 放右上角语义图标徽章，sub 放「占比 / 成功率」这类解释性的小字，children 放卡片内的构成条 */
+export function Stat({ label, value, tone, icon, sub, children, className = '' }: {
   label: ReactNode
   value: ReactNode
   tone?: 'success' | 'warning' | 'danger'
+  icon?: ReactNode
   sub?: ReactNode
   children?: ReactNode
   className?: string
 }) {
   const color = tone === 'success' ? 'text-success' : tone === 'warning' ? 'text-warning' : tone === 'danger' ? 'text-danger' : ''
+  const iconTone = tone === 'success' ? 'bg-success/12 text-success'
+    : tone === 'warning' ? 'bg-warning/12 text-warning'
+    : tone === 'danger' ? 'bg-danger/12 text-danger'
+    : 'bg-default text-muted'
   return (
-    <Card className={`gap-1 p-4 ${className}`}>
-      <span className={`text-2xl font-semibold tabular-nums ${color}`}>{value}</span>
+    <Card className={`gap-1 p-4 transition-[border-color,box-shadow] duration-200 hover:shadow-sm ${className}`}>
+      <div className="flex items-start justify-between gap-2">
+        <span className={`text-2xl font-semibold tabular-nums ${color}`}>{value}</span>
+        {icon && (
+          <span className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${iconTone}`} aria-hidden="true">
+            {icon}
+          </span>
+        )}
+      </div>
       <span className="text-xs text-muted">{label}</span>
       {children}
       {sub && <span className="text-xs text-muted tabular-nums">{sub}</span>}

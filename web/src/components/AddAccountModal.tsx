@@ -4,7 +4,7 @@
 
 // 添加账号：先选产品与地区，再使用对应的授权或导入表单。
 // 建过代理池时两种方式都能选池：登录请求走池里分到的代理，新号绑在它上面；导入的号放进选的池（规则见 docs/proxy.md）。
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowUpRightFromSquare, Copy } from '@gravity-ui/icons'
 import {
   Alert, Button, Description, Label, ListBox, Modal, Select, Spinner, Tabs, toast, Typography,
@@ -18,6 +18,7 @@ import { qk, useProxies } from '../lib/queries'
 import { TARGETS } from '../lib/targets'
 import type { ImportResp, LoginPoll, LoginStart } from '../lib/types'
 import { BusyButton } from './Feedback'
+import { FileDropZone } from './FileDropZone'
 import { ProviderAccountForm } from './ProviderAccountForm'
 import { TargetSelect } from './TargetSelect'
 
@@ -218,14 +219,12 @@ function LoginPanel({ realm, onClose }: { realm: string; onClose: () => void }) 
 
 function ImportPanel() {
   const qc = useQueryClient()
-  const input = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [pool, setPool] = useState(DEFAULT_POOL)
   const [result, setResult] = useState<ImportResp | null>(null)
   const [error, setError] = useState('')
 
-  const onFile = async (file: File | undefined) => {
-    if (!file) return
+  const onFile = async (file: File) => {
     setBusy(true)
     setResult(null)
     setError('')
@@ -240,7 +239,6 @@ function ImportPanel() {
       setError('导入失败：' + errorMessage(e))
     } finally {
       setBusy(false)
-      if (input.current) input.current.value = ''
     }
   }
 
@@ -256,10 +254,14 @@ function ImportPanel() {
           ? '凭证里带了代理的照凭证（网关导出的文件带 proxy_url），原来就在号池里的号沿用原来的绑定，其余放进各版本的默认池。'
           : pool === NO_POOL ? '不放进池；凭证里带了代理的照样认出来，原来就在号池里的号沿用原来的绑定。' : '号都放进这个池；凭证里带了代理的认出那个代理单独指定（新建的代理也建在这个池里）。'}
       />
-      <input ref={input} type="file" accept=".json,application/json" hidden onChange={(e) => void onFile(e.target.files?.[0])} />
-      <div>
-        <BusyButton variant="secondary" busy={busy} onPress={() => input.current?.click()}>选择 JSON 文件</BusyButton>
-      </div>
+      <FileDropZone
+        accept=".json,application/json"
+        title="拖拽 JSON 凭证文件到这里"
+        hint="支持网关导出的单个／批量文件或 cockpit tools 账号数组"
+        buttonLabel="选择 JSON 文件"
+        busy={busy}
+        onFile={onFile}
+      />
       {error && <p className="text-sm text-danger">{error}</p>}
       {result && (
         <Alert status={errors.length || notes.length ? 'warning' : 'success'}>

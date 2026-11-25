@@ -5,8 +5,9 @@
 // 积分构成：积分到期分布（按剩余天数、账号分色）、账号对比卡片、单账号逐包明细。
 // 数据逐账号实时查上游（慢），与账号池页的到期提醒共用一份缓存：第一次进来自动查，之后切回来直接用缓存
 // 并标出数据年龄，点「刷新」才实时查（同上游 8391a05）。
-import { useMemo } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { Accordion, Card, Chip, Label, ListBox, Select, Table } from '@heroui/react'
+import { useReducedMotion } from 'motion/react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ChevronDown } from '@gravity-ui/icons'
 import { accountName } from '../../lib/accounts'
@@ -21,6 +22,7 @@ import {
 import { useAccountNames, useConfig, useOverview, usePackages, useProviders } from '../../lib/queries'
 import { targetName } from '../../lib/targets'
 import type { CreditPackage, PackageAccount } from '../../lib/types'
+import { ChartTooltipCard, ChartTooltipRow } from '../../components/ChartTooltip'
 import { BusyButton, Empty, Loaded } from '../../components/Feedback'
 import { Hint } from '../../components/Hint'
 import { Panel } from '../../components/Panel'
@@ -37,8 +39,6 @@ export function PackagesPage() {
   const list = useMemo(() => (query.data?.accounts || []).map((a) => ({ ...a, note: names.note(a.uid) })), [query.data, names])
   const colorOf = useMemo(() => sourceColors(list), [list])
   const [sortMode, setSortMode] = useStoredChoice<PkSortMode>('wb2api.pkSort', PK_SORT_OPTIONS.map((o) => o.id), 'end_asc')
-  const now = useNow(60_000)
-  const age = query.dataUpdatedAt ? Math.floor((now - query.dataUpdatedAt) / 60_000) : 0
   const quotaPanel = providers.data?.accounts.length || providers.isError ? (
     <Panel title="Trae / Qoder 账号额度" desc="各账号独立展示官方余额、已用额度与原单位；首次查看自动查询，之后点「刷新额度」更新。">
       <Loaded query={providers} rows={2}>{({ accounts }) => (
@@ -62,7 +62,7 @@ export function PackagesPage() {
       </Panel>
       <Panel
         title="账号对比"
-        desc={query.data ? list.length + ' 个账号 · ' + (age > 0 ? age + ' 分钟前的数据，点「刷新」更新' : '实时查询上游') : '逐账号向上游实时查询'}
+        desc={query.data ? <CompareAgeDesc count={list.length} updatedAt={query.dataUpdatedAt} /> : '逐账号向上游实时查询'}
         actions={
           <>
             <Select aria-label="逐包明细排序" value={sortMode} onChange={(k) => k != null && setSortMode(k as PkSortMode)} className="w-32">
@@ -96,34 +96,51 @@ function sourceColors(list: PackageAccount[]) {
 
 interface ExpiryRow { label: string; total: string; days: number; row: CreditDayRow; [uid: string]: unknown }
 
-function ExpiryTip({ active, payload }: TipProps) {
+function ExpiryTip({ active, payload, colors }: TipProps & { colors: Map<string, string> }) {
   const r = payload?.[0]?.payload as ExpiryRow | undefined
   if (!active || !r) return null
   const segs = r.row.segments
   return (
-    <div className="max-w-80 rounded-xl border border-separator bg-overlay px-3 py-2 text-xs shadow-lg">
-      <div className="mb-1 font-medium">{r.label} · 共 {r.total} 积分</div>
+    <ChartTooltipCard
+      title={`${r.label} · 共 ${r.total} 积分`}
+      footer={segs.length > 8 ? `…另有 ${segs.length - 8} 段` : undefined}
+      className="max-w-80"
+    >
       {segs.slice(0, 8).map((s, i) => (
-        <div key={i} className="py-0.5">
-          <span className="font-medium">{s.accountName}</span> · {s.source} · <b className="tabular-nums">{fmtTok(s.amount)}</b>
-          <div className="text-muted">到期 {pkExpiryDateTime(s.expiresAt)}（{pkExpiryText(s.expiresAt)}）</div>
-        </div>
+        <ChartTooltipRow
+          key={i}
+          color={colors.get(s.uid) ?? VIZ_OTHER}
+          label={`${s.accountName} · ${s.source}`}
+          value={fmtTok(s.amount)}
+          sub={`到期 ${pkExpiryDateTime(s.expiresAt)}（${pkExpiryText(s.expiresAt)}）`}
+        />
       ))}
-      {segs.length > 8 && <div className="text-muted">…另有 {segs.length - 8} 段</div>}
-    </div>
+    </ChartTooltipCard>
   )
 }
 
-// now 取数据拉取时刻：剩余天数按查询那一刻算，与旧版一致
-function ExpiryDistribution({ list, now }: { list: PackageAccount[]; now: number }) {
+/** 数据年龄时钟独立更新，避免整页和堆叠柱状图每分钟被重渲染并重播动画 */
+function CompareAgeDesc({ count, updatedAt }: { count: number; updatedAt: number }) {
+  const now = useNow(60_000)
+  const age = updatedAt ? Math.floor((now - updatedAt) / 60_000) : 0
+  return <>{count} 个账号 · {age > 0 ? age + ' 分钟前的数据，点「刷新」更新' : '实时查询上游'}</>
+}
+
+// now 取数据拉取时刻：剩余天数按查询那一刻算，与旧版一致；memo + useMemo 稳定引用，切换明细排序不重播柱状图动画
+const ExpiryDistribution = memo(function ExpiryDistribution({ list, now }: { list: PackageAccount[]; now: number }) {
+  const reducedMotion = useReducedMotion()
   const summary = useMemo(() => summarizeCreditDays(list, now), [list, now])
   const colors = useMemo(() => pkAccountColorMap(list), [list])
-  const uids = [...colors.keys()].filter((uid) => summary.rows.some((r) => r.segments.some((s) => s.uid === uid)))
-  const data: ExpiryRow[] = summary.rows.map((row) => {
+  const uids = useMemo(
+    () => [...colors.keys()].filter((uid) => summary.rows.some((r) => r.segments.some((s) => s.uid === uid))),
+    [colors, summary],
+  )
+  const data = useMemo<ExpiryRow[]>(() => summary.rows.map((row) => {
     const d: ExpiryRow = { label: row.days === 0 ? '已到期' : row.days + ' 天', total: fmtTok(row.credits), days: row.days, row }
     for (const s of row.segments) d[s.uid] = ((d[s.uid] as number | undefined) ?? 0) + s.amount
     return d
-  })
+  }), [summary])
+  const renderTip = useCallback((props: TipProps) => <ExpiryTip {...props} colors={colors} />, [colors])
   // 图例：前 8 个账号各占一色；第 9 个起同为「其他」灰，合并成一项（名字在悬停明细里）
   const inChart = list.filter((a) => uids.includes(a.uid))
   const legend = inChart.filter((a) => colors.get(a.uid) !== VIZ_OTHER)
@@ -144,10 +161,10 @@ function ExpiryDistribution({ list, now }: { list: PackageAccount[]; now: number
             <XAxis type="number" hide />
             <YAxis yAxisId="days" type="category" dataKey="label" width={64} tick={tick} tickLine={false} axisLine={false} />
             <YAxis yAxisId="total" type="category" dataKey="total" orientation="right" width={64} tick={{ ...tick, fontFamily: 'ui-monospace, monospace' }} tickLine={false} axisLine={false} />
-            <Tooltip content={ExpiryTip} cursor={{ fill: 'var(--surface-secondary)' }} />
+            <Tooltip content={renderTip} cursor={{ fill: 'var(--surface-secondary)' }} />
             {uids.map((uid) => (
               // 不按剩余天数调透明度：天数已由行标签表示，再淡化会让账号色（按不透明校验过）在快到期的几行里分不清
-              <Bar key={uid} yAxisId="days" dataKey={uid} stackId="c" fill={colors.get(uid)} stroke="var(--surface)" strokeWidth={1} isAnimationActive={false} />
+              <Bar key={uid} yAxisId="days" dataKey={uid} stackId="c" fill={colors.get(uid)} stroke="var(--surface)" strokeWidth={1} isAnimationActive={!reducedMotion} animationDuration={420} />
             ))}
           </BarChart>
         </ResponsiveContainer>
@@ -167,7 +184,7 @@ function ExpiryDistribution({ list, now }: { list: PackageAccount[]; now: number
       <p className="border-t border-separator pt-2 text-xs text-muted">{foot}</p>
     </div>
   )
-}
+})
 
 /** 细条：各段按占比铺满（颜色 + 不透明度由调用方给），段间留 2px 缝 */
 function MiniBar({ parts, label }: { parts: { key: string; width: number; color: string; opacity?: number; title: string }[]; label: string }) {

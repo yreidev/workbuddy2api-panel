@@ -12,6 +12,64 @@
 /* 标签（Chip）是短词，表格列被挤窄时也不要把「限流冷却 · 7分04秒」折成几行 */
 @layer components {
   .chip { white-space: nowrap; }
+
+  /* 桌面端可折叠侧栏平滑过渡（宽度、文字淡出与悬浮操作栏居中偏移联动，遵循系统减少动态偏好） */
+  .wb-layout {
+    --wb-sidebar-current: 14.5rem;
+  }
+  .wb-layout[data-sidebar-collapsed="true"] {
+    --wb-sidebar-current: 4rem;
+  }
+  .wb-sidebar {
+    width: var(--wb-sidebar-current);
+    transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .wb-sidebar-label {
+    transition: opacity 160ms ease, max-width 220ms cubic-bezier(0.22, 1, 0.36, 1), margin-inline-start 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    max-width: 11rem;
+    margin-inline-start: 0.625rem;
+    opacity: 1;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .wb-sidebar[data-collapsed="true"] .wb-sidebar-label {
+    max-width: 0;
+    margin-inline-start: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .wb-sidebar-group-title {
+    transition: opacity 150ms ease, max-height 200ms cubic-bezier(0.22, 1, 0.36, 1), padding-bottom 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    max-height: 1.5rem;
+    opacity: 1;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .wb-sidebar[data-collapsed="true"] .wb-sidebar-group-title {
+    max-height: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* 底部悬浮操作栏：脱离文档流消除勾选/编辑时的版面跳动，桌面端随侧栏当前宽度自动对齐主内容区居中 */
+  .wb-floating-bar {
+    transition: padding-left 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @media (min-width: 1024px) {
+    .wb-floating-bar {
+      padding-left: calc(var(--wb-sidebar-current, 0px) + 0.75rem);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-sidebar,
+  .wb-sidebar-label,
+  .wb-sidebar-group-title,
+  .wb-floating-bar {
+    transition: none;
+  }
 }
 
 /* 图表分类色：dataviz 参考色板的 8 个槽位，固定顺序分配、不循环（第 9 个起归入「其他」）。

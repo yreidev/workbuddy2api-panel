@@ -25,6 +25,7 @@ export default defineConfig({
           groups: [
             { name: 'heroui', test: /node_modules[\\/](@heroui|react-aria|react-aria-components|react-stately|@react-aria|@react-stately|@react-types|@internationalized|@swc|tailwind-variants|tailwind-merge|input-otp|@gravity-ui)[\\/]/ },
             { name: 'react', test: /node_modules[\\/](react|react-dom|scheduler|@tanstack)[\\/]/ },
+            { name: 'motion', test: /node_modules[\\/](motion|motion-dom|motion-utils|framer-motion)[\\/]/ },
           ],
         },
       },

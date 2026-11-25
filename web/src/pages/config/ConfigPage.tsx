@@ -21,6 +21,7 @@ import { toastError } from '../../lib/hooks'
 import { useHasProviderData, qk, useConfig, useLogStorage } from '../../lib/queries'
 import type { SaveConfigResp } from '../../lib/types'
 import { BusyButton, Confirm, Loaded } from '../../components/Feedback'
+import { FloatingActionBar } from '../../components/FloatingActionBar'
 import { InfoTip } from '../../components/Panel'
 import { StoreFooter } from './StoreFooter'
 
@@ -131,16 +132,14 @@ function ConfigForm({ path, config }: { path?: string; config: Record<string, un
         })}
       </Tabs>
 
-      <Card className="sticky bottom-3 z-30 flex-row flex-wrap items-center gap-3 p-3 shadow-lg">
+      <FloatingActionBar open={changed.length > 0 || saving} ariaLabel="保存配置">
         <span className="text-sm text-muted">
-          {changed.length === 0 ? '没有改动' : `改了 ${changed.length} 项`}
+          改了 {changed.length} 项
           {restartChanged > 0 && <span className="text-warning">，其中 {restartChanged} 项需重启进程生效</span>}
         </span>
-        <div className="ml-auto flex gap-2">
-          <Button variant="secondary" isDisabled={changed.length === 0 || saving} onPress={() => setEdits({})}>放弃修改</Button>
-          <BusyButton type="submit" variant="primary" busy={saving} isDisabled={changed.length === 0}>保存配置</BusyButton>
-        </div>
-      </Card>
+        <Button size="sm" variant="secondary" isDisabled={changed.length === 0 || saving} onPress={() => setEdits({})}>放弃修改</Button>
+        <BusyButton type="submit" size="sm" variant="primary" busy={saving} isDisabled={changed.length === 0}>保存配置</BusyButton>
+      </FloatingActionBar>
 
       <Confirm
         open={blocker.status === 'blocked'}

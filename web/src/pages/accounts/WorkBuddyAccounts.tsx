@@ -6,8 +6,9 @@
 // 绑定代理、批量操作）+ 批量任务（含全部测活）+ 账号分组 + 模型锁池。
 // 宽屏默认卡片网格，可切换成表格（记在本浏览器）；窄屏只有卡片。
 import { useMemo, useState, type ReactNode } from 'react'
+import { CreditCard, Pulse } from '@gravity-ui/icons'
 import {
-  Button, Card, Checkbox, Label, ListBox, Select, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type Selection, type SortDescriptor,
+  Button, Checkbox, Label, ListBox, Select, Table, ToggleButton, ToggleButtonGroup, useMediaQuery, type Selection, type SortDescriptor,
 } from '@heroui/react'
 import {
   accountHealth, accountName, CARD_SORT_OPTIONS, cardSortKey, filterAccounts, parseCardSort, poolCredits, sortAccounts, type AccountSortKey, type StatusFilter,
@@ -17,6 +18,7 @@ import { ago } from '../../lib/format'
 import { toastError, useNow, useStartedToast, useStoredChoice } from '../../lib/hooks'
 import type { Account, Overview, ProxyAccount } from '../../lib/types'
 import { Empty } from '../../components/Feedback'
+import { FloatingActionBar } from '../../components/FloatingActionBar'
 import { Panel, Stat } from '../../components/Panel'
 import { AccountButtons } from './AccountButtons'
 import { AccountCard } from './AccountCard'
@@ -127,14 +129,23 @@ export function WorkBuddyAccounts({ data, fetchedAt, workBuddyOnly }: {
           className="contents"
         >
           {tiles.map((t) => (
-            <ToggleButton key={t.id} id={t.id} className="h-auto w-full flex-col items-start justify-start gap-1 rounded-3xl p-4 text-left">
+            <ToggleButton
+              key={t.id}
+              id={t.id}
+              className="h-auto w-full flex-col items-start justify-start gap-1 rounded-3xl p-4 text-left transition-[transform,background-color,box-shadow] duration-150 hover:shadow-xs active:scale-[0.98]"
+            >
               <span className={`text-2xl font-semibold tabular-nums ${t.color ?? ''}`}>{t.value}</span>
               <span className="text-xs font-normal text-muted">{t.label}</span>
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-        <Stat label="积分剩余 / 总额" value={creditSum} sub={pool.unlimited ? `另有 ${pool.unlimited} 个企业版不限量` : undefined} />
-        <Stat label="粘性会话" value={data.sticky_sessions} />
+        <Stat
+          label="积分剩余 / 总额"
+          value={creditSum}
+          icon={<CreditCard className="size-4" />}
+          sub={pool.unlimited ? `另有 ${pool.unlimited} 个企业版不限量` : undefined}
+        />
+        <Stat label="粘性会话" value={data.sticky_sessions} icon={<Pulse className="size-4" />} />
       </div>
 
       <ExpiryReminder accounts={accounts} />
@@ -149,7 +160,6 @@ export function WorkBuddyAccounts({ data, fetchedAt, workBuddyOnly }: {
         <div className="flex flex-wrap items-center justify-between gap-3">
           {workBuddyOnly && <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">{workBuddyOnly.filters}</div>}
           <div className="flex flex-wrap items-center gap-3">
-            {isDesktop && selected.length > 0 && <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} nameOf={nameOf} />}
             {/* 卡片没有表头复选框和可点的表头，在这里给「全选」和排序 */}
             {cards && rows.length > 0 && (
               <SelectionCheckbox
@@ -214,14 +224,11 @@ export function WorkBuddyAccounts({ data, fetchedAt, workBuddyOnly }: {
                 run={run}
               />
             ))}
-            {/* 宽屏的导出按钮在搜索框那一行，窄屏滚动时贴在底部 */}
-            {!isDesktop && selected.length > 0 && (
-              <Card className="sticky bottom-3 z-30 col-span-full flex-row flex-wrap items-center gap-3 p-3 shadow-lg">
-                <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} nameOf={nameOf} />
-              </Card>
-            )}
           </div>
         )}
+        <FloatingActionBar open={selected.length > 0} ariaLabel="账号批量操作">
+          <ExportActions selected={selected} onClear={clearSelection} onBind={onBind && (() => onBind(selected))} nameOf={nameOf} />
+        </FloatingActionBar>
       </Panel>
 
       {workBuddyOnly?.groupPanel}

@@ -19,7 +19,7 @@ export function AccountCardLayout({ name, heading, status, ring, selected, onSel
   actions: ReactNode
 }) {
   return (
-    <Card variant="secondary" className={`gap-3 p-4 ${ring}`}>
+    <Card variant="secondary" className={`gap-3 p-4 transition-[border-color,box-shadow,background-color] duration-200 hover:shadow-sm ${ring}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-start gap-2">
           <SelectionCheckbox label={'选择 ' + name} isSelected={selected} onChange={onSelect} />

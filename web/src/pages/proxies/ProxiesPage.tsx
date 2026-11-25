@@ -6,6 +6,7 @@
 // 导出、全部重测、删掉不可用；每个代理看状态、出口 IP、到期、绑了哪些号，能测、改、删）+ 代理池设置。
 // 数据 5 秒一刷：健康检查、查出口 IP 都在后台跑。号绑哪个代理在账号池页多选绑定，或在账号详情里改。
 import { useMemo, useState } from 'react'
+import { CircleCheck, Globe, ShieldExclamation } from '@gravity-ui/icons'
 import {
   Button, Card, Checkbox, Chip, Label, ListBox, SearchField, Select, Table, ToggleButton, ToggleButtonGroup, toast, useMediaQuery, type Selection,
 } from '@heroui/react'
@@ -18,6 +19,7 @@ import { defaultForLabels, exitGeo, filterProxies, loadText, PROXY_FILTERS, prox
 import { qk, useAccountNames, useProxies } from '../../lib/queries'
 import type { ProxiesResp, ProxyItem, ProxyPool } from '../../lib/types'
 import { Empty, ErrorBox, Loaded } from '../../components/Feedback'
+import { FloatingActionBar } from '../../components/FloatingActionBar'
 import { Hint } from '../../components/Hint'
 import { InfoTip, Panel, Stat } from '../../components/Panel'
 import { useConfirm } from '../../components/useConfirm'
@@ -133,9 +135,9 @@ function Proxies({ data }: { data: ProxiesResp }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        <Stat label="代理" value={v.proxies.length} sub={`${v.pools.length} 个池`} />
-        <Stat label="能用" value={usable} tone={usable ? 'success' : undefined} />
-        <Stat label="连不上" value={w.down} tone={w.down ? 'danger' : undefined} />
+        <Stat label="代理" value={v.proxies.length} icon={<Globe className="size-4" />} sub={`${v.pools.length} 个池`} />
+        <Stat label="能用" value={usable} tone={usable ? 'success' : undefined} icon={<CircleCheck className="size-4" />} />
+        <Stat label="连不上" value={w.down} tone={w.down ? 'danger' : undefined} icon={w.down ? <ShieldExclamation className="size-4" /> : undefined} />
         <Stat label="已到期" value={w.expired} tone={w.expired ? 'danger' : undefined} />
         <Stat label={`快到期（${v.settings.expiry_warn_days} 天内）`} value={w.expiring} tone={w.expiring ? 'warning' : undefined} />
         <Stat label="等代理的号" value={w.waiting} tone={w.waiting ? 'warning' : undefined} />
@@ -206,7 +208,7 @@ function Proxies({ data }: { data: ProxiesResp }) {
 
 function PoolCard({ p, onEdit, onRebalance, onDelete }: { p: ProxyPool; onEdit: () => void; onRebalance: () => void; onDelete: () => void }) {
   return (
-    <Card variant="secondary" className="gap-2 p-4">
+    <Card variant="secondary" className="gap-2 p-4 transition-[border-color,box-shadow] duration-200 hover:shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{p.name}</span>
         {defaultForLabels(p).map((l) => <Chip key={l} size="sm" variant="soft" color="accent">{l}</Chip>)}
@@ -245,7 +247,7 @@ function ProxyTable({ data, onEdit, onDelete }: {
   const qc = useQueryClient()
   const now = useNow(30_000)
   const names = useAccountNames()
-  // 窄屏（同请求记录页）：表格换成列表，状态筛选换成下拉框，多选后的操作贴在底部
+  // 窄屏（同请求记录页）：表格换成列表，状态筛选换成下拉框；多选批量操作宽窄屏统一走底部悬浮栏
   const isDesktop = useMediaQuery('(min-width: 1024px)')
   const [pool, setPool] = useState('')
   const [filter, setFilter] = useState<ProxyFilter>('all')
@@ -352,7 +354,6 @@ function ProxyTable({ data, onEdit, onDelete }: {
             <span className="text-sm">全选</span>
           </SelectionCheckbox>
         )}
-        {isDesktop && selected.length > 0 && <div className="ml-auto flex items-center gap-2">{selectedActions}</div>}
       </div>
 
       {rows.length === 0 ? (
@@ -439,12 +440,11 @@ function ProxyTable({ data, onEdit, onDelete }: {
               </li>
             ))}
           </ul>
-          {/* 列表很长，滚到哪都看得到（同账号池页） */}
-          {selected.length > 0 && (
-            <Card className="sticky bottom-3 z-30 flex-row flex-wrap items-center gap-3 p-3 shadow-lg">{selectedActions}</Card>
-          )}
         </>
       )}
+      <FloatingActionBar open={selected.length > 0} ariaLabel="代理批量操作">
+        {selectedActions}
+      </FloatingActionBar>
     </>
   )
 }

@@ -6,6 +6,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
+import { domMax, LazyMotion, MotionConfig } from 'motion/react'
 import './index.css'
 import { printConsoleNotice } from './lib/notice'
 import { queryClient } from './lib/queries'
@@ -21,8 +22,12 @@ window.addEventListener('vite:preloadError', (e) => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <MotionConfig reducedMotion="user">
+      <LazyMotion features={domMax} strict>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </LazyMotion>
+    </MotionConfig>
   </StrictMode>,
 )

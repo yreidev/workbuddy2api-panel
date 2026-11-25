@@ -10,7 +10,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Circle, CircleCheckFill } from '@gravity-ui/icons'
 import { useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, buttonVariants, Chip, Label, Link, ListBox, Modal, ProgressBar, Select, Spinner, Surface, toast, Typography } from '@heroui/react'
+import { Alert, Button, buttonVariants, Chip, Label, Link, ListBox, Modal, ProgressBar, Select, Spinner, Surface, Tooltip, toast, Typography } from '@heroui/react'
 import { post } from '../lib/api'
 import { fmtBytes, dateTime } from '../lib/format'
 import { toastError, useNow } from '../lib/hooks'
@@ -35,10 +35,27 @@ const SLOW_RESTART_SEC = 120
 /** 手动打开的窗：侧栏「有新版本」→ update，侧栏版本号 → about */
 export type ManualPanel = 'update' | 'about' | null
 
-/** 侧栏的「有新版本」入口：没有新版本或关了更新检查时不显示 */
-export function UpdateBadge({ onPress }: { onPress: () => void }) {
+/** 侧栏的「有新版本」入口：没有新版本或关了更新检查时不显示；侧栏折叠时收缩为提示圆点 */
+export function UpdateBadge({ onPress, compact = false }: { onPress: () => void; compact?: boolean }) {
   const { data } = useVersion()
   if (!data?.update_available) return null
+  if (compact) {
+    return (
+      <Tooltip delay={120}>
+        <Button
+          isIconOnly
+          size="sm"
+          variant="ghost"
+          aria-label={`有新版本 v${data.latest}`}
+          onPress={onPress}
+          className="size-6 min-w-6 rounded-full"
+        >
+          <span className="size-2 rounded-full bg-accent" />
+        </Button>
+        <Tooltip.Content placement="right">有新版本 v{data.latest}</Tooltip.Content>
+      </Tooltip>
+    )
+  }
   return (
     <Button
       size="sm"
