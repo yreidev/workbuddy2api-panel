@@ -114,6 +114,7 @@ func TestRunFiresBatch(t *testing.T) {
 	oldGrace := wakeupGraceDelay
 	wakeupGraceDelay = 0
 	t.Cleanup(func() { wakeupGraceDelay = oldGrace })
+	zeroTaskDelays(t)
 
 	hooked := make(chan struct{}, 1)
 	s := New(Config{

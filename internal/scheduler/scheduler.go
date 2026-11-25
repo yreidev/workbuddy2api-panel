@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -408,23 +409,93 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 }
 
+// checkinAccountDelay 签到账号间限速，避免整点全池连发撞上游 429。测试可置 0。
+var checkinAccountDelay = 1500 * time.Millisecond
+
+// keepaliveAccountDelay token 保活账号间限速，避免连发刷新撞上游 429。测试可置 0。
+var keepaliveAccountDelay = 1500 * time.Millisecond
+
+// batchKindStagger 同整点槽位多类任务错峰间隔（如 09:00 同时触发签到与旅行时错开首波）。测试可置 0。
+var batchKindStagger = 3 * time.Second
+
+// taskRetryDelay 签到/保活/余额刷新遇瞬时 429/5xx/网络错误时的基础退避间隔。测试可置 0。
+var taskRetryDelay = 3 * time.Second
+
+// taskMaxRetries 签到/保活瞬时错误最大重试次数。
+const taskMaxRetries = 2
+
+// balanceRefreshConcurrency 余额刷新最大并发数，避免全池同时建连打爆容器 DNS 或上游。
+const balanceRefreshConcurrency = 3
+
+// isSoftRateError 判断错误是否为上游 429 软限流（ErrSoftRate）。
+// 签到与余额查询内部已由 upstream.retryBillingTransient 处理 5xx/网络重试，调度层只补 429 退避，避免嵌套放大。
+func isSoftRateError(err error) bool {
+	if err == nil || upstream.IsAlreadyCheckin(err) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var ue *upstream.Error
+	return errors.As(err, &ue) && ue.Kind == upstream.ErrSoftRate
+}
+
+// isTransientKeepaliveError 判断保活刷新错误是否属瞬时故障（429 软限流、5xx 服务端错或网络/DNS 超时）。
+// RefreshToken 国内版内部已有地址层换 IP 重发（408/502/503/传输错），但无 429 退避且国际版无地址层；
+// 此处明确排除代理线路错误（RouteError）、12153 session dead、4xx 鉴权/业务错与主动取消，
+// 调用侧仅对非 429 瞬时错补打 1 次，避免与地址层叠加放大。
+func isTransientKeepaliveError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || upstream.IsRouteError(err) {
+		return false
+	}
+	var ue *upstream.Error
+	if errors.As(err, &ue) {
+		return ue.Kind == upstream.ErrSoftRate || ue.Kind == upstream.ErrServer
+	}
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// fetchUserResource 查余额并在调度层补 1 次 429 退避重试（5xx/网络/DNS 重试由 upstream.retryBillingTransient 负责）。
+func (s *Scheduler) fetchUserResource(ctx context.Context, a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, err error) {
+	err = retryTask(ctx, 1, isSoftRateError, func() error {
+		var e error
+		remain, total, expiring, earliestAt, earliestRemaining, e = s.cfg.Upstream.UserResourceDetailedWithExpiry(a, soon)
+		return e
+	})
+	return remain, total, expiring, earliestAt, earliestRemaining, err
+}
+
+// retryTask 按给定可重试判定做有限次线性退避重试；ctx 取消立即返回当前错误。
+func retryTask(ctx context.Context, maxRetries int, retryable func(error) bool, fn func() error) error {
+	err := fn()
+	for attempt := 1; err != nil && attempt <= maxRetries && retryable(err); attempt++ {
+		if !sleepCtx(ctx, taskRetryDelay*time.Duration(attempt)) {
+			return err
+		}
+		err = fn()
+	}
+	return err
+}
+
 // runBatch 并行派发一批任务（同一唤醒时刻的多类任务），等全部完成返回。
+// 同槽位存在多类任务时按序错开 batchKindStagger，避免整点多族并发砸向上游；
 // ctx 取消时由各任务内部的可取消等待快速收尾。
 func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 	var wg sync.WaitGroup
-	for _, k := range kinds {
+	for i, k := range kinds {
 		wg.Add(1)
-		go func(k taskKind) {
+		go func(idx int, k taskKind) {
 			defer wg.Done()
+			if idx > 0 && !sleepCtx(ctx, batchKindStagger*time.Duration(idx)) {
+				return
+			}
 			switch k {
 			case taskCheckin:
-				s.RunCheckinNow()
+				s.runCheckin(ctx)
 			case taskTravel:
 				s.RunTravelNow()
 			case taskActivity:
 				s.runActivity(ctx)
 			case taskKeepalive:
-				s.RunKeepaliveNow()
+				s.runKeepalive(ctx)
 			case taskBlackcat:
 				s.RunBlackcatNow()
 			case taskGrowth:
@@ -436,7 +507,7 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 					hook()
 				}
 			}
-		}(k)
+		}(i, k)
 	}
 	wg.Wait()
 }
@@ -464,9 +535,18 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // 末尾追加连登管家（streak.go）：可兑换档位自动兑换 + 抽奖次数自动抽完——
 // 连登兑换按天数解锁，挂在每日签到后即「到天数那天自动完成兑换→抽奖闭环」。
 func (s *Scheduler) RunCheckinNow() {
+	s.runCheckin(context.Background())
+}
+
+// runCheckin 签到遍历，账号间限速 checkinAccountDelay；调度层补 429 重试（5xx/网络重试由 upstream.retryBillingTransient 负责），随 ctx 取消立即退出。
+func (s *Scheduler) runCheckin(ctx context.Context) {
+	first := true
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
+		if ctx.Err() != nil {
+			return
+		}
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -483,12 +563,20 @@ func (s *Scheduler) RunCheckinNow() {
 		if a.IsGlobal() {
 			continue
 		}
+		if !first {
+			if !sleepCtx(ctx, checkinAccountDelay) {
+				return
+			}
+		}
+		first = false
 		// 企业版无签到体系：上游对 POST /v2/billing/meter/daily-checkin 直接
 		// 400 code 10001「企业账号不支持该操作」。跳过签到，但**不 continue**——
 		// 下方余额查询照常跑（企业额度走 get-enterprise-user-usage 口径，且是
 		// credit_floor 判定与面板额度展示的唯一数据源）。
 		if !a.IsEnterprise() {
-			if err := s.cfg.Upstream.DailyCheckin(a); err != nil {
+			if err := retryTask(ctx, taskMaxRetries, isSoftRateError, func() error {
+				return s.cfg.Upstream.DailyCheckin(a)
+			}); err != nil {
 				// "今天已签到"是幂等成功（上游对重复签到返回 code!=0），不再当失败打 error 行。
 				if upstream.IsAlreadyCheckin(err) {
 					s.cfg.Pool.NoteCheckinDone(st.UID)
@@ -504,8 +592,11 @@ func (s *Scheduler) RunCheckinNow() {
 				log.Printf("checkin %s: 签到成功", logfmt.Label(st.UID, st.Nickname))
 			}
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		// 分桶查余额：配置窗口内的积分单独标记，同时记录最早未来到期批次。
-		remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
+		remain, total, expiring, earliestAt, earliestRemaining, err := s.fetchUserResource(ctx, a, expiringSoon)
 		if err != nil {
 			log.Printf("user-resource %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 			continue
@@ -513,7 +604,9 @@ func (s *Scheduler) RunCheckinNow() {
 		s.cfg.Pool.ReenableIfCredits(st.UID, remain, total)
 		s.cfg.Pool.SetCreditsDetailed(st.UID, remain, total, expiring, earliestAt, earliestRemaining)
 	}
-	s.RunStreakBonusNow()
+	if ctx.Err() == nil {
+		s.RunStreakBonusNow()
+	}
 }
 
 // RunActivityNow 立即对池内所有可用账号执行一次对话活跃上报。
@@ -599,8 +692,18 @@ func (s *Scheduler) checkActivityStreak(a *auth.Auth) bool {
 // 连续 sessionDeadThreshold 次（3 次）才禁用（P0-1：13 个 disabled 号全是历史误判）。
 // 刷新成功 → ClearSessionDead 清计数（错误判定的账号有复活路径）。
 func (s *Scheduler) RunKeepaliveNow() {
+	s.runKeepalive(context.Background())
+}
+
+// runKeepalive token 保活遍历，账号间限速 keepaliveAccountDelay；
+// 429 最多重试 2 次，其余瞬时 5xx/网络错最多补打 1 次（不重试 12153 与 RouteError）。
+func (s *Scheduler) runKeepalive(ctx context.Context) {
+	first := true
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
+		if ctx.Err() != nil {
+			return
+		}
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -611,7 +714,22 @@ func (s *Scheduler) RunKeepaliveNow() {
 		if a == nil || a.RefreshTokenValue() == "" {
 			continue
 		}
-		if err := s.cfg.Upstream.RefreshToken(a); err != nil {
+		if !first {
+			if !sleepCtx(ctx, keepaliveAccountDelay) {
+				return
+			}
+		}
+		first = false
+		attempt := 0
+		if err := retryTask(ctx, taskMaxRetries, func(err error) bool {
+			attempt++
+			if isSoftRateError(err) {
+				return true
+			}
+			return attempt == 1 && isTransientKeepaliveError(err)
+		}, func() error {
+			return s.cfg.Upstream.RefreshToken(a)
+		}); err != nil {
 			log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 			var ue *upstream.Error
 			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && !st.Disabled {
@@ -628,7 +746,7 @@ func (s *Scheduler) RunKeepaliveNow() {
 	}
 }
 
-// RunBalanceRefreshNow 并发查询余额并更新池内 credits。
+// RunBalanceRefreshNow 限并发查询余额并更新池内 credits。
 // 账号范围：默认跳过禁用账号；schedule.include_disabled_in_tasks 打开时一并刷新
 // （轮换用法下据此判断下一个该启用谁）。注意 ReenableIfCredits 对 disabled 是
 // no-op，所以本开关**不会**导致禁用号被自动解冻——它只让已有账号的积分保持新鲜。
@@ -636,10 +754,20 @@ func (s *Scheduler) RunKeepaliveNow() {
 // 但不做签到、不刷新 token——只让"积分"这个观测量保持新鲜。
 // 供两类入口复用：后台周期任务（StartBalanceRefresh）与面板手动全量刷新。
 func (s *Scheduler) RunBalanceRefreshNow() {
+	s.runBalanceRefresh(context.Background())
+}
+
+// runBalanceRefresh 限制并发数（balanceRefreshConcurrency）查询余额；
+// 调度层补 1 次 429 重试（5xx/网络/DNS 重试由 upstream.retryBillingTransient 负责），随 ctx 取消停止新派发。
+func (s *Scheduler) runBalanceRefresh(ctx context.Context) {
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, balanceRefreshConcurrency)
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
+		if ctx.Err() != nil {
+			break
+		}
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -650,10 +778,20 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 		if a == nil {
 			continue
 		}
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		}
 		wg.Add(1)
 		go func(a *auth.Auth, uid string) {
 			defer wg.Done()
-			remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
+			defer func() { <-sem }()
+			remain, total, expiring, earliestAt, earliestRemaining, err := s.fetchUserResource(ctx, a, expiringSoon)
 			if err != nil {
 				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
 				return
@@ -699,7 +837,7 @@ func (s *Scheduler) StartBalanceRefresh(ctx context.Context, interval time.Durat
 			case <-s.rearmBalance:
 				timer.Stop() // 间隔已变：立刻按新值重算
 			case <-timer.C:
-				s.RunBalanceRefreshNow()
+				s.runBalanceRefresh(ctx)
 			}
 		}
 	}()

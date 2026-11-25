@@ -8,7 +8,9 @@
 package upstream
 
 import (
+	"context"
 	"errors"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -127,5 +129,30 @@ func TestUserResourceDetailedRetriesTransient500(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
 		t.Fatalf("calls=%d want 2（1 次失败 + 1 次重试）", n)
+	}
+}
+
+func TestDailyCheckinNoRetryOnRouteErrorAndCanceled(t *testing.T) {
+	shortBillingRetry(t)
+	routeNetErr := &RouteError{Proxy: "p1", Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
+	routeTimeoutErr := &RouteError{Proxy: "p1", Err: context.DeadlineExceeded}
+	if isTransientBillingErr(routeNetErr) || isTransientBillingErr(routeTimeoutErr) {
+		t.Fatal("RouteError 无论内部包何种网络错都不得视为可重试瞬时错")
+	}
+	if isTransientBillingErr(context.Canceled) {
+		t.Fatal("context.Canceled 不得重试")
+	}
+
+	var calls int32
+	c := checkinClient(func(r *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, routeTimeoutErr
+	})
+	err := c.DailyCheckin(&auth.Auth{AccessToken: "at"})
+	if !IsRouteError(err) {
+		t.Fatalf("err=%v want RouteError", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("calls=%d want 1（代理线路错误不得重试）", n)
 	}
 }

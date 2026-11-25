@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -386,6 +387,7 @@ func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 }
 
 func TestCheckinErrorDoesNotCrash(t *testing.T) {
+	zeroTaskDelays(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		w.Write([]byte(`boom`))
@@ -701,5 +703,314 @@ func TestPausedStillTravels(t *testing.T) {
 	s.RunTravelNow()
 	if got := f.travelCalls.Load(); got != 2 {
 		t.Errorf("travel status calls=%d want 2（u1 + 暂停号 u2 照常旅行）", got)
+	}
+}
+
+func zeroTaskDelays(t *testing.T) {
+	t.Helper()
+	oldCheckin, oldKeepalive, oldStagger, oldRetry := checkinAccountDelay, keepaliveAccountDelay, batchKindStagger, taskRetryDelay
+	checkinAccountDelay = 0
+	keepaliveAccountDelay = 0
+	batchKindStagger = 0
+	taskRetryDelay = 0
+	t.Cleanup(func() {
+		checkinAccountDelay = oldCheckin
+		keepaliveAccountDelay = oldKeepalive
+		batchKindStagger = oldStagger
+		taskRetryDelay = oldRetry
+	})
+}
+
+// TestRunCheckinRetriesTransient429And500 签到与签后余额查询遇 429 或 500 退避重试成功，幂等“今天已签到”不重试。
+func TestRunCheckinRetriesTransient429And500(t *testing.T) {
+	zeroTaskDelays(t)
+	var calls429, calls500, callsAlready, bal429Calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if upstreamtest.WebSession(w, r) {
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/daily-checkin"):
+			switch r.Header.Get("Authorization") {
+			case "Bearer at-429":
+				if calls429.Add(1) == 1 {
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = w.Write([]byte(`{"error_msg":"Too Many Requests"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
+			case "Bearer at-500":
+				if calls500.Add(1) == 1 {
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"code":10001,"msg":"签到失败，请稍后重试"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
+			case "Bearer at-already":
+				callsAlready.Add(1)
+				_, _ = w.Write([]byte(`{"code":10001,"msg":"今天已签到"}`))
+			}
+		case r.URL.Path == upstreamtest.FreePath:
+			if r.Header.Get("Authorization") == "Bearer at-429" && bal429Calls.Add(1) == 1 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error_msg":"Too Many Requests"}`))
+				return
+			}
+			_, _ = w.Write([]byte(upstreamtest.List(upstreamtest.Package(100, 100, ""))))
+		case upstreamtest.Write(w, r.URL.Path):
+		default:
+			_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+		}
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u429", AccessToken: "at-429", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u500", AccessToken: "at-500", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "ualready", AccessToken: "at-already", RefreshToken: "rt", ExpiresAt: 9999999999})
+
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+	s.RunCheckinNow()
+
+	if calls429.Load() != 2 {
+		t.Errorf("u429 checkin calls=%d want 2", calls429.Load())
+	}
+	if bal429Calls.Load() != 2 {
+		t.Errorf("u429 balance calls=%d want 2（签到后查余额遇 429 应重试）", bal429Calls.Load())
+	}
+	if calls500.Load() != 2 {
+		t.Errorf("u500 checkin calls=%d want 2", calls500.Load())
+	}
+	if callsAlready.Load() != 1 {
+		t.Errorf("ualready checkin calls=%d want 1（幂等已签到不得重试）", callsAlready.Load())
+	}
+	for _, uid := range []string{"u429", "u500", "ualready"} {
+		st, _ := p.Status(uid)
+		if !st.CheckinDone {
+			t.Errorf("%s 应标记今日已签到", uid)
+		}
+	}
+	if st, _ := p.Status("u429"); st.Credits != 100 {
+		t.Errorf("u429 credits=%d want 100（余额 429 重试后应更新积分）", st.Credits)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestRunKeepaliveRetries429WithoutRetrying12153 保活遇 429 最多重试 2 次、持续 500 最多补打 1 次；
+// 12153 session dead 与代理 RouteError 绝不重试。
+func TestRunKeepaliveRetries429WithoutRetrying12153(t *testing.T) {
+	zeroTaskDelays(t)
+	if isTransientKeepaliveError(&upstream.RouteError{Proxy: "p1", Err: context.DeadlineExceeded}) ||
+		isTransientKeepaliveError(&upstream.RouteError{Proxy: "p1", Err: &net.OpError{Op: "dial", Err: errors.New("refused")}}) {
+		t.Fatal("RouteError 不得视为可重试保活错误")
+	}
+
+	var calls429, calls500, callsDead, callsRoute atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/token/refresh"):
+			switch r.Header.Get("X-Refresh-Token") {
+			case "rt-429":
+				if calls429.Add(1) <= 2 {
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = w.Write([]byte(`{"error_msg":"Too Many Requests"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-at","refreshToken":"rt-429","expiresIn":3600}}`))
+			case "rt-500":
+				calls500.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"code":500,"msg":"internal error"}`))
+			case "rt-dead":
+				callsDead.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"code":12153,"msg":"Offline user session not found"}`))
+			}
+		case r.URL.Path == "/v2/plugin/account":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"uid":"u429"}}`))
+		default:
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	baseRT := srv.Client().Transport
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("X-Refresh-Token") == "rt-route" {
+			callsRoute.Add(1)
+			return nil, &upstream.RouteError{Proxy: "p1", Err: context.DeadlineExceeded}
+		}
+		return baseRT.RoundTrip(r)
+	})}
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u429", AccessToken: "old", RefreshToken: "rt-429", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u500", AccessToken: "old", RefreshToken: "rt-500", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "udead", AccessToken: "old", RefreshToken: "rt-dead", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "uroute", AccessToken: "old", RefreshToken: "rt-route", ExpiresAt: 9999999999})
+
+	up := &upstream.Client{HTTP: httpClient, ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+	s.RunKeepaliveNow()
+
+	if calls429.Load() != 3 {
+		t.Errorf("u429 refresh calls=%d want 3（1 次 + 2 次 429 重试后恢复）", calls429.Load())
+	}
+	if calls500.Load() != 2 {
+		t.Errorf("u500 refresh calls=%d want 2（非 429 瞬时错最多补打 1 次）", calls500.Load())
+	}
+	if callsDead.Load() != 1 {
+		t.Errorf("udead refresh calls=%d want 1（12153 不得重试放大计数）", callsDead.Load())
+	}
+	if callsRoute.Load() != 1 {
+		t.Errorf("uroute refresh calls=%d want 1（代理 RouteError 不得重试）", callsRoute.Load())
+	}
+	if st, _ := p.Status("udead"); st.Disabled {
+		t.Errorf("单次 12153 不应触发禁用（阈值=%d）", pool.SessionDeadThreshold())
+	}
+}
+
+// TestRunBalanceRefreshBoundsConcurrencyAndRetriesTransient 余额刷新并发受控且真实并行，且瞬时 429 重试恢复。
+func TestRunBalanceRefreshBoundsConcurrencyAndRetriesTransient(t *testing.T) {
+	zeroTaskDelays(t)
+	var cur, peak, u0Calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == upstreamtest.FreePath:
+			n := cur.Add(1)
+			for {
+				p := peak.Load()
+				if n <= p || peak.CompareAndSwap(p, n) {
+					break
+				}
+			}
+			time.Sleep(25 * time.Millisecond)
+			cur.Add(-1)
+			if r.Header.Get("Authorization") == "Bearer at-0" && u0Calls.Add(1) == 1 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error_msg":"Too Many Requests"}`))
+				return
+			}
+			_, _ = w.Write([]byte(upstreamtest.List(upstreamtest.Package(100, 80, ""))))
+		case upstreamtest.Write(w, r.URL.Path):
+		default:
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	for i := 0; i < 8; i++ {
+		uid := "u" + string(rune('0'+i))
+		p.Add(&auth.Auth{UID: uid, AccessToken: "at-" + string(rune('0'+i)), RefreshToken: "rt", ExpiresAt: 9999999999})
+	}
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+	s.RunBalanceRefreshNow()
+
+	if peak.Load() < 2 || peak.Load() > balanceRefreshConcurrency {
+		t.Errorf("peak concurrency=%d want in [2, %d]", peak.Load(), balanceRefreshConcurrency)
+	}
+	if u0Calls.Load() != 2 {
+		t.Errorf("u0 transient 429 calls=%d want 2", u0Calls.Load())
+	}
+	if st, _ := p.Status("u0"); st.Credits != 80 {
+		t.Errorf("u0 credits=%d want 80（重试后应更新余额）", st.Credits)
+	}
+}
+
+// TestRunBatchStaggersKindsAndCancels 同槽位多类任务按 batchKindStagger 错开，ctx 取消立即退出不卡死。
+func TestRunBatchStaggersKindsAndCancels(t *testing.T) {
+	oldStagger, oldCheckin := batchKindStagger, checkinAccountDelay
+	batchKindStagger = time.Hour
+	checkinAccountDelay = 0
+	t.Cleanup(func() {
+		batchKindStagger = oldStagger
+		checkinAccountDelay = oldCheckin
+	})
+
+	var checkinCalls, travelCalls atomic.Int32
+	checkinHit := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if upstreamtest.WebSession(w, r) {
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/daily-checkin"):
+			checkinCalls.Add(1)
+			select {
+			case checkinHit <- struct{}{}:
+			default:
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
+		case strings.HasSuffix(r.URL.Path, "/travel/status"):
+			travelCalls.Add(1)
+			_, _ = w.Write([]byte(`{"code":0,"data":{"state":"idle"}}`))
+		case r.URL.Path == upstreamtest.FreePath:
+			_, _ = w.Write([]byte(upstreamtest.List(upstreamtest.Package(100, 100, ""))))
+		case upstreamtest.Write(w, r.URL.Path):
+		default:
+			_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+		}
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.runBatch(ctx, []taskKind{taskCheckin, taskTravel})
+		close(done)
+	}()
+	select {
+	case <-checkinHit:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("首类任务未及时发起签到请求")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runBatch 在 ctx 取消后未及时退出（错峰等待未响应取消）")
+	}
+	if checkinCalls.Load() != 1 {
+		t.Errorf("首类任务应立即执行，checkinCalls=%d", checkinCalls.Load())
+	}
+	if travelCalls.Load() != 0 {
+		t.Errorf("次类任务处于错峰等待中被取消，不应执行，travelCalls=%d", travelCalls.Load())
+	}
+}
+
+// TestCanceledContextSkipsUpstreamCalls 已取消的 ctx 进入签到/保活/余额刷新时不得再发任何上游请求。
+func TestCanceledContextSkipsUpstreamCalls(t *testing.T) {
+	zeroTaskDelays(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "unexpected call", 500)
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.runCheckin(ctx)
+	s.runKeepalive(ctx)
+	s.runBalanceRefresh(ctx)
+	if n := calls.Load(); n != 0 {
+		t.Errorf("已取消 ctx 下发出了 %d 次上游请求，期望 0", n)
 	}
 }

@@ -76,9 +76,9 @@ var billingRetryDelay = 2 * time.Second
 // isTransientBillingErr 报告 err 是否值得对计费维护类调用做有界重试：
 // 上游 5xx（ErrServer，实测偶发 "code 10000 / API request failed with status
 // code: 500"）或网络层错误（非 *Error 的传输失败）。业务错误（code!=0 的
-// 已签到/参数错、4xx、限流）不重试——重试只会原样再失败一次。
+// 已签到/参数错、4xx、限流）、代理线路错误（RouteError）与主动取消不重试——重试只会原样再失败一次。
 func isTransientBillingErr(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, context.Canceled) || IsRouteError(err) {
 		return false
 	}
 	var ue *Error
