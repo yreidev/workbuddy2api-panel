@@ -423,7 +423,7 @@ func TestSaveConfig(t *testing.T) {
   "features": {"sanitize_blacklist_fingerprints": true},
   "logging": {"request_client_info": true},
   "pool": {"cross_realm": true, "credit_floor": 9, "expiring_soon": "30m"},
-  "panel": {"update_check": true},
+  "panel": {"update_check": true, "update_channel": "prerelease"},
   "upstream": {"timeout_seconds": 45, "model_optimization": true},
   "model_routes": [{"match": " claude-*haiku* ", "target": "cn:glm-5.2 "}],
   "models": {"hidden": ["glm-4.7", "global:gpt-5"]}
@@ -457,7 +457,8 @@ func TestSaveConfig(t *testing.T) {
 
 		snap := live.Load()
 		if snap.APIKey != "new-key" || snap.SoftCooldown != 90*time.Second ||
-			!snap.SanitizeFingerprints || !snap.RecordClientInfo || snap.CrossRealm != livecfg.CrossRealmMerge || !snap.UpdateCheck {
+			!snap.SanitizeFingerprints || !snap.RecordClientInfo || snap.CrossRealm != livecfg.CrossRealmMerge ||
+			!snap.UpdateCheck || snap.UpdateChannel != livecfg.UpdateChannelPrerelease {
 			t.Fatalf("live 快照热生效不对: %+v", snap)
 		}
 		if want := []livecfg.ModelRoute{{Match: "claude-*haiku*", Target: "cn:glm-5.2"}}; !reflect.DeepEqual(snap.ModelRoutes, want) {
@@ -485,6 +486,89 @@ func TestSaveConfig(t *testing.T) {
 		}
 		if want := restartRequiredFields(finalCfg); !reflect.DeepEqual(got, want) {
 			t.Fatalf("返回值应等于 restartRequiredFields: got %v want %v", got, want)
+		}
+	})
+
+	t.Run("局部保存保留 WB2A_* 环境变量覆盖且显式提交仍可覆盖", func(t *testing.T) {
+		t.Setenv("WB2A_API_KEY", "env-secret")
+		t.Setenv("WB2A_SOFT_RATE", "45s")
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte(`{"api_key":"","cooldown":{"soft_rate":"600s"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		live := livecfg.New(livecfg.Snapshot{APIKey: "env-secret", SoftCooldown: 45 * time.Second})
+		p := pool.New("")
+		up := &upstream.Client{}
+		sch := scheduler.New(scheduler.Config{Pool: p, Upstream: up})
+
+		if _, err := saveConfig([]byte(`{"panel":{"update_channel":"prerelease"}}`), path, live, p, up, sch, logStores{}); err != nil {
+			t.Fatalf("partial saveConfig: %v", err)
+		}
+		snap := live.Load()
+		if snap.APIKey != "env-secret" || snap.SoftCooldown != 45*time.Second || snap.UpdateChannel != livecfg.UpdateChannelPrerelease {
+			t.Fatalf("局部保存不应冲掉环境变量覆盖: %+v", snap)
+		}
+		// 磁盘也不应把环境变量密钥写死进去
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "env-secret") {
+			t.Fatalf("环境变量密钥不应落盘: %s", raw)
+		}
+
+		// 显式提交 api_key 时应即时生效
+		if _, err := saveConfig([]byte(`{"api_key":"panel-override"}`), path, live, p, up, sch, logStores{}); err != nil {
+			t.Fatalf("explicit api_key saveConfig: %v", err)
+		}
+		if got := live.Load().APIKey; got != "panel-override" {
+			t.Fatalf("显式提交 api_key 未生效: got %q", got)
+		}
+	})
+
+	t.Run("saveUpdateChannel 轻量写回且不改动其他运行期快照字段", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte(`{"api_key":"","user_note":"保留我","panel":{"update_check":true}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		live := livecfg.New(livecfg.Snapshot{
+			APIKey:        "env-secret",
+			SoftCooldown:  45 * time.Second,
+			UpdateCheck:   true,
+			UpdateChannel: livecfg.UpdateChannelStable,
+		})
+		if err := saveUpdateChannel("beta", path, live); err == nil {
+			t.Fatal("非法更新通道应报错")
+		}
+		if err := saveUpdateChannel(livecfg.UpdateChannelPrerelease, path, live); err != nil {
+			t.Fatalf("saveUpdateChannel: %v", err)
+		}
+		snap := live.Load()
+		if snap.APIKey != "env-secret" || snap.SoftCooldown != 45*time.Second || snap.UpdateChannel != livecfg.UpdateChannelPrerelease {
+			t.Fatalf("saveUpdateChannel 不得改写其他运行期字段: %+v", snap)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var disk map[string]any
+		if err := json.Unmarshal(raw, &disk); err != nil {
+			t.Fatal(err)
+		}
+		panelObj, _ := disk["panel"].(map[string]any)
+		if disk["user_note"] != "保留我" || panelObj["update_channel"] != livecfg.UpdateChannelPrerelease {
+			t.Fatalf("磁盘落盘不对: %s", raw)
+		}
+
+		// 磁盘文件为字面量 null 时不 panic，照常安全合并写回。
+		nullPath := filepath.Join(dir, "null.json")
+		if err := os.WriteFile(nullPath, []byte("null"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := saveUpdateChannel(livecfg.UpdateChannelStable, nullPath, live); err != nil {
+			t.Fatalf("null disk file saveUpdateChannel: %v", err)
 		}
 	})
 }

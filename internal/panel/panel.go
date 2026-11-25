@@ -81,6 +81,8 @@ type Config struct {
 	// SaveConfig 校验并落盘配置，返回需要重启才能生效的字段列表；随后由 main 注入的
 	// ApplyConfig 闭包完成热生效（池参数/排程/密钥/脱敏）。error 时配置不写盘。
 	SaveConfig func(raw []byte) (restartRequired []string, err error)
+	// SaveUpdateChannel 轻量保存 panel.update_channel 并热更新 live 快照，不触动其他运行期配置。
+	SaveUpdateChannel func(channel string) error
 
 	// StickyCount 返回粘性会话绑定数；nil 时报告 0。
 	StickyCount func() int
@@ -212,6 +214,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
 	p.mux.HandleFunc("GET /panel/api/version", p.withAuth(p.version))
 	p.mux.HandleFunc("POST /panel/api/version/check", p.withAuth(p.versionCheck))
+	p.mux.HandleFunc("POST /panel/api/version/channel", p.withAuth(p.versionChannel))
 	p.mux.HandleFunc("POST /panel/api/update", p.withAuth(p.selfUpdate))
 	p.mux.HandleFunc("POST /panel/api/update/rollback", p.withAuth(p.selfUpdateRollback))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))

@@ -9,7 +9,8 @@
   },
   "panel": {
     "package_detail_limit": 5,
-    "update_check": true
+    "update_check": true,
+    "update_channel": "stable"
   },
   "logging": {
     "request_archive_enabled": true,

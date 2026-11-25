@@ -7,7 +7,7 @@ package panel
 // 更新检查：后台定时从 GitHub 读取 main 分支上的 docs/CHANGELOG.md，和本机版本比较，面板据此
 // 提醒「有新版本」并列出新版本的条目；升级后的「本次更新」用内嵌的同一份文件取条目，不联网。
 // 浏览器受 CSP 限制只能请求本服务，所以由网关代为读取。每次只发一个 GET，不带本机任何信息；
-// 读不到就记一行日志，等下一轮。开关是 panel.update_check（经 livecfg 热生效）。
+// 读不到就记一行日志，等下一轮。开关是 panel.update_check，通道是 panel.update_channel（均经 livecfg 热生效）。
 //
 // 一键更新（internal/selfupdate）跟着同一个开关：有新版本时面板可以让网关下载、校验并原地重启到新版，
 // 也可以退回程序自带的版本。
@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/changelog"
+	"github.com/yreidev/workbuddy2api-panel/internal/livecfg"
 	"github.com/yreidev/workbuddy2api-panel/internal/selfupdate"
 )
 
@@ -51,6 +52,14 @@ type updateState struct {
 // updateCheckEnabled 当前是否开着更新检查（没有 Live 的测试面板视为关闭）。
 func (p *Panel) updateCheckEnabled() bool {
 	return p.cfg.Live != nil && p.cfg.Live.Load().UpdateCheck
+}
+
+// updateChannel 当前更新通道（未配置或非 prerelease 一律按 stable）。
+func (p *Panel) updateChannel() string {
+	if p.cfg.Live != nil && p.cfg.Live.Load().UpdateChannel == livecfg.UpdateChannelPrerelease {
+		return livecfg.UpdateChannelPrerelease
+	}
+	return livecfg.UpdateChannelStable
 }
 
 // StartUpdateCheck 启动后台更新检查，ctx 结束时退出。每分钟看一次开关，开着且距上次尝试满 6 小时
@@ -104,9 +113,10 @@ func (p *Panel) checkUpdate(ctx context.Context) {
 	}
 }
 
-// relevant 跑正式版的只提醒正式版；自己跑着预发布版的，预发布版本也提醒。
+// relevant 按当前更新通道过滤远端版本：prerelease 保留全部版本（含 alpha/beta/rc 与正式版），
+// stable 只保留正式版。
 func (p *Panel) relevant(rels []changelog.Release) []changelog.Release {
-	if changelog.Prerelease(p.cfg.Version) {
+	if p.updateChannel() == livecfg.UpdateChannelPrerelease {
 		return rels
 	}
 	return changelog.Stable(rels)
@@ -148,8 +158,9 @@ func (p *Panel) fetchChangelog(ctx context.Context) ([]changelog.Release, error)
 
 // versionResp GET /panel/api/version 的返回。
 type versionResp struct {
-	Version     string `json:"version"`
-	UpdateCheck bool   `json:"update_check"`
+	Version       string `json:"version"`
+	UpdateCheck   bool   `json:"update_check"`
+	UpdateChannel string `json:"update_channel"`
 	// 以下几项只在更新检查开着时给出
 	Latest          string              `json:"latest,omitempty"` // 远端最新版本；还没读到过时为空
 	UpdateAvailable bool                `json:"update_available"`
@@ -166,10 +177,19 @@ type versionResp struct {
 
 // version 版本与更新信息：面板的更新提醒和「本次更新」弹窗都读这里。
 func (p *Panel) version(w http.ResponseWriter, r *http.Request) {
-	out := versionResp{Version: p.cfg.Version, UpdateCheck: p.updateCheckEnabled()}
+	out := versionResp{
+		Version:       p.cfg.Version,
+		UpdateCheck:   p.updateCheckEnabled(),
+		UpdateChannel: p.updateChannel(),
+	}
 	switch since := r.URL.Query().Get("since"); {
 	case changelog.Valid(since):
-		out.WhatsNew = changelog.Between(p.releases, since, p.cfg.Version)
+		rels := p.releases
+		// 正式版直接升正式版时跳过中间预发布条目（正式版日志已汇总期间改动，避免重复列出）。
+		if !changelog.Prerelease(since) && !changelog.Prerelease(p.cfg.Version) {
+			rels = changelog.Stable(rels)
+		}
+		out.WhatsNew = changelog.Between(rels, since, p.cfg.Version)
 	case since == "none":
 		// 这个浏览器没看过任何版本（新装，或从还没有更新提醒的旧版升上来）：只给本机这一版，不翻出全部历史
 		for _, rel := range p.releases {
@@ -214,6 +234,31 @@ func (p *Panel) versionCheck(w http.ResponseWriter, r *http.Request) {
 	p.upd.mu.Unlock()
 	if !recent {
 		p.checkUpdate(r.Context())
+	}
+	p.version(w, r)
+}
+
+// versionChannel 面板「版本信息」弹窗快捷切换更新通道：只校验并保存 panel.update_channel，
+// 返回最新 version 视图，不触发全量配置热应用。
+func (p *Panel) versionChannel(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.SaveUpdateChannel == nil {
+		writeErr(w, http.StatusNotImplemented, "更新通道保存接口未接入")
+		return
+	}
+	var body struct {
+		Channel string `json:"channel"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求体不是合法 JSON")
+		return
+	}
+	if body.Channel != livecfg.UpdateChannelStable && body.Channel != livecfg.UpdateChannelPrerelease {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("panel.update_channel 只能是 stable、prerelease，不认 %q", body.Channel))
+		return
+	}
+	if err := p.cfg.SaveUpdateChannel(body.Channel); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	p.version(w, r)
 }

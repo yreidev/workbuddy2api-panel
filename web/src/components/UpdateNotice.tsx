@@ -10,17 +10,17 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Circle, CircleCheckFill } from '@gravity-ui/icons'
 import { useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, buttonVariants, Chip, Label, Link, Modal, ProgressBar, Spinner, Surface, toast, Typography } from '@heroui/react'
+import { Alert, Button, buttonVariants, Chip, Label, Link, ListBox, Modal, ProgressBar, Select, Spinner, Surface, toast, Typography } from '@heroui/react'
 import { post } from '../lib/api'
 import { fmtBytes, dateTime } from '../lib/format'
 import { toastError, useNow } from '../lib/hooks'
 import { qk, useVersion } from '../lib/queries'
 import {
-  DISMISSED_UPDATE_KEY, SEEN_VERSION_KEY, inlineParts, pickNotice, readStored, restartOutcome, shouldRecordSeen, updateProgress, writeStored,
+  DISMISSED_UPDATE_KEY, SEEN_VERSION_KEY, dockerImageTag, inlineParts, isPrerelease, pickNotice, readStored, restartOutcome, shouldRecordSeen, updateBusy, updateProgress, writeStored,
   type NoticeMode, type PendingRestart, type UpdateStep,
 } from '../lib/update'
 import { LICENSE_URL, NOTICE_URL, REPO_URL, UPSTREAMS } from '../lib/notice'
-import type { Release, SelfUpdatePhase, SelfUpdateStatus, VersionResp } from '../lib/types'
+import type { Release, SelfUpdatePhase, SelfUpdateStatus, UpdateChannel, VersionResp } from '../lib/types'
 import { BusyButton } from './Feedback'
 import { useConfirm } from './useConfirm'
 
@@ -110,6 +110,7 @@ export function UpdateNotice({ manual, onManualChange }: { manual: ManualPanel; 
     confirmLabel: '更新并重启',
     body: (
       <>
+        {isPrerelease(version) && <>v{version} 是预发布版本，仍在测试验证阶段。</>}
         网关会从 GitHub 下载 v{version}，核对 sha256 并试运行通过后重启：停止接新请求，在途请求最多等 {su.grace_sec} 秒，
         一般一分钟内恢复，页面会自动刷新。新程序放在数据目录的 <Code>bin/</Code> 里，镜像不变；之后可以在「版本信息」里退回
         v{su.base}。
@@ -181,7 +182,7 @@ export function UpdateNotice({ manual, onManualChange }: { manual: ManualPanel; 
           </Alert>
         )}
         <ReleaseList releases={updates} />
-        <UpgradeSteps su={su} />
+        <UpgradeSteps su={su} latest={data?.latest} />
       </NoticeModal>
       <AboutModal
         open={mode === 'about'}
@@ -243,14 +244,33 @@ function AboutModal({ open, onClose, data, onShowUpdate, onRollback }: {
   const qc = useQueryClient()
   const [checking, setChecking] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [savingChannel, setSavingChannel] = useState(false)
   const su = data?.self_update
+  const channel: UpdateChannel = data?.update_channel === 'prerelease' ? 'prerelease' : 'stable'
+
+  const switchChannel = async (next: UpdateChannel) => {
+    if (next === channel) return
+    setSavingChannel(true)
+    try {
+      const r = await post<VersionResp>('version/channel', { channel: next })
+      qc.setQueryData<VersionResp>(qk.version, (old) => ({ ...r, whats_new: old?.whats_new ?? r.whats_new }))
+      toast.success(next === 'prerelease' ? '已切换到预发布通道' : '已切换到正式版通道')
+      void qc.invalidateQueries({ queryKey: qk.config })
+    } catch (e) {
+      toastError(e, '切换更新通道失败：')
+    } finally {
+      setSavingChannel(false)
+    }
+  }
 
   const checkNow = async () => {
     setChecking(true)
     try {
       const r = await post<VersionResp>('version/check')
       if (r.check_error) toast.danger('检查更新失败：' + r.check_error)
-      else toast.success(r.update_available ? `有新版本 v${r.latest}` : '已是最新版本')
+      else if (r.update_available) toast.success(`有新版本 v${r.latest}`)
+      else if (r.latest && r.version !== r.latest) toast.success(`当前版本（v${r.version}）比通道最新 v${r.latest} 更新`)
+      else toast.success('已是最新版本')
       await qc.invalidateQueries({ queryKey: qk.version })
     } catch (e) {
       toastError(e, '检查更新失败：')
@@ -273,7 +293,11 @@ function AboutModal({ open, onClose, data, onShowUpdate, onRollback }: {
   }
 
   const latest = !data?.update_check ? '更新检查已关闭（配置 → 服务 → 检查更新）'
-    : data.latest ? (data.update_available ? `v${data.latest}（有新版本）` : `v${data.latest}（已是最新）`)
+    : data.latest ? (
+      data.update_available ? `v${data.latest}（有新版本）`
+        : data.version !== data.latest ? `v${data.latest}（当前版本较新）`
+        : `v${data.latest}（已是最新）`
+    )
     : data.check_error ? '还没读到' : '启动后约一分钟读取'
   return (
     <NoticeModal
@@ -300,6 +324,34 @@ function AboutModal({ open, onClose, data, onShowUpdate, onRollback }: {
           <>
             <dt className="text-muted">程序自带</dt>
             <dd>v{su.base}</dd>
+          </>
+        )}
+        {data?.update_check && (
+          <>
+            <dt className="self-center text-muted">更新通道</dt>
+            <dd>
+              <Select
+                aria-label="更新通道"
+                variant="secondary"
+                value={channel}
+                isDisabled={savingChannel || updateBusy(su)}
+                onChange={(v) => {
+                  if (v === 'stable' || v === 'prerelease') void switchChannel(v)
+                }}
+                className="w-full max-w-64"
+              >
+                <Select.Trigger>
+                  <Select.Value />
+                  <Select.Indicator />
+                </Select.Trigger>
+                <Select.Popover>
+                  <ListBox>
+                    <ListBox.Item id="stable" textValue="正式版（仅正式发版）">正式版（仅正式发版）<ListBox.ItemIndicator /></ListBox.Item>
+                    <ListBox.Item id="prerelease" textValue="预发布版（含 alpha / beta / rc）">预发布版（含 alpha / beta / rc）<ListBox.ItemIndicator /></ListBox.Item>
+                  </ListBox>
+                </Select.Popover>
+              </Select>
+            </dd>
           </>
         )}
         <dt className="text-muted">最新版本</dt>
@@ -481,8 +533,9 @@ function ReleaseList({ releases }: { releases: Release[] }) {
     <div className="flex flex-col gap-5">
       {releases.map((r) => (
         <section key={r.version} className="flex flex-col gap-2">
-          <h3 className="flex items-baseline gap-2 text-sm font-semibold text-foreground">
-            v{r.version}
+          <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
+            <span>v{r.version}</span>
+            {isPrerelease(r.version) && <Chip size="sm" variant="soft" color="warning">预发布</Chip>}
             {r.date && <span className="text-xs font-normal text-muted">{r.date}</span>}
           </h3>
           {r.summary && <p className="text-sm text-muted"><Inline text={r.summary} /></p>}
@@ -500,14 +553,18 @@ function ReleaseList({ releases }: { releases: Release[] }) {
   )
 }
 
-function UpgradeSteps({ su }: { su?: SelfUpdateStatus }) {
+function UpgradeSteps({ su, latest }: { su?: SelfUpdateStatus; latest?: string }) {
+  const pre = isPrerelease(latest)
+  const imageTag = dockerImageTag(latest)
   return (
     <Surface<'section'> variant="secondary" render={(props) => <section {...props} />} className="mt-5 flex flex-col gap-2 rounded-xl p-3 text-sm text-foreground">
       <p className="font-medium">{su?.supported ? '手动升级' : '升级方法'}</p>
       {su && !su.supported && <p className="text-muted">一键更新不可用：{su.reason}</p>}
       <p>
         <span className="text-muted">docker run：</span>
-        先 <Code>docker pull ghcr.io/yreidev/workbuddy2api-panel:latest</Code>，删掉旧容器后按原来的参数重新 <Code>docker run</Code>
+        先 <Code>docker pull ghcr.io/yreidev/workbuddy2api-panel:{imageTag}</Code>，
+        {pre ? <>删掉旧容器后将镜像标签改为 <Code>:{imageTag}</Code> 重新 <Code>docker run</Code></>
+          : <>删掉旧容器后按原来的参数重新 <Code>docker run</Code></>}
       </p>
       <p>
         <span className="text-muted">Docker Compose：</span>

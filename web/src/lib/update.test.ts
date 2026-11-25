@@ -3,12 +3,12 @@
 // 复制或改写本文件须保留以上声明，并按 NOTICE 的署名条款注明出处：https://github.com/yreidev/workbuddy2api-panel
 
 import { describe, expect, it } from 'vitest'
-import { inlineParts, pickNotice, restartOutcome, shouldRecordSeen, updateBusy, updateProgress } from './update'
+import { dockerImageTag, inlineParts, isPrerelease, pickNotice, restartOutcome, shouldRecordSeen, updateBusy, updateProgress } from './update'
 import type { Release, SelfUpdateStatus, VersionResp } from './types'
 
 const rel = (version: string): Release => ({ version, groups: [{ title: '新增', items: ['x'] }] })
 const resp = (over: Partial<VersionResp> = {}): VersionResp => ({
-  version: '1.1.0', update_check: true, update_available: false, updates: null, whats_new: null, ...over,
+  version: '1.1.0', update_check: true, update_channel: 'stable', update_available: false, updates: null, whats_new: null, ...over,
 })
 
 describe('pickNotice', () => {
@@ -127,5 +127,16 @@ describe('updateProgress', () => {
     expect(r.steps.map((x) => x.key)).toEqual(['restart'])
     expect(states(r)).toEqual(['active'])
     expect(r.percent).toBeNull()
+  })
+})
+
+describe('预发布版本与镜像标签', () => {
+  it('按是否带预发布后缀判断预发布与 GHCR 镜像标签', () => {
+    expect(isPrerelease('1.14.0-rc.2')).toBe(true)
+    expect(isPrerelease('1.14.0')).toBe(false)
+    expect(isPrerelease(undefined)).toBe(false)
+    expect(dockerImageTag('1.14.0-rc.2')).toBe('1.14.0-rc.2')
+    expect(dockerImageTag('1.14.0')).toBe('latest')
+    expect(dockerImageTag(undefined)).toBe('latest')
   })
 })

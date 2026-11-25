@@ -122,23 +122,62 @@ func TestCheckUpdateUpToDate(t *testing.T) {
 	}
 }
 
-// 跑正式版的不提醒预发布版本；跑预发布版的照常提醒。
+// 更新通道过滤：stable 只认正式版；prerelease 认正式版与预发布版，且热切换立即生效并同步限制一键更新。
 func TestCheckUpdatePrerelease(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("## [1.3.0-rc.1] - 2026-11-05\n\n- 试用\n\n" + remoteChangelog[len("# 更新日志\n\n"):]))
 	}))
 	defer srv.Close()
-	for _, c := range []struct{ version, latest, updates string }{
-		{"1.1.0", "1.2.0", "1.2.0"},
-		{"1.2.0", "1.2.0", ""},
-		{"1.2.1-rc.1", "1.3.0-rc.1", "1.3.0-rc.1"},
+	for _, c := range []struct{ version, channel, wantChannel, latest, updates string }{
+		{"1.1.0", "", livecfg.UpdateChannelStable, "1.2.0", "1.2.0"},
+		{"1.2.0", livecfg.UpdateChannelStable, livecfg.UpdateChannelStable, "1.2.0", ""},
+		{"1.2.1-rc.1", livecfg.UpdateChannelStable, livecfg.UpdateChannelStable, "1.2.0", ""},
+		{"1.1.0", livecfg.UpdateChannelPrerelease, livecfg.UpdateChannelPrerelease, "1.3.0-rc.1", "1.3.0-rc.1,1.2.0"},
+		{"1.2.0", livecfg.UpdateChannelPrerelease, livecfg.UpdateChannelPrerelease, "1.3.0-rc.1", "1.3.0-rc.1"},
+		{"1.2.1-rc.1", livecfg.UpdateChannelPrerelease, livecfg.UpdateChannelPrerelease, "1.3.0-rc.1", "1.3.0-rc.1"},
 	} {
-		p := New(Config{Version: c.version, UpdateURL: srv.URL, Live: livecfg.New(livecfg.Snapshot{UpdateCheck: true})})
+		p := New(Config{Version: c.version, UpdateURL: srv.URL, Live: livecfg.New(livecfg.Snapshot{UpdateCheck: true, UpdateChannel: c.channel})})
 		p.checkUpdate(context.Background())
 		got := getVersion(t, p, "")
-		if got.Latest != c.latest || releaseVersions(got.Updates) != c.updates || got.UpdateAvailable != (c.updates != "") {
-			t.Fatalf("version %s: %+v", c.version, got)
+		if got.UpdateChannel != c.wantChannel || got.Latest != c.latest || releaseVersions(got.Updates) != c.updates || got.UpdateAvailable != (c.updates != "") {
+			t.Fatalf("version %s channel %q: %+v", c.version, c.channel, got)
 		}
+	}
+
+	// 热切换通道：无需重拉远端日志即生效，且 POST /panel/api/update 按当前通道放行或拦截预发布版本。
+	upd := selfupdate.Launch(t.TempDir(), "1.2.0")
+	release := httptest.NewServer(http.NotFoundHandler())
+	defer release.Close()
+	upd.DownloadBase = release.URL + "/"
+	upd.Restart = func() { t.Error("下载失败时不应该重启") }
+
+	live := livecfg.New(livecfg.Snapshot{UpdateCheck: true, UpdateChannel: livecfg.UpdateChannelStable})
+	p := New(Config{Version: "1.2.0", UpdateURL: srv.URL, Live: live, Updater: upd})
+	p.checkUpdate(context.Background())
+	if got := getVersion(t, p, ""); got.UpdateChannel != livecfg.UpdateChannelStable || got.UpdateAvailable || got.Latest != "1.2.0" {
+		t.Fatalf("stable before switch = %+v", got)
+	}
+	if rr := postJSON(t, p, "/panel/api/update", `{"version":"1.3.0-rc.1"}`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("stable channel should reject prerelease update, status=%d", rr.Code)
+	}
+
+	live.Store(livecfg.Snapshot{UpdateCheck: true, UpdateChannel: livecfg.UpdateChannelPrerelease})
+	if got := getVersion(t, p, ""); got.UpdateChannel != livecfg.UpdateChannelPrerelease || !got.UpdateAvailable || got.Latest != "1.3.0-rc.1" {
+		t.Fatalf("prerelease after hot switch = %+v", got)
+	}
+	if rr := postJSON(t, p, "/panel/api/update", `{"version":"1.3.0-rc.1"}`); rr.Code != http.StatusAccepted {
+		t.Fatalf("prerelease channel should accept prerelease update, status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	// 等后台下载协程结束，避免与 t.TempDir() 清理竞态。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if s := getVersion(t, p, "").SelfUpdate; s.Phase == selfupdate.PhaseFailed && s.Target == "1.3.0-rc.1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("prerelease self_update did not finish: %+v", getVersion(t, p, "").SelfUpdate)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -270,5 +309,102 @@ func TestSelfUpdateEndpoints(t *testing.T) {
 	// 没有面板装的版本：无从退回
 	if rr := postJSON(t, p, "/panel/api/update/rollback", ""); rr.Code != http.StatusBadRequest {
 		t.Fatalf("rollback status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestVersionChannelEndpointAndWhatsNewFilter(t *testing.T) {
+	fullChangelog := `# 更新日志
+
+## [1.2.0] - 2026-11-10
+
+### 新增
+
+- 正式版汇总
+
+## [1.2.0-rc.2] - 2026-11-08
+
+### 修复
+
+- RC2 修复
+
+## [1.2.0-rc.1] - 2026-11-05
+
+### 新增
+
+- RC1 试用
+
+## [1.1.0] - 2026-10-25
+
+### 修复
+
+- 旧正式版
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("## [1.3.0-rc.1] - 2026-11-12\n\n- 新预发布\n\n" + fullChangelog[len("# 更新日志\n\n"):]))
+	}))
+	defer srv.Close()
+
+	// 1) WhatsNew：正式版 → 正式版跳过中间 RC，不重复展示；预发布参与的升级照旧展示中间版本。
+	pStable := New(Config{Version: "1.2.0", Changelog: fullChangelog, UpdateURL: srv.URL, Live: livecfg.New(livecfg.Snapshot{UpdateCheck: true})})
+	if got := releaseVersions(getVersion(t, pStable, "?since=1.1.0").WhatsNew); got != "1.2.0" {
+		t.Fatalf("stable→stable whats_new=%q want 1.2.0", got)
+	}
+	if got := releaseVersions(getVersion(t, pStable, "?since=1.2.0-rc.1").WhatsNew); got != "1.2.0,1.2.0-rc.2" {
+		t.Fatalf("rc→stable whats_new=%q want 1.2.0,1.2.0-rc.2", got)
+	}
+	pPre := New(Config{Version: "1.2.0-rc.2", Changelog: fullChangelog, UpdateURL: srv.URL, Live: livecfg.New(livecfg.Snapshot{UpdateCheck: true})})
+	if got := releaseVersions(getVersion(t, pPre, "?since=1.1.0").WhatsNew); got != "1.2.0-rc.2,1.2.0-rc.1" {
+		t.Fatalf("stable→rc whats_new=%q want 1.2.0-rc.2,1.2.0-rc.1", got)
+	}
+
+	// 2) POST /panel/api/version/channel：未接入 501；非法参数 400；切换成功落盘并即时返回最新 versionResp。
+	if rr := postJSON(t, pStable, "/panel/api/version/channel", `{"channel":"prerelease"}`); rr.Code != http.StatusNotImplemented {
+		t.Fatalf("without saver status=%d want 501", rr.Code)
+	}
+
+	live := livecfg.New(livecfg.Snapshot{UpdateCheck: true, UpdateChannel: livecfg.UpdateChannelStable})
+	var saved string
+	p := New(Config{
+		Version:   "1.2.0",
+		Changelog: fullChangelog,
+		UpdateURL: srv.URL,
+		Live:      live,
+		SaveUpdateChannel: func(ch string) error {
+			saved = ch
+			snap := live.Load()
+			snap.UpdateChannel = ch
+			live.Store(snap)
+			return nil
+		},
+	})
+	p.checkUpdate(context.Background())
+
+	for _, body := range []string{`not json`, `{}`, `{"channel":"beta"}`} {
+		if rr := postJSON(t, p, "/panel/api/version/channel", body); rr.Code != http.StatusBadRequest {
+			t.Fatalf("bad body %s status=%d want 400", body, rr.Code)
+		}
+	}
+	rr := postJSON(t, p, "/panel/api/version/channel", `{"channel":"prerelease"}`)
+	if rr.Code != http.StatusOK || saved != livecfg.UpdateChannelPrerelease {
+		t.Fatalf("switch status=%d saved=%q body=%s", rr.Code, saved, rr.Body.String())
+	}
+	var got versionResp
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.UpdateChannel != livecfg.UpdateChannelPrerelease || !got.UpdateAvailable || got.Latest != "1.3.0-rc.1" {
+		t.Fatalf("after channel switch = %+v", got)
+	}
+
+	// 持久化失败返回 500 Internal Server Error（而非 400）。
+	pFail := New(Config{
+		Version: "1.2.0",
+		Live:    live,
+		SaveUpdateChannel: func(string) error {
+			return http.ErrHandlerTimeout
+		},
+	})
+	if rr := postJSON(t, pFail, "/panel/api/version/channel", `{"channel":"stable"}`); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("saver error status=%d want 500", rr.Code)
 	}
 }

@@ -74,6 +74,31 @@ func TestPanelUpdateCheck(t *testing.T) {
 	}
 }
 
+func TestPanelUpdateChannel(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{}`:                                        livecfg.UpdateChannelStable,
+		`{"panel":{"update_channel":""}}`:           livecfg.UpdateChannelStable,
+		`{"panel":{"update_channel":"stable"}}`:     livecfg.UpdateChannelStable,
+		`{"panel":{"update_channel":"prerelease"}}`: livecfg.UpdateChannelPrerelease,
+	} {
+		c, err := ParseConfig([]byte(raw))
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if c.Panel.UpdateChannel != want {
+			t.Errorf("%s: UpdateChannel=%q want %q", raw, c.Panel.UpdateChannel, want)
+		}
+	}
+	for _, raw := range []string{
+		`{"panel":{"update_channel":"beta"}}`,
+		`{"panel":{"update_channel":"Stable"}}`,
+	} {
+		if _, err := ParseConfig([]byte(raw)); err == nil {
+			t.Errorf("%s: 应拒绝非法更新通道", raw)
+		}
+	}
+}
+
 func TestLoggingDefaults(t *testing.T) {
 	c := Default()
 	if err := c.normalize(); err != nil {

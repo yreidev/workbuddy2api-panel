@@ -50,6 +50,9 @@ type Config struct {
 		// UpdateCheck 每 6 小时读取一次 GitHub 上的更新日志，有新版本时面板提醒；缺省 true。
 		// 热生效（经 livecfg 快照）。
 		UpdateCheck bool `json:"update_check"`
+		// UpdateChannel 更新通道（见 livecfg.UpdateChannel*）："stable" 仅正式版（缺省），
+		// "prerelease" 包含预发布版（alpha / beta / rc）。热生效（经 livecfg 快照）。
+		UpdateChannel string `json:"update_channel"`
 	} `json:"panel"`
 
 	Logging struct {
@@ -330,6 +333,7 @@ func Default() *Config {
 	c.Server.ReadTimeout = "300s"
 	c.Panel.PackageDetailLimit = 5
 	c.Panel.UpdateCheck = true
+	c.Panel.UpdateChannel = livecfg.UpdateChannelStable
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
@@ -772,6 +776,13 @@ func (c *Config) normalize() error {
 	}
 	if err := c.normalizeDNSServers(); err != nil {
 		return err
+	}
+	switch c.Panel.UpdateChannel {
+	case "":
+		c.Panel.UpdateChannel = livecfg.UpdateChannelStable
+	case livecfg.UpdateChannelStable, livecfg.UpdateChannelPrerelease:
+	default:
+		return fmt.Errorf("panel.update_channel 只能是 stable、prerelease，不认 %q", c.Panel.UpdateChannel)
 	}
 	switch c.Pool.CrossRealm {
 	case "":

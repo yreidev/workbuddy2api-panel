@@ -67,6 +67,17 @@ describe('配置表单', () => {
     expect(body.pool.cross_realm).toBe('cn_first')
   })
 
+  it('更新通道是二选一：位于服务标签页、热生效、原样回填并提交', () => {
+    expect(tabOfField('update_channel')).toBe('service')
+    expect(field('update_channel').kind).toBe('select')
+    expect(field('update_channel').restart).toBeFalsy()
+    expect(field('update_channel').options!.map((o) => o.id)).toEqual(['stable', 'prerelease'])
+    const form = toForm({ panel: { update_channel: 'prerelease' } })
+    expect(form.update_channel).toBe('prerelease')
+    const body = fromForm(form) as Record<string, Record<string, unknown>>
+    expect(body.panel.update_channel).toBe('prerelease')
+  })
+
   it('时长、时点、数字校验', () => {
     expect(validateField(field('soft_rate'), '1h30m')).toBeNull()
     expect(validateField(field('soft_rate'), '30 分钟')).not.toBeNull()

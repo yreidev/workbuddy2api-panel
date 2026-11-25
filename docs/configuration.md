@@ -37,6 +37,7 @@
 | `server.read_timeout` | `300s` | 读取一个入站请求（含上传请求体）的总时长上限。大上下文请求经反代转发超时会报 400 `read body: i/o timeout`，可调大；`0` = 不限制 |
 | `panel.package_detail_limit` | `5` | 积分构成页单个账号默认展开的最早到期积分包数，其余折叠 |
 | `panel.update_check` | `true` | 每 6 小时从 GitHub 读取一次更新日志，有新版本时面板提醒，并可[一键更新](panel.md#一键更新)；`false` = 不联网检查，也不出现一键更新按钮。见[更新提醒](panel.md#更新提醒) |
+| `panel.update_channel` | `stable` | 更新通道（热生效）：`stable` 仅追踪正式版；`prerelease` 同时追踪正式版与预发布版（`alpha` / `beta` / `rc`）。需开启 `panel.update_check`；在「配置 → 服务」或侧栏「版本信息」弹窗均可切换 |
 
 ### 日志留存
 

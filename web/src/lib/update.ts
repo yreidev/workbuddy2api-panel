@@ -44,6 +44,16 @@ export function shouldRecordSeen(d: VersionResp, seen: string | null): boolean {
   return seen !== d.version && !d.whats_new?.length
 }
 
+/** 版本号是否带预发布后缀（如 1.14.0-rc.2） */
+export function isPrerelease(version?: string): boolean {
+  return !!version && version.includes('-')
+}
+
+/** 对应目标版本的 GHCR 镜像标签：正式版推 latest，预发布版只推完整版本标签 */
+export function dockerImageTag(version?: string): string {
+  return version && isPrerelease(version) ? version : 'latest'
+}
+
 /** 一键更新正在下载、校验或重启 */
 export function updateBusy(s?: SelfUpdateStatus | null): boolean {
   return s?.phase === 'downloading' || s?.phase === 'verifying' || s?.phase === 'restarting'

@@ -20,6 +20,7 @@ func TestNewAndLoad(t *testing.T) {
 		RecordClientInfo:     true,
 		CrossRealm:           CrossRealmMerge,
 		UpdateCheck:          true,
+		UpdateChannel:        UpdateChannelPrerelease,
 		ModelRoutes:          []ModelRoute{{Match: "claude-*", Target: "glm-5.2"}},
 	}
 	h := New(want)
@@ -30,10 +31,10 @@ func TestNewAndLoad(t *testing.T) {
 
 // TestStoreReplacesSnapshot Store 后 Load 拿到新值，旧快照整体被替换。
 func TestStoreReplacesSnapshot(t *testing.T) {
-	h := New(Snapshot{APIKey: "old", SoftCooldown: time.Minute})
-	h.Store(Snapshot{APIKey: "new", CrossRealm: CrossRealmCNFirst})
+	h := New(Snapshot{APIKey: "old", SoftCooldown: time.Minute, UpdateChannel: UpdateChannelStable})
+	h.Store(Snapshot{APIKey: "new", CrossRealm: CrossRealmCNFirst, UpdateChannel: UpdateChannelPrerelease})
 	got := h.Load()
-	if got.APIKey != "new" || got.CrossRealm != CrossRealmCNFirst || got.SoftCooldown != 0 {
+	if got.APIKey != "new" || got.CrossRealm != CrossRealmCNFirst || got.UpdateChannel != UpdateChannelPrerelease || got.SoftCooldown != 0 {
 		t.Errorf("Store 后 = %+v", got)
 	}
 }

@@ -27,6 +27,7 @@ type Snapshot struct {
 	RecordClientInfo     bool          // 请求日志是否记录调用来源（客户端 IP / UA）
 	CrossRealm           string        // 跨域负载均衡（pool.cross_realm）：CrossRealmMerge、CrossRealmCNFirst，空或 CrossRealmOff 为关
 	UpdateCheck          bool          // 面板定时检查新版本（读 GitHub 上的更新日志）
+	UpdateChannel        string        // 更新通道（panel.update_channel）：UpdateChannelPrerelease 含预发布，空或 UpdateChannelStable 仅正式版
 	ModelRoutes          []ModelRoute  // 模型路由规则：按顺序匹配，只改写模型目录里没有的名字
 	// HiddenModels 不对外的模型，键是带域前缀的全名（cn:x / global:x），见 NormalizeHiddenModels；
 	// nil = 不隐藏。只读共享，不得修改。
@@ -38,6 +39,12 @@ const (
 	CrossRealmOff     = "off"      // 只走国内版
 	CrossRealmMerge   = "merge"    // 两个域都有这个模型时合池选号
 	CrossRealmCNFirst = "cn_first" // 国内版优先：国内版此刻没有能接的号才用国际版
+)
+
+// panel.update_channel 的两档（Snapshot.UpdateChannel）：更新检查与一键更新追踪哪些版本。
+const (
+	UpdateChannelStable     = "stable"     // 仅正式版（默认）
+	UpdateChannelPrerelease = "prerelease" // 正式版 + 预发布版（alpha / beta / rc）
 )
 
 // NormalizeHiddenModels 把 models.hidden 的条目归一成带域前缀的全名集合：带 cn: / global:

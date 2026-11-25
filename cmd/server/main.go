@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -327,6 +328,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
 		CrossRealm:           string(cfg.Pool.CrossRealm),
 		UpdateCheck:          cfg.Panel.UpdateCheck,
+		UpdateChannel:        cfg.Panel.UpdateChannel,
 		ModelRoutes:          cfg.ModelRoutes,
 		HiddenModels:         livecfg.NormalizeHiddenModels(cfg.Models.Hidden),
 	})
@@ -418,6 +420,7 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 	log.Printf("[logs] 积分获取流水 %s：%s", stateSibling(cfg.StateFile, "credit-logs"),
 		runtimeLogText(cfg.Logging.CreditLogEnabled, cfg.Logging.CreditLogRetentionDays, cfg.Logging.CreditLogMaxMB))
 	logs := logStores{requests: requestLog, task: taskLog, system: systemLog, credit: creditLog, usage: rec}
+	var cfgMu sync.RWMutex
 
 	pn := panel.New(panel.Config{
 		Providers:   providerManager,
@@ -444,10 +447,19 @@ func run(ctx context.Context, cfg *Config, cfgPath string, upd *selfupdate.Updat
 		Proxies:    proxyReg,
 		ConfigPath: cfgPath,
 		LoadConfig: func() (any, error) {
+			cfgMu.RLock()
+			defer cfgMu.RUnlock()
 			return Load(cfgPath)
 		},
 		SaveConfig: func(raw []byte) ([]string, error) {
+			cfgMu.Lock()
+			defer cfgMu.Unlock()
 			return saveConfig(raw, cfgPath, live, p, up, sch, logs)
+		},
+		SaveUpdateChannel: func(channel string) error {
+			cfgMu.Lock()
+			defer cfgMu.Unlock()
+			return saveUpdateChannel(channel, cfgPath, live)
 		},
 	})
 	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
@@ -781,7 +793,7 @@ var renameConfig = os.Rename
 // saveConfig 面板保存配置：校验 → 落盘 → 热应用 → 返回需重启的字段列表。
 //
 // 热生效范围（设计取舍）：
-//   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints / pool.cross_realm / panel.update_check / model_routes / models.hidden → livecfg 快照
+//   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints / pool.cross_realm / panel.update_check / panel.update_channel / model_routes / models.hidden → livecfg 快照
 //   - features.sanitize_blacklist_fingerprints / upstream.model_optimization → upstream.Client 的 atomic 开关
 //   - pool.* → pool.SetBreaker/SetMaxInFlight/SetMaxRPM/SetMaxTPM/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor/SetRestrictionWave
 //   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetExpiringSoonWindow
@@ -800,16 +812,26 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		return nil, fmt.Errorf("read current config: %w", err)
 	}
 	var cur, incoming map[string]any
-	if err := json.Unmarshal(oldRaw, &cur); err != nil {
+	if err := json.Unmarshal(oldRaw, &cur); err != nil || cur == nil {
 		cur = map[string]any{}
 	}
 	if err := json.Unmarshal(raw, &incoming); err != nil {
 		return nil, fmt.Errorf("parse submitted config: %w", err)
 	}
+	if incoming == nil {
+		return nil, errors.New("parse submitted config: expected JSON object")
+	}
 	merged := mergeConfigMaps(cur, incoming)
 
 	// 2) 校验（与启动同一套 Default+normalize），失败直接返回、不落盘。
-	newCfg, err := ParseConfig(mergedJSON(merged))
+	mergedRaw := mergedJSON(merged)
+	newCfg, err := ParseConfig(mergedRaw)
+	if err != nil {
+		return nil, err
+	}
+	// 运行期热应用保留未被本次 incoming 显式提交的 WB2A_* 环境变量覆盖，避免局部 POST 把
+	// WB2A_API_KEY 等环境变量冲回磁盘旧值或空值。
+	runtimeCfg, err := effectiveRuntimeConfig(mergedRaw, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -819,9 +841,78 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
+	if err := writeConfigFile(path, out); err != nil {
+		return nil, err
+	}
+
+	// 4) 热应用：能立即生效的字段全部应用，并列出仍需重启的字段。
+	live.Store(livecfg.Snapshot{
+		APIKey:               runtimeCfg.APIKey,
+		SoftCooldown:         runtimeCfg.SoftRateDur,
+		SanitizeFingerprints: runtimeCfg.Features.SanitizeBlacklistFingerprints,
+		RecordClientInfo:     runtimeCfg.Logging.RequestClientInfo,
+		CrossRealm:           string(runtimeCfg.Pool.CrossRealm),
+		UpdateCheck:          runtimeCfg.Panel.UpdateCheck,
+		UpdateChannel:        runtimeCfg.Panel.UpdateChannel,
+		ModelRoutes:          runtimeCfg.ModelRoutes,
+		HiddenModels:         livecfg.NormalizeHiddenModels(runtimeCfg.Models.Hidden),
+	})
+	up.SanitizeFingerprints.Store(runtimeCfg.Features.SanitizeBlacklistFingerprints)
+	up.ModelOptimization.Store(runtimeCfg.Upstream.ModelOptimization)
+	upstream.SetTLSMimic(runtimeCfg.Upstream.TLSFingerprint) // TLS 指纹伪装开关（atomic，新建连接起用）
+	p.SetBreaker(runtimeCfg.Pool.BreakerThreshold, runtimeCfg.BreakerCooldownDur, runtimeCfg.BreakerCooldownMaxD)
+	p.SetMaxInFlight(runtimeCfg.Pool.MaxInFlight)
+	p.SetMaxInFlightGlobal(runtimeCfg.Pool.MaxInFlightGlobal)
+	p.SetInFlightWait(runtimeCfg.InFlightWaitDur)
+	p.SetMaxRPM(runtimeCfg.Pool.MaxRPM)
+	p.SetMaxRPMGlobal(runtimeCfg.Pool.MaxRPMGlobal)
+	p.SetMaxTPM(runtimeCfg.Pool.MaxTPM)
+	p.SetMaxTPMGlobal(runtimeCfg.Pool.MaxTPMGlobal)
+	p.SetDegrade(runtimeCfg.Pool.DegradeThreshold, runtimeCfg.DegradeCooldownDur, runtimeCfg.DegradeCooldownMaxD)
+	p.SetSoftRateMax(runtimeCfg.SoftRateMaxDur)
+	p.SetCostExploreInterval(runtimeCfg.CostExploreIntervalDur) // costTier 探索窗口热生效（0 关停）
+	p.SetCreditFloor(runtimeCfg.Pool.CreditFloor)               // 积分保底热生效（0 = 关闭）
+	p.SetRestrictionWave(runtimeCfg.Pool.RestrictionWaveThreshold, runtimeCfg.RestrictionWaveWindowDur, runtimeCfg.RestrictionWavePauseDur)
+	p.SetWeights(runtimeCfg.Pool.IdleWeightPerHour, runtimeCfg.Pool.IdleWeightMax)
+	p.SetPreferExpiring(runtimeCfg.Pool.PreferExpiring)
+	sch.SetExpiringSoonWindow(runtimeCfg.ExpiringSoonDur)
+	sch.Reconfigure(
+		runtimeCfg.Schedule.CheckinHours, runtimeCfg.Schedule.TravelHours,
+		runtimeCfg.Schedule.ActivityHours, runtimeCfg.Schedule.KeepaliveHours, runtimeCfg.Schedule.BlackcatHours,
+		runtimeCfg.Schedule.GrowthHours,
+		!runtimeCfg.Schedule.CheckinEnabled, !runtimeCfg.Schedule.TravelEnabled,
+		!runtimeCfg.Schedule.ActivityEnabled, !runtimeCfg.Schedule.KeepaliveEnabled, !runtimeCfg.Schedule.BlackcatEnabled,
+		!runtimeCfg.Schedule.GrowthEnabled)
+	sch.SetBalanceInterval(runtimeCfg.BalanceRefreshInterval)
+	sch.SetLivenessInterval(runtimeCfg.LivenessInterval)
+	sch.SetIncludeDisabledInTasks(runtimeCfg.Schedule.IncludeDisabledInTasks)
+	logs.apply(runtimeCfg)
+
+	return restartRequiredFields(newCfg), nil
+}
+
+// effectiveRuntimeConfig 构造热应用使用的生效配置：在磁盘合并结果上应用 WB2A_* 环境变量，
+// 再以本次显式提交的 incomingRaw 覆盖，确保未提交字段保留环境变量覆盖、已提交字段即时生效。
+func effectiveRuntimeConfig(mergedRaw, incomingRaw []byte) (*Config, error) {
+	c := Default()
+	if err := json.Unmarshal(mergedRaw, c); err != nil {
+		return nil, fmt.Errorf("parse merged config: %w", err)
+	}
+	applyEnv(c)
+	if err := json.Unmarshal(incomingRaw, c); err != nil {
+		return nil, fmt.Errorf("parse incoming config: %w", err)
+	}
+	if err := c.normalize(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// writeConfigFile 原子写回配置文件；单文件 Docker bind mount 触发 EBUSY 时降级原地覆盖。
+func writeConfigFile(path string, out []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
+		return fmt.Errorf("write config: %w", err)
 	}
 	if err := renameConfig(tmp, path); err != nil {
 		// A single-file Docker bind mount cannot be renamed over its mount
@@ -829,12 +920,12 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		// atomic path for regular files, but update the mounted file in place
 		// for this specific deployment shape.
 		if !errors.Is(err, syscall.EBUSY) {
-			return nil, fmt.Errorf("replace config: %w", err)
+			return fmt.Errorf("replace config: %w", err)
 		}
 		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
 		if openErr != nil {
 			_ = os.Remove(tmp)
-			return nil, fmt.Errorf("replace config (bind mount fallback): %w", openErr)
+			return fmt.Errorf("replace config (bind mount fallback): %w", openErr)
 		}
 		_, writeErr := configFileWrite(f, out)
 		if writeErr == nil {
@@ -844,57 +935,47 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		// 写失败时保留 tmp（挂载文件已被 O_TRUNC 破坏，tmp 里是完整新内容，
 		// 可手工恢复）；写成功才清理。
 		if writeErr != nil {
-			return nil, fmt.Errorf("replace config (bind mount fallback, 完整新内容保留在 %s): %w", tmp, writeErr)
+			return fmt.Errorf("replace config (bind mount fallback, 完整新内容保留在 %s): %w", tmp, writeErr)
 		}
 		_ = os.Remove(tmp)
 		if closeErr != nil {
-			return nil, fmt.Errorf("replace config (bind mount fallback): %w", closeErr)
+			return fmt.Errorf("replace config (bind mount fallback): %w", closeErr)
 		}
 	}
+	return nil
+}
 
-	// 4) 热应用：能立即生效的字段全部应用，并列出仍需重启的字段。
-	live.Store(livecfg.Snapshot{
-		APIKey:               newCfg.APIKey,
-		SoftCooldown:         newCfg.SoftRateDur,
-		SanitizeFingerprints: newCfg.Features.SanitizeBlacklistFingerprints,
-		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
-		CrossRealm:           string(newCfg.Pool.CrossRealm),
-		UpdateCheck:          newCfg.Panel.UpdateCheck,
-		ModelRoutes:          newCfg.ModelRoutes,
-		HiddenModels:         livecfg.NormalizeHiddenModels(newCfg.Models.Hidden),
-	})
-	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
-	up.ModelOptimization.Store(newCfg.Upstream.ModelOptimization)
-	upstream.SetTLSMimic(newCfg.Upstream.TLSFingerprint) // TLS 指纹伪装开关（atomic，新建连接起用）
-	p.SetBreaker(newCfg.Pool.BreakerThreshold, newCfg.BreakerCooldownDur, newCfg.BreakerCooldownMaxD)
-	p.SetMaxInFlight(newCfg.Pool.MaxInFlight)
-	p.SetMaxInFlightGlobal(newCfg.Pool.MaxInFlightGlobal)
-	p.SetInFlightWait(newCfg.InFlightWaitDur)
-	p.SetMaxRPM(newCfg.Pool.MaxRPM)
-	p.SetMaxRPMGlobal(newCfg.Pool.MaxRPMGlobal)
-	p.SetMaxTPM(newCfg.Pool.MaxTPM)
-	p.SetMaxTPMGlobal(newCfg.Pool.MaxTPMGlobal)
-	p.SetDegrade(newCfg.Pool.DegradeThreshold, newCfg.DegradeCooldownDur, newCfg.DegradeCooldownMaxD)
-	p.SetSoftRateMax(newCfg.SoftRateMaxDur)
-	p.SetCostExploreInterval(newCfg.CostExploreIntervalDur) // costTier 探索窗口热生效（0 关停）
-	p.SetCreditFloor(newCfg.Pool.CreditFloor)               // 积分保底热生效（0 = 关闭）
-	p.SetRestrictionWave(newCfg.Pool.RestrictionWaveThreshold, newCfg.RestrictionWaveWindowDur, newCfg.RestrictionWavePauseDur)
-	p.SetWeights(newCfg.Pool.IdleWeightPerHour, newCfg.Pool.IdleWeightMax)
-	p.SetPreferExpiring(newCfg.Pool.PreferExpiring)
-	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)
-	sch.Reconfigure(
-		newCfg.Schedule.CheckinHours, newCfg.Schedule.TravelHours,
-		newCfg.Schedule.ActivityHours, newCfg.Schedule.KeepaliveHours, newCfg.Schedule.BlackcatHours,
-		newCfg.Schedule.GrowthHours,
-		!newCfg.Schedule.CheckinEnabled, !newCfg.Schedule.TravelEnabled,
-		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
-		!newCfg.Schedule.GrowthEnabled)
-	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
-	sch.SetLivenessInterval(newCfg.LivenessInterval)
-	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
-	logs.apply(newCfg)
-
-	return restartRequiredFields(newCfg), nil
+// saveUpdateChannel 轻量切换 panel.update_channel：只写回该键并仅更新 live 快照里的 UpdateChannel，
+// 不触发全量池/排程/日志清理，也不改动受 WB2A_* 环境变量覆盖的其他运行期字段。
+func saveUpdateChannel(channel, path string, live *livecfg.Holder) error {
+	if channel != livecfg.UpdateChannelStable && channel != livecfg.UpdateChannelPrerelease {
+		return fmt.Errorf("panel.update_channel 只能是 stable、prerelease，不认 %q", channel)
+	}
+	oldRaw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read current config: %w", err)
+	}
+	var cur map[string]any
+	if err := json.Unmarshal(oldRaw, &cur); err != nil || cur == nil {
+		cur = map[string]any{}
+	}
+	merged := mergeConfigMaps(cur, map[string]any{"panel": map[string]any{"update_channel": channel}})
+	if _, err := ParseConfig(mergedJSON(merged)); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := writeConfigFile(path, out); err != nil {
+		return err
+	}
+	if live != nil {
+		snap := live.Load()
+		snap.UpdateChannel = channel
+		live.Store(snap)
+	}
+	return nil
 }
 
 // logStores 日志留存要热改的几样：请求记录归档、任务日志、系统日志、积分获取流水、用量统计。零值什么都不改。

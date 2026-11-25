@@ -69,6 +69,8 @@ function ConfigForm({ path, config }: { path?: string; config: Record<string, un
       void qc.invalidateQueries({ queryKey: qk.overview })
       // 改了保留天数或容量上限，网关保存时就清理一次：占用跟着变
       void qc.invalidateQueries({ queryKey: qk.logStorage })
+      // 改了检查更新开关或更新通道，侧栏提醒和版本信息弹窗跟着变
+      void qc.invalidateQueries({ queryKey: qk.version })
     } catch (e) {
       toastError(e, '保存失败：')
     } finally {

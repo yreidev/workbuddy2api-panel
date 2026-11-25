@@ -717,10 +717,14 @@ export interface Release {
   groups: ReleaseGroup[] | null
 }
 
+/** 更新通道：仅正式版或包含预发布版（alpha / beta / rc） */
+export type UpdateChannel = 'stable' | 'prerelease'
+
 /** GET /panel/api/version：本机版本、更新检查结果与「本次更新」 */
 export interface VersionResp {
   version: string
   update_check: boolean
+  update_channel?: UpdateChannel
   latest?: string
   update_available: boolean
   updates: Release[] | null
