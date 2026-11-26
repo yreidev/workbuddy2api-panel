@@ -294,7 +294,7 @@ npm 上更新的 CLI 只作对照，取值以安装包内置的版本为准：�
 
 网关从 1.1.2 起把这些字段原样存进凭证文件（账号的 `type`、`oneidAccountId`、`idp`、`departmentFullName`，令牌的 `tokenType`），登录时写，刷新后更新，照上面的规则挑账号、比对身份。1.1.2 以前的凭证文件没有账号类型（账号接口每次都返回 `type`，有没有它就能分出新旧文件），这种文件第一次刷新时挑账号不看类型、只补字段不比对，之后就照官方比对。身份变了时官方要求重新登录；网关和别的刷新失败一样记一次失败，旧访问令牌照用到过期。1.1.2 以前国内版取到的 uid 对不上算刷新失败，官方不算。
 
-到期时间：官方按 `calculateExpiresAt` 用 `Date.now() + 1000 × expiresIn` 算，存的是毫秒；网关的凭证文件存秒。网关从 1.5.1 起读凭证时两种都认，大于 10¹¹ 的按毫秒换成秒。以前原样当秒读，导入的凭证如果是毫秒，网关永远认为令牌还没快到期、不会主动刷新，到期后对话只剩 401。网关自己登录、刷新写的都是秒，不受影响。
+到期时间：官方按 `calculateExpiresAt` 用 `Date.now() + 1000 × expiresIn` 算，存的是毫秒；网关的凭证文件存秒。网关从 1.5.1 起读凭证时两种都认，大于 10¹¹ 的按毫秒换成秒；第三方（cockpit 格式）导入同样按此规则归一化，缺省或非正的 `expires_at` 保持 `0` 交由首次请求或保活刷新补齐真实到期时间，不再伪造未来到期时刻。此外，出站请求（对话、联网搜索、积分与签到、上报、模型目录）若收到非 `12153` 的 HTTP 401（如 APISIX 网关拦截提前失效的 `accessToken` 返回 401 HTML），而账号持有 `refreshToken`，网关会照官方 OpenAI SDK auth retry 与请求框架 `AuthRefreshHttpInterceptor` 按需单飞刷新一次、原子落盘并原位重发一次；若刷新接口返回 `12153`（如 `refresh token revoked` 或 `Offline user session not found`），则直接透出 `12153` 供禁用计数与排障。
 
 2026-10-20 生产实测，两个域各刷新一个个人号：两个令牌都换了；旧的访问令牌刷新后仍能用；`expiresIn` 国内版 2592000（30 天）、国际版 31488222（约 1 年）。两个域的响应都有 `accessToken`、`refreshToken`、`expiresIn`、`refreshExpiresIn`、`domain`、`sessionState`、`tokenType`，国际版另有 `scope`。导回网关时用的是响应里的 `domain`，之后生产上国内版 6 个号的登录域都还是 `www.codebuddy.cn`，可见经 `www.workbuddy.cn` 刷新登录域不变。同日只读取了两个域的账号：个人号有 `type: personal`、`idp`（空串）、`oneidAccountId`（空串）、`lastLogin`（布尔值），没有 `enterpriseId` 和 `departmentFullName` 这两个键。
 

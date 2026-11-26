@@ -751,7 +751,7 @@ func (s *Scheduler) runKeepalive(ctx context.Context) {
 // （轮换用法下据此判断下一个该启用谁）。注意 ReenableIfCredits 对 disabled 是
 // no-op，所以本开关**不会**导致禁用号被自动解冻——它只让已有账号的积分保持新鲜。
 // 解冻语义与签到一致（ReenableIfCredits：余额 > 0 的冷却账号自动解冻），
-// 但不做签到、不刷新 token——只让"积分"这个观测量保持新鲜。
+// 不做签到；token 平时不主动刷新，仅在上游返回非 12153 的 401 时由 upstream 按需刷新重试一次。
 // 供两类入口复用：后台周期任务（StartBalanceRefresh）与面板手动全量刷新。
 func (s *Scheduler) RunBalanceRefreshNow() {
 	s.runBalanceRefresh(context.Background())
@@ -788,17 +788,24 @@ func (s *Scheduler) runBalanceRefresh(ctx context.Context) {
 			return
 		}
 		wg.Add(1)
-		go func(a *auth.Auth, uid string) {
+		go func(a *auth.Auth, uid string, disabled bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			remain, total, expiring, earliestAt, earliestRemaining, err := s.fetchUserResource(ctx, a, expiringSoon)
 			if err != nil {
 				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
+				var ue *upstream.Error
+				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && !disabled {
+					if s.cfg.Pool.NoteSessionDead(uid) {
+						log.Printf("balance %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(uid, a.Nickname), pool.SessionDeadThreshold())
+					}
+				}
 				return
 			}
+			s.cfg.Pool.ClearSessionDead(uid)
 			s.cfg.Pool.ReenableIfCredits(uid, remain, total)
 			s.cfg.Pool.SetCreditsDetailed(uid, remain, total, expiring, earliestAt, earliestRemaining)
-		}(a, st.UID)
+		}(a, st.UID, st.Disabled)
 	}
 	wg.Wait()
 }

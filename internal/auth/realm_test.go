@@ -52,6 +52,9 @@ func TestRealmDomainFallback(t *testing.T) {
 		{"www.workbuddy.ai", "global"},
 		{"workbuddy.ai", "global"},
 		{"sub.workbuddy.ai", "global"},
+		{"www.codebuddy.ai", "global"},
+		{"codebuddy.ai", "global"},
+		{"sub.codebuddy.ai", "global"},
 		{"www.codebuddy.cn", "cn"},
 		{"", "cn"},
 	}
@@ -59,6 +62,22 @@ func TestRealmDomainFallback(t *testing.T) {
 		a := &Auth{Domain: c.domain}
 		if got := a.Realm(); got != c.want {
 			t.Errorf("Domain=%q Realm()=%q want %q", c.domain, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeExpiresAt(t *testing.T) {
+	cases := []struct {
+		in, want int64
+	}{
+		{-10, 0},
+		{0, 0},
+		{1900000000, 1900000000},
+		{1900000000000, 1900000000},
+	}
+	for _, tc := range cases {
+		if got := NormalizeExpiresAt(tc.in); got != tc.want {
+			t.Errorf("NormalizeExpiresAt(%d)=%d want %d", tc.in, got, tc.want)
 		}
 	}
 }
@@ -202,6 +221,8 @@ func TestBackfillRealmDomain(t *testing.T) {
 		{"www.workbuddy.ai", "global"},
 		{"workbuddy.ai", "global"},
 		{"sub.workbuddy.ai", "global"},
+		{"www.codebuddy.ai", "global"},
+		{"codebuddy.ai", "global"},
 		{"www.codebuddy.cn", "cn"},
 		{"codebuddy.cn", "cn"},
 		{"", "cn"}, // 空 domain + 空 realm → cn（老 CN 凭证核心）

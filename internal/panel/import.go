@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
 	"github.com/yreidev/workbuddy2api-panel/internal/proxies"
@@ -30,6 +29,7 @@ type cockpitAccount struct {
 	TokenType      string `json:"token_type"`
 	ExpiresAt      int64  `json:"expires_at"`
 	Domain         string `json:"domain"`
+	Realm          string `json:"realm"`
 	DosageNotify   string `json:"dosage_notify_code"`
 	PaymentType    string `json:"payment_type"`
 	Status         string `json:"status"`
@@ -232,11 +232,9 @@ func (p *Panel) cockpitImportAuth(item json.RawMessage) (*auth.Auth, string) {
 		return nil, fmt.Sprintf("invalid uid (id=%s)", acc.ID)
 	}
 
-	// cockpit tools 的 expires_at 为毫秒时间戳，转为秒。
-	expiresAt := acc.ExpiresAt / 1000
-	if expiresAt <= 0 {
-		expiresAt = time.Now().Add(365 * 24 * time.Hour).Unix()
-	}
+	// expires_at 兼容秒与毫秒；未提供（<=0）保持 0，让首次使用或保活刷新补回真实到期时间，
+	// 不再伪造一年后到期导致过期 accessToken 长期跳过预刷新。
+	expiresAt := auth.NormalizeExpiresAt(acc.ExpiresAt)
 
 	nickname := acc.Nickname
 	if strings.TrimSpace(nickname) == "" {
@@ -253,13 +251,13 @@ func (p *Panel) cockpitImportAuth(item json.RawMessage) (*auth.Auth, string) {
 		FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", uid)),
 	}
 
-	// 按 domain 推断 realm：workbuddy.ai 家族 → global，否则 cn。
-	if auth.ResolveRealm("", acc.Domain) == "global" {
-		if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
-			return nil, fmt.Sprintf("uid=%s: set realm failed: %v", uid, err)
-		}
-	} else {
-		_, _ = a.BackfillRealm()
+	explicitRealm := strings.ToLower(strings.TrimSpace(acc.Realm))
+	if explicitRealm != "cn" && explicitRealm != "global" {
+		explicitRealm = ""
+	}
+	realm := auth.ResolveRealm(explicitRealm, acc.Domain)
+	if _, err := auth.BackfillRealmFor(a, realm); err != nil {
+		return nil, fmt.Sprintf("uid=%s: set realm failed: %v", uid, err)
 	}
 	return a, ""
 }

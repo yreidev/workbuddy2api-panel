@@ -787,9 +787,12 @@ type Client struct {
 	routes *routeTable
 
 	// refreshMu/refreshInFlight 同账号刷新单飞（按 UID 分桶）：同一时刻只放一个刷新在途，
-	// 其余调用等它的结果，见 RefreshToken。
+	// 其余调用等它的结果，见 RefreshToken。refresh401Fail/refresh401Saved 供收到 401 后的按需刷新
+	// 做短负缓存与落盘去重，共用 refreshMu。
 	refreshMu       sync.Mutex
 	refreshInFlight map[string]*refreshFlight
+	refresh401Fail  map[string]refresh401FailEntry
+	refresh401Saved map[string]string
 }
 
 // New 生产默认值。Transport 由 newTransport() 集中构造（连接层加固：真正禁 h2 /
@@ -1067,11 +1070,7 @@ const refreshTokenExpiresInMax = 10 * 365 * 24 * time.Hour
 // 失效。官方还核对账号类型、登录域等，网关不存类型、登录域照旧换成新值（见
 // docs/official-client.md 的刷新令牌一节）。
 func (c *Client) RefreshToken(a *auth.Auth) error {
-	key := a.UID
-	if key == "" {
-		// 无 UID 的临时 auth：退化为按对象指针去重，仍保证同一对象串行。
-		key = fmt.Sprintf("%p", a)
-	}
+	key := refreshKey(a)
 	c.refreshMu.Lock()
 	if c.refreshInFlight == nil {
 		c.refreshInFlight = make(map[string]*refreshFlight)
@@ -1096,6 +1095,9 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	close(f.done)
 	c.refreshMu.Lock()
 	delete(c.refreshInFlight, key)
+	if err == nil {
+		delete(c.refresh401Fail, key)
+	}
 	c.refreshMu.Unlock()
 	return err
 }
@@ -1104,6 +1106,119 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 type refreshFlight struct {
 	done chan struct{}
 	err  error
+}
+
+// refreshAfter401Cooldown 收到 401 触发按需刷新失败后的短负缓存窗口：
+// 同账号多路并发请求（如积分查询三路并发、企业模型双路探测）前后脚收到 401 时，
+// 若首个刷新已失败且 RefreshToken 未变，窗口内不再重复打 /token/refresh。
+// 直接调 RefreshToken（保活、临近过期预刷新）不受此窗口限制。
+var refreshAfter401Cooldown = 30 * time.Second
+
+type refresh401FailEntry struct {
+	rt    string
+	until time.Time
+	err   error
+}
+
+func refreshKey(a *auth.Auth) string {
+	if a.UID != "" {
+		return a.UID
+	}
+	// 无 UID 的临时 auth：退化为按对象指针去重，仍保证同一对象串行。
+	return fmt.Sprintf("%p", a)
+}
+
+// IsRefreshable401 报告上游响应是否为可通过刷新令牌恢复的 HTTP 401
+// （如 APISIX 网关拦截过期/失效 accessToken 返回的 401 HTML，不含 12153 会话终态）。
+func IsRefreshable401(status int, body string) bool {
+	return status == http.StatusUnauthorized && Classify(status, body) != ErrSessionDead
+}
+
+// IsRefreshableError 报告 err 是否为可通过刷新令牌恢复的 *Error（HTTP 401 且非 12153）。
+func IsRefreshableError(err error) bool {
+	var ue *Error
+	return errors.As(err, &ue) && ue.Status == http.StatusUnauthorized && ue.Kind != ErrSessionDead
+}
+
+func bearerToken(req *http.Request) string {
+	const prefix = "Bearer "
+	if v := req.Header.Get("Authorization"); strings.HasPrefix(v, prefix) {
+		return strings.TrimSpace(v[len(prefix):])
+	}
+	return ""
+}
+
+// RefreshAfter401 在出站请求撞上非 12153 的 HTTP 401 后按需刷新 accessToken（对齐官方客户端
+// OpenAI SDK auth retry 与请求框架 AuthRefreshHttpInterceptor 的 401 刷新重发语义）：
+//   - 无 RefreshToken 时返回 (false, nil)，不发请求；
+//   - 若并发请求已完成刷新（当前 AccessToken 与本次 401 所用的 usedToken 不同），直接返回 (true, nil)；
+//   - 同一 RefreshToken 刚在 refreshAfter401Cooldown 内按需刷新失败过时，直接复用上次错误；
+//   - 刷新成功且设了 FilePath 时原子落盘（同新 token 多路并发唤醒只落盘一次），返回 (true, nil)。
+func (c *Client) RefreshAfter401(a *auth.Auth, usedToken string) (bool, error) {
+	if a == nil {
+		return false, nil
+	}
+	rtBefore := strings.TrimSpace(a.RefreshTokenValue())
+	if rtBefore == "" {
+		return false, nil
+	}
+	used := strings.TrimSpace(usedToken)
+	if cur := strings.TrimSpace(a.AccessTokenValue()); cur != "" && used != "" && cur != used {
+		return true, nil
+	}
+	key := refreshKey(a)
+	now := time.Now()
+	c.refreshMu.Lock()
+	if fail, ok := c.refresh401Fail[key]; ok {
+		if fail.rt == rtBefore && now.Before(fail.until) {
+			c.refreshMu.Unlock()
+			return false, fail.err
+		}
+		delete(c.refresh401Fail, key)
+	}
+	c.refreshMu.Unlock()
+
+	if err := c.RefreshToken(a); err != nil {
+		if refreshAfter401Cooldown > 0 {
+			c.refreshMu.Lock()
+			if c.refresh401Fail == nil {
+				c.refresh401Fail = make(map[string]refresh401FailEntry)
+			}
+			if strings.TrimSpace(a.RefreshTokenValue()) == rtBefore {
+				c.refresh401Fail[key] = refresh401FailEntry{
+					rt:    rtBefore,
+					until: time.Now().Add(refreshAfter401Cooldown),
+					err:   err,
+				}
+			}
+			c.refreshMu.Unlock()
+		}
+		return false, err
+	}
+
+	curAT := strings.TrimSpace(a.AccessTokenValue())
+	needSave := false
+	c.refreshMu.Lock()
+	delete(c.refresh401Fail, key)
+	if a.FilePath != "" && curAT != "" && c.refresh401Saved[key] != curAT {
+		if c.refresh401Saved == nil {
+			c.refresh401Saved = make(map[string]string)
+		}
+		c.refresh401Saved[key] = curAT
+		needSave = true
+	}
+	c.refreshMu.Unlock()
+	if needSave {
+		if serr := a.SaveAtomic(); serr != nil {
+			c.refreshMu.Lock()
+			if c.refresh401Saved[key] == curAT {
+				delete(c.refresh401Saved, key)
+			}
+			c.refreshMu.Unlock()
+			log.Printf("ERR: [upstream] refresh_after_401 acct=%s: save auth failed: %v", logfmt.Label(a.UID, a.Nickname), serr)
+		}
+	}
+	return true, nil
 }
 
 // isSessionDead 判定错误是否为上游 12153（会话 / RT 失效）。
@@ -1827,28 +1942,46 @@ var enterpriseModelsTimeout = 5 * time.Second
 // fetchEnterpriseModels 单路探测企业模型目录（官方内置 CLI 的 ModelsProductProvider 接口）。
 // 解析口径：data 数组里 tags 含 "chat" 的才并入，再剔 nonChatModel 与 disabled，顺序按响应原序。
 func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
-	// 局部变量名避开 url（本包已 import net/url，同名会造成阅读混淆）。
-	endpoint := c.chatBase(a) + fmt.Sprintf(enterpriseModelsPath, url.PathEscape(a.EnterpriseID))
-	ctx, cancel := context.WithTimeout(context.Background(), enterpriseModelsTimeout)
-	defer cancel()
-	req, err := newAccountRequest(ctx, a, http.MethodGet, endpoint, nil)
+	doOnce := func() (int, []byte, string, error) {
+		// 局部变量名避开 url（本包已 import net/url，同名会造成阅读混淆）。
+		endpoint := c.chatBase(a) + fmt.Sprintf(enterpriseModelsPath, url.PathEscape(a.EnterpriseID))
+		ctx, cancel := context.WithTimeout(context.Background(), enterpriseModelsTimeout)
+		defer cancel()
+		req, err := newAccountRequest(ctx, a, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return 0, nil, "", err
+		}
+		// 请求框架的头带上企业身份（X-User-Id / X-Enterprise-Id / X-Tenant-Id），否则上游给的是个人号的名单。
+		c.frameworkHeaders(req, a, c.userAgent(a))
+		usedToken := bearerToken(req)
+		resp, err := doDecoded(c.HTTP, req)
+		if err != nil {
+			return 0, nil, usedToken, err
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			// 读失败 → 传输层错误（handler 侧该路径不 NoteError）。
+			return 0, nil, usedToken, fmt.Errorf("read body: %w", err)
+		}
+		return resp.StatusCode, raw, usedToken, nil
+	}
+	status, raw, usedToken, err := doOnce()
 	if err != nil {
 		return nil, err
 	}
-	// 请求框架的头带上企业身份（X-User-Id / X-Enterprise-Id / X-Tenant-Id），否则上游给的是个人号的名单。
-	c.frameworkHeaders(req, a, c.userAgent(a))
-	resp, err := doDecoded(c.HTTP, req)
-	if err != nil {
-		return nil, err
+	if IsRefreshable401(status, string(raw)) {
+		if ok, rerr := c.RefreshAfter401(a, usedToken); ok {
+			status, raw, _, err = doOnce()
+			if err != nil {
+				return nil, err
+			}
+		} else if rerr != nil {
+			log.Printf("WARN: [upstream] enterprise_models refresh after 401 acct=%s: %v", logfmt.Label(a.UID, a.Nickname), rerr)
+		}
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		// 读失败 → 传输层错误（handler 侧该路径不 NoteError）。
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("models api status %d: %s", resp.StatusCode, truncate(string(raw), 120))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("models api status %d: %s", status, truncate(string(raw), 120))
 	}
 	var env struct {
 		Code int             `json:"code"`
@@ -2192,6 +2325,7 @@ var (
 type configAttempt struct {
 	status      int    // HTTP 状态；0 = 没有状态的传输错误
 	raw         []byte // 响应体原文（成功时再解析）
+	usedToken   string // 本次请求携带的 Bearer token（401 按需刷新去重用）
 	err         error  // 传输/HTTP/解析/业务码错误；data 无效时是解析出的原错误
 	dataInvalid bool   // HTTP 200 但 data 没有可持久化的内容（官方 isPersistableProductConfiguration）
 	timeout     bool   // 超时类失败（net.Error.Timeout 或 408）
@@ -2240,6 +2374,7 @@ func (c *Client) configFetchOnce(a *auth.Auth, base string, rt http.RoundTripper
 	}
 	req.Close = true
 	c.frameworkHeaders(req, a, c.userAgent(a))
+	usedToken := bearerToken(req)
 	hc := c.HTTP
 	if rt != nil {
 		cp := *hc
@@ -2248,17 +2383,17 @@ func (c *Client) configFetchOnce(a *auth.Auth, base string, rt http.RoundTripper
 	}
 	resp, err := doDecoded(hc, req)
 	if err != nil {
-		return configAttempt{err: err, timeout: configIsTimeout(err),
+		return configAttempt{usedToken: usedToken, err: err, timeout: configIsTimeout(err),
 			retryable: !errors.Is(err, context.Canceled) && !IsRouteError(err)}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		// 读失败 → 传输层错误：半截 body 不进解析（不罚号）。
-		return configAttempt{status: resp.StatusCode, err: fmt.Errorf("read body: %w", err)}
+		return configAttempt{status: resp.StatusCode, usedToken: usedToken, err: fmt.Errorf("read body: %w", err)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		at := configAttempt{status: resp.StatusCode, raw: raw,
+		at := configAttempt{status: resp.StatusCode, raw: raw, usedToken: usedToken,
 			err: fmt.Errorf("v3/config status %d: %s", resp.StatusCode, truncate(string(raw), 120))}
 		// 只有 408/502/503 可以换（504 不换）。
 		at.retryable = failoverRetryIPStatus(resp.StatusCode)
@@ -2270,10 +2405,10 @@ func (c *Client) configFetchOnce(a *auth.Auth, base string, rt http.RoundTripper
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return configAttempt{status: resp.StatusCode, raw: raw,
+		return configAttempt{status: resp.StatusCode, raw: raw, usedToken: usedToken,
 			err: fmt.Errorf("v3/config parse: %w", err)}
 	}
-	at := configAttempt{status: resp.StatusCode, raw: raw}
+	at := configAttempt{status: resp.StatusCode, raw: raw, usedToken: usedToken}
 	// 官方只看 data 有没有可持久化的内容，不看业务码：data 无效（业务码非 0 时多半如此）
 	// 一律按「可重试的无效响应」处理；data 有内容但业务码非 0 时按原语义报错、不换。
 	if configDataPersistable(env.Data) && env.Code != 0 {
@@ -2343,14 +2478,30 @@ func (c *Client) noteConfigAttempt(origin string, at configAttempt) {
 // 「主入口 → 备用入口 → 备用 IP」。国际版与不可信中转只发一次。只有「可以换」的失败才换：
 // 200 但 data 没有可持久化内容、HTTP 408/502/503、没有 HTTP 状态的传输错误（含 DNS 失败）。
 func (c *Client) fetchV3ConfigModelMap(a *auth.Auth) (map[string]ModelInfo, error) {
+	out, last, err := c.fetchV3ConfigModelMapOnce(a)
+	if err == nil {
+		return out, nil
+	}
+	if IsRefreshable401(last.status, string(last.raw)) {
+		if ok, rerr := c.RefreshAfter401(a, last.usedToken); ok {
+			out, _, err = c.fetchV3ConfigModelMapOnce(a)
+			return out, err
+		} else if rerr != nil {
+			log.Printf("WARN: [upstream] v3_config refresh after 401 acct=%s: %v", logfmt.Label(a.UID, a.Nickname), rerr)
+		}
+	}
+	return nil, err
+}
+
+func (c *Client) fetchV3ConfigModelMapOnce(a *auth.Auth) (map[string]ModelInfo, configAttempt, error) {
 	base := c.chatBase(a)
 	if !c.configFailoverActive(a, base) {
 		// 国际版 / 不可信 base：只发一次，5 秒总预算。
 		at := c.configFetchOnce(a, base, nil, configFetchBudget)
 		if out, ok := configSuccess(at); ok {
-			return out, nil
+			return out, at, nil
 		}
-		return nil, configAttemptError(at)
+		return nil, at, configAttemptError(at)
 	}
 
 	plan := c.chatFailoverPlan(a, base)
@@ -2370,10 +2521,10 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth) (map[string]ModelInfo, erro
 	at := c.configFetchOnce(a, firstBase, nil, configFetchBudget)
 	c.noteConfigAttempt(plan.firstOrigin, at)
 	if out, ok := configSuccess(at); ok {
-		return out, nil
+		return out, at, nil
 	}
 	if !at.retryable {
-		return nil, configAttemptError(at)
+		return nil, at, configAttemptError(at)
 	}
 	lastErr := configAttemptError(at)
 
@@ -2381,17 +2532,17 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth) (map[string]ModelInfo, erro
 	if plan.firstOrigin != failoverBackupOrigin {
 		budget := nextBudget(at)
 		if budget < configFetchMinBudget {
-			return nil, lastErr
+			return nil, at, lastErr
 		}
 		backupBase := failoverSwapOrigin(firstBase, failoverBackupOrigin)
 		next := c.configFetchOnce(a, backupBase, nil, budget)
 		c.noteConfigAttempt(failoverOrigin(backupBase), next)
 		if out, ok := configSuccess(next); ok {
-			return out, nil
+			return out, next, nil
 		}
 		lastErr = configAttemptError(next)
 		if !next.retryable {
-			return nil, lastErr
+			return nil, next, lastErr
 		}
 		at = next
 	}
@@ -2399,20 +2550,20 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth) (map[string]ModelInfo, erro
 	// 试备用 IP：只在备用入口上；地址层不生效（钉 IP 函数为 nil）时跳过；备用入口走环境变量里的代理时
 	// 也跳过（照官方：这一步只给直连的请求用，见 proxy.go）。走号的代理时经代理连备用 IP（route.go）。
 	if c.PinIP == nil || len(failoverFallbackIPs) == 0 || c.viaEnvProxy(a, failoverHost(failoverBackupOrigin)) {
-		return nil, lastErr
+		return nil, at, lastErr
 	}
 	budget := nextBudget(at)
 	if budget < configFetchMinBudget {
-		return nil, lastErr
+		return nil, at, lastErr
 	}
 	backupBase := failoverSwapOrigin(firstBase, failoverBackupOrigin)
 	rt := c.PinIP(failoverFallbackIPs[0])
 	final := c.configFetchOnce(a, backupBase, rt, budget)
 	c.noteConfigAttempt(failoverOrigin(backupBase), final)
 	if out, ok := configSuccess(final); ok {
-		return out, nil
+		return out, final, nil
 	}
-	return nil, configAttemptError(final)
+	return nil, final, configAttemptError(final)
 }
 
 // configFailoverActive 报告拉配置是否走「主入口 → 备用入口 → 备用 IP」：国内版且 chatBase

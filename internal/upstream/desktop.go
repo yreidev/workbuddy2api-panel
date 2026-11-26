@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -47,6 +48,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 	"github.com/yreidev/workbuddy2api-panel/internal/session"
 )
 
@@ -224,15 +226,29 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	if err != nil {
 		return err
 	}
-	req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.desktopBase(a)+desktopReportPath, bytes.NewReader(raw))
-	if err != nil {
-		return err
+	doOnce := func() (string, error) {
+		req, err := newAccountRequest(context.Background(), a, http.MethodPost, c.desktopBase(a)+desktopReportPath, bytes.NewReader(raw))
+		if err != nil {
+			return "", err
+		}
+		// 官方上报服务 StandardEventService.send 显式把 Content-Type 设成带 charset 的写法，
+		// 其余头由官方请求框架给（frameworkHeaders）。
+		c.frameworkHeaders(req, a, c.desktopUA(a))
+		req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+		_, err = c.doJSON(req)
+		return bearerToken(req), err
 	}
-	// 官方上报服务 StandardEventService.send 显式把 Content-Type 设成带 charset 的写法，
-	// 其余头由官方请求框架给（frameworkHeaders）。
-	c.frameworkHeaders(req, a, c.desktopUA(a))
-	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	_, err = c.doJSON(req)
+	usedToken, err := doOnce()
+	if IsRefreshableError(err) {
+		if ok, rerr := c.RefreshAfter401(a, usedToken); ok {
+			_, err = doOnce()
+			return err
+		} else if isSessionDead(rerr) {
+			return rerr
+		} else if rerr != nil {
+			log.Printf("WARN: [upstream] desktop_report refresh after 401 acct=%s: %v", logfmt.Label(a.UID, a.Nickname), rerr)
+		}
+	}
 	return err
 }
 

@@ -17,10 +17,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
+	"github.com/yreidev/workbuddy2api-panel/internal/logfmt"
 )
 
 // reportPath 活跃上报通道（实测）。
@@ -40,23 +42,42 @@ func (c *Client) authServiceJSON(a *auth.Auth, method, path string, body any, ex
 }
 
 func (c *Client) billingDo(a *auth.Auth, method, path string, body any, headers func(*http.Request, *auth.Auth), extra []func(*http.Request)) (json.RawMessage, error) {
-	var rdr io.Reader
+	var payload []byte
 	if body != nil {
-		raw, err := json.Marshal(body)
+		var err error
+		payload, err = json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		rdr = bytes.NewReader(raw)
 	}
-	req, err := newAccountRequest(context.Background(), a, method, c.billingBase(a)+path, rdr)
-	if err != nil {
-		return nil, err
+	doOnce := func() (json.RawMessage, string, error) {
+		var rdr io.Reader
+		if payload != nil {
+			rdr = bytes.NewReader(payload)
+		}
+		req, err := newAccountRequest(context.Background(), a, method, c.billingBase(a)+path, rdr)
+		if err != nil {
+			return nil, "", err
+		}
+		headers(req, a)
+		for _, f := range extra {
+			f(req)
+		}
+		data, err := c.doJSON(req)
+		return data, bearerToken(req), err
 	}
-	headers(req, a)
-	for _, f := range extra {
-		f(req)
+	data, usedToken, err := doOnce()
+	if IsRefreshableError(err) {
+		if ok, rerr := c.RefreshAfter401(a, usedToken); ok {
+			data, _, err = doOnce()
+			return data, err
+		} else if isSessionDead(rerr) {
+			return nil, rerr
+		} else if rerr != nil {
+			log.Printf("WARN: [upstream] billing %s refresh after 401 acct=%s: %v", path, logfmt.Label(a.UID, a.Nickname), rerr)
+		}
 	}
-	return c.doJSON(req)
+	return data, err
 }
 
 // withBillingLanguage 积分包查询才带的 Accept-Language（见 billingAcceptLanguage）。

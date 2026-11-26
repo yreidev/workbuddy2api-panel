@@ -1139,6 +1139,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// token 临近过期 → 先 refresh（失败冷却换号）
+		refreshed := false
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
 			if err := h.cfg.Upstream.RefreshToken(acct); err != nil {
 				lastErr = err
@@ -1154,6 +1155,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
+			refreshed = true
+			h.cfg.Pool.ClearSessionDead(acct.UID)
 			if err := acct.SaveAtomic(); err != nil {
 				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
 				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
@@ -1166,6 +1169,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
+		usedToken := acct.AccessTokenValue()
 		attempt := h.dispatchWorkBuddy(r.Context(), acct, body, clientIP, chatMeta, bareModel)
 		if isQueueWaiting(attempt.err) {
 			attempt = h.capacityQueue(r.Context(), acct, body, clientIP, chatMeta, bareModel, attempt)
@@ -1174,6 +1178,37 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.status, st.outcome = http.StatusForbidden, reqlog.OutcomeHTTPError
 			writeOpenAIError(w, st.status, "target_not_allowed", errDispatchDenied.Error())
 			return
+		}
+		// 上游返回非 12153 的 HTTP 401（如第三方导入凭证 expiresAt 失真或 accessToken 被提前吊销）：
+		// 同官方客户端按需单飞刷新一次并在当前账号原位重发；若刷新回 12153 则立即禁用换号。
+		if !refreshed && r.Context().Err() == nil && shouldRetryChat401(attempt.status, attempt.body, attempt.err, acct) {
+			if ok, rerr := h.cfg.Upstream.RefreshAfter401(acct, usedToken); ok {
+				recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attempt.started, 0)
+				h.cfg.Pool.ClearSessionDead(acct.UID)
+				attempt = h.dispatchWorkBuddy(r.Context(), acct, body, clientIP, chatMeta, bareModel)
+				if isQueueWaiting(attempt.err) {
+					attempt = h.capacityQueue(r.Context(), acct, body, clientIP, chatMeta, bareModel, attempt)
+				}
+				if errors.Is(attempt.err, errDispatchDenied) {
+					st.status, st.outcome = http.StatusForbidden, reqlog.OutcomeHTTPError
+					writeOpenAIError(w, st.status, "target_not_allowed", errDispatchDenied.Error())
+					return
+				}
+			} else if rerr != nil {
+				var rue *upstream.Error
+				if errors.As(rerr, &rue) && rue.Kind == upstream.ErrSessionDead {
+					recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attempt.started, 0)
+					st.status = rue.Status
+					lastErr = rerr
+					h.cfg.Pool.Disable(acct.UID, "refresh session dead")
+					fail(acct.UID)
+					if !rotateBackoff(i, r.Context()) {
+						break
+					}
+					continue
+				}
+				log.Printf("WARN: [server] chat refresh after 401 acct=%s: %v", logfmt.Label(acct.UID, acct.Nickname), rerr)
+			}
 		}
 		rc, status, respBody, terr, attemptStarted := attempt.rc, attempt.status, attempt.body, attempt.err, attempt.started
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
@@ -2145,4 +2180,14 @@ func (h *Handler) hintOf(kind upstream.ErrKind, body, bareModel string, hasImage
 		msg = uerr.Msg
 	}
 	return upstream.GatewayHint(kind, msg, h.hintContext(bareModel, hasImage))
+}
+
+func shouldRetryChat401(status int, body []byte, err error, acct *auth.Auth) bool {
+	if acct == nil || strings.TrimSpace(acct.RefreshTokenValue()) == "" {
+		return false
+	}
+	if upstream.IsRefreshableError(err) {
+		return true
+	}
+	return err == nil && upstream.IsRefreshable401(status, string(body))
 }

@@ -302,11 +302,13 @@ func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 // 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
 func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
 
-// isGlobalDomain 判定 domain 是否指向 www.workbuddy.ai 家族。
-// 同时接受裸域 workbuddy.ai 与任意子域（HasSuffix("www.workbuddy.ai") 或裸域本身）。
+// isGlobalDomain 判定 domain 是否指向国际版域名家族（workbuddy.ai 与 codebuddy.ai）。
+// 依据官方国际版 cli/product.json authentication.attributes.externalDomain
+// （www.workbuddy.ai / www.codebuddy.ai 等），同时接受裸域与任意子域。
 func isGlobalDomain(d string) bool {
 	d = strings.ToLower(strings.TrimSpace(d))
-	return d == "workbuddy.ai" || strings.HasSuffix(d, ".workbuddy.ai")
+	return d == "workbuddy.ai" || strings.HasSuffix(d, ".workbuddy.ai") ||
+		d == "codebuddy.ai" || strings.HasSuffix(d, ".codebuddy.ai")
 }
 
 // NeedsRefresh 报告 token 是否将在 within 内过期（或已过期/无 expiry）。
@@ -319,14 +321,22 @@ func (a *Auth) NeedsRefresh(within time.Duration) bool {
 	return time.Now().Add(within).Unix() >= a.ExpiresAt
 }
 
-// expiresAtSeconds 把凭证里的到期时间统一成 Unix 秒。网关自己写的是秒，官方客户端存的是
-// 毫秒（calculateExpiresAt：Date.now()+1e3*expiresIn），原样当秒读会永远不主动刷新，
-// 令牌到期后只剩 401。大于 1e11 的按毫秒算：1e11 秒是公元 5138 年，1e11 毫秒是 1973 年，不会混。
-func expiresAtSeconds(v int64) int64 {
+// NormalizeExpiresAt 把凭证里的到期时间统一成 Unix 秒：
+//   - <= 0 归一为 0（未知或未提供到期时间，NeedsRefresh 会判为需要刷新以补齐真实到期时间）；
+//   - > 1e11 按毫秒算（网关自己写的是秒，官方客户端 calculateExpiresAt 存的是毫秒；
+//     1e11 秒是公元 5138 年，1e11 毫秒是 1973 年，不会混）。
+func NormalizeExpiresAt(v int64) int64 {
+	if v <= 0 {
+		return 0
+	}
 	if v > 1e11 {
 		return v / 1000
 	}
 	return v
+}
+
+func expiresAtSeconds(v int64) int64 {
+	return NormalizeExpiresAt(v)
 }
 
 // Parse 兼容两种磁盘形态：

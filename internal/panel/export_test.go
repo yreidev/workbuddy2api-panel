@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/yreidev/workbuddy2api-panel/internal/auth"
 	"github.com/yreidev/workbuddy2api-panel/internal/pool"
@@ -148,21 +147,31 @@ func TestAccountsExportMissingUID(t *testing.T) {
 	}
 }
 
-// cockpit tools 格式照常可导入（新旧两个路径），域按 domain 推断；缺字段的项跳过并报原因。
+// cockpit tools 格式照常可导入（新旧两个路径），expires_at 兼容毫秒与秒，域按显式 realm 或 domain（含 codebuddy.ai）推断；缺字段的项跳过并报原因。
 func TestImportCockpitFormat(t *testing.T) {
 	file := []byte(`[
 		{"id":"c1","uid":"ck-1","access_token":"at1","refresh_token":"rt1","expires_at":1900000000000,"domain":"www.workbuddy.ai","email":"a@example.com"},
-		{"id":"c2","uid":"ck-2","access_token":"","refresh_token":"rt2"}
+		{"id":"c2","uid":"ck-2","access_token":"","refresh_token":"rt2"},
+		{"id":"c3","uid":"ck-sec","access_token":"at3","refresh_token":"rt3","expires_at":1900000000,"domain":"www.codebuddy.ai","nickname":"秒级"},
+		{"id":"c4","uid":"ck-rlm","access_token":"at4","refresh_token":"rt4","expires_at":0,"realm":"global","nickname":"显式国际"}
 	]`)
 	for _, path := range []string{"/panel/api/import", "/panel/api/import/cockpit"} {
 		p, dir := newIOPanel(t)
 		out := postFile(t, p, path, file)
-		if out["imported"] != float64(1) || out["skipped"] != float64(1) {
+		if out["imported"] != float64(3) || out["skipped"] != float64(1) {
 			t.Fatalf("%s: %v", path, out)
 		}
 		a := loadAuth(t, dir, "ck-1")
 		if a.Realm() != "global" || a.ExpiresAt != 1900000000 || a.Nickname != "a@example.com" {
-			t.Fatalf("%s: cockpit 转换不对: %+v realm=%s", path, a, a.Realm())
+			t.Fatalf("%s: cockpit 毫秒转换不对: %+v realm=%s", path, a, a.Realm())
+		}
+		sec := loadAuth(t, dir, "ck-sec")
+		if sec.Realm() != "global" || sec.ExpiresAt != 1900000000 || sec.Nickname != "秒级" {
+			t.Fatalf("%s: cockpit 秒级或 codebuddy.ai 转换不对: %+v realm=%s", path, sec, sec.Realm())
+		}
+		rlm := loadAuth(t, dir, "ck-rlm")
+		if rlm.Realm() != "global" || rlm.ExpiresAt != 0 || !rlm.NeedsRefresh(0) {
+			t.Fatalf("%s: cockpit 显式 realm 或空到期时间不对: %+v realm=%s", path, rlm, rlm.Realm())
 		}
 	}
 }
@@ -225,9 +234,9 @@ func TestImportRejectsBadInput(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "evil.json")); err == nil {
 		t.Error("非法 uid 不得写出目录外的文件")
 	}
-	// cockpit 没给过期时间：按一年后处理，昵称原样保留。
+	// cockpit 没给过期时间：保留 0 让首次使用或保活刷新补齐真实到期时间，昵称原样保留。
 	a := loadAuth(t, dir, "ck-4")
-	if a.ExpiresAt < time.Now().Add(300*24*time.Hour).Unix() || a.Nickname != "四号" {
+	if a.ExpiresAt != 0 || !a.NeedsRefresh(0) || a.Nickname != "四号" {
 		t.Errorf("缺省过期时间或昵称不对: exp=%d nick=%q", a.ExpiresAt, a.Nickname)
 	}
 }
