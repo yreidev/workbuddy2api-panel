@@ -65,13 +65,13 @@ const (
 func (c *Client) desktopUA(a *auth.Auth) string { return c.defaultDaemonUA(a) }
 
 // 两域桌面端（macOS arm64）安装包 cli/product.json 的 commit 与 date（毫秒）：国内版 5.11.3、国际版
-// 5.11.4。上报事件按账号所在的域取：任务中心只对国内版个人号开放，每日活跃上报两域都发。配了
+// 5.11.7。上报事件按账号所在的域取：任务中心只对国内版个人号开放，每日活跃上报两域都发。配了
 // client_version 时版本号跟着变，这两项不变。
 const (
 	desktopCommitCN          = "ecace0f7028166695994300182295329b8b95449"
 	desktopReleaseDateCN     = int64(1794501984587) // 2026-11-12T16:46:24.587Z
-	desktopCommitGlobal      = "0026dff06ce8414140e6f2fa731049855c3ecc6f"
-	desktopReleaseDateGlobal = int64(1794817062759) // 2026-11-16T08:17:42.759Z
+	desktopCommitGlobal      = "525fde106956c7265f8b4d8d93aadd139915588b"
+	desktopReleaseDateGlobal = int64(1795618208997) // 2026-11-25T14:50:08.997Z
 )
 
 // desktopBuild 账号所在域的桌面端 commit 与发布时间。

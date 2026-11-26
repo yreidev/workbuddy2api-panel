@@ -1022,14 +1022,14 @@ func TestDesktopExpertSequences(t *testing.T) {
 }
 
 // TestDesktopFingerprintFollowsClientVersion 事件指纹的版本跟 UA 用同一个客户端版本，commit / releaseDate
-// 按域取安装包的值（国内版 5.11.3、国际版 5.11.4），配了 client_version 也不变。
+// 按域取安装包的值（国内版 5.11.3、国际版 5.11.7），配了 client_version 也不变。
 func TestDesktopFingerprintFollowsClientVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, domain, ver, commit string
 		released                  int64
 	}{
 		{"国内版", "", "5.11.3", "ecace0f7028166695994300182295329b8b95449", 1794501984587},
-		{"国际版", "www.workbuddy.ai", "5.11.4", "0026dff06ce8414140e6f2fa731049855c3ecc6f", 1794817062759},
+		{"国际版", "www.workbuddy.ai", "5.11.7", "525fde106956c7265f8b4d8d93aadd139915588b", 1795618208997},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &auth.Auth{UID: "u-1", Domain: tc.domain}

@@ -86,10 +86,10 @@ func globalEntAuth() *auth.Auth {
 func TestFetchGlobalModelsPersonalV3Only(t *testing.T) {
 	f := newUpFake(t)
 	f.onFunc(http.MethodGet, gmV3Path, func(r *upReq) (*http.Response, error) {
-		if want := "WorkBuddy/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0"; r.header.Get("User-Agent") != want {
+		if want := "WorkBuddy/5.11.7 workbuddy-ai/5.11.7 CLI/2.176.0"; r.header.Get("User-Agent") != want {
 			t.Errorf("UA = %q, want %q", r.header.Get("User-Agent"), want)
 		}
-		if r.header.Get("X-Client-Version") != "5.11.4" || r.header.Get("X-Client-Platform") != "macos" || r.header.Get("X-Client-Product") != "workbuddy-ai" {
+		if r.header.Get("X-Client-Version") != "5.11.7" || r.header.Get("X-Client-Platform") != "macos" || r.header.Get("X-Client-Product") != "workbuddy-ai" {
 			t.Errorf("国际版模型目录客户端身份头不对: %v", r.header)
 		}
 		return jsonResp(200, v3ModelsJSON(`{"id":"desktop-only","maxInputTokens":222}`)), nil

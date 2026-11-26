@@ -421,7 +421,7 @@ func TestFull7HeaderVersionHelpers(t *testing.T) {
 	if got := (&Client{CliVersion: "9.9.9"}).cliVersion(globalAuth()); got != "9.9.9" {
 		t.Fatalf("cliVersion = %q", got)
 	}
-	// 没覆盖时按账号域：国内版 5.11.3、国际版 5.11.4 都内置 2.176.0；没有账号按国内版
+	// 没覆盖时按账号域：国内版 5.11.3、国际版 5.11.7 都内置 2.176.0；没有账号按国内版
 	for _, tc := range []struct {
 		name string
 		a    *auth.Auth

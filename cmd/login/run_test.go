@@ -176,7 +176,7 @@ func TestRunURLCNAndGlobal(t *testing.T) {
 		if fatal {
 			t.Fatalf("不应 fatal: %s", errb)
 		}
-		if !strings.Contains(out, "auth.example/authorize?x=1&version=5.11.4") || strings.Contains(out, "loginSessionId") {
+		if !strings.Contains(out, "auth.example/authorize?x=1&version=5.11.7") || strings.Contains(out, "loginSessionId") {
 			t.Fatalf("stdout=%q", out)
 		}
 		reqs := fake.requests()
@@ -187,10 +187,10 @@ func TestRunURLCNAndGlobal(t *testing.T) {
 		if h.Get("X-Domain") != "www.workbuddy.ai" {
 			t.Fatalf("国际版 X-Domain 不对: %v", h)
 		}
-		if ua := h.Get("User-Agent"); !strings.Contains(ua, "workbuddy-ai/5.11.4") {
+		if ua := h.Get("User-Agent"); !strings.Contains(ua, "workbuddy-ai/5.11.7") {
 			t.Fatalf("国际版 UA 不对: %q", ua)
 		}
-		if h.Get("X-Client-Version") != "5.11.4" || h.Get("X-Client-Platform") != "macos" || h.Get("X-Client-Product") != "workbuddy-ai" {
+		if h.Get("X-Client-Version") != "5.11.7" || h.Get("X-Client-Platform") != "macos" || h.Get("X-Client-Product") != "workbuddy-ai" {
 			t.Fatalf("国际版客户端身份头不对: %v", h)
 		}
 	})

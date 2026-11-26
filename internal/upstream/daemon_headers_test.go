@@ -53,7 +53,7 @@ func TestBillingHeadersOfficialShape(t *testing.T) {
 	}{
 		{"国内版个人号 POST", http.MethodPost, cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "", "application/json", "5.11.3", "WorkBuddy"},
 		{"国内版企业号 POST", http.MethodPost, cnEnt, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "corp-cn", "application/json", "5.11.3", "WorkBuddy"},
-		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0", "www.workbuddy.ai", "", "", "5.11.4", "workbuddy-ai"},
+		{"国际版个人号 GET", http.MethodGet, globalAuth(), "workbuddy-ai/5.11.7 workbuddy-ai/5.11.7 CLI/2.176.0", "www.workbuddy.ai", "", "", "5.11.7", "workbuddy-ai"},
 	}
 	prevID := ""
 	for _, tc := range cases {
@@ -133,7 +133,7 @@ func TestRefreshHeadersOfficialShape(t *testing.T) {
 	}{
 		{"国内版", cnAuth(), "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.codebuddy.cn", "5.11.3", "WorkBuddy"},
 		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", "www.workbuddy.cn", "5.11.3", "WorkBuddy"},
-		{"国际版", globalAuth(), "workbuddy-ai/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0", "www.workbuddy.ai", "5.11.4", "workbuddy-ai"},
+		{"国际版", globalAuth(), "workbuddy-ai/5.11.7 workbuddy-ai/5.11.7 CLI/2.176.0", "www.workbuddy.ai", "5.11.7", "workbuddy-ai"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := tc.a
@@ -182,7 +182,7 @@ func TestAuthServiceHeadersOfficialShape(t *testing.T) {
 	}{
 		{"国内版个人号", &Client{}, cnAuth(), axiosUserAgent, "www.codebuddy.cn", "", "5.11.3", "macos", "WorkBuddy"},
 		{"国内版企业号", &Client{}, cnEnt, axiosUserAgent, "www.codebuddy.cn", "corp-cn", "5.11.3", "macos", "WorkBuddy"},
-		{"国际版个人号", &Client{}, globalAuth(), axiosUserAgent, "www.workbuddy.ai", "", "5.11.4", "macos", "workbuddy-ai"},
+		{"国际版个人号", &Client{}, globalAuth(), axiosUserAgent, "www.workbuddy.ai", "", "5.11.7", "macos", "workbuddy-ai"},
 		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, cnAuth(), "MyUA/1", "www.codebuddy.cn", "", "5.11.3", "macos", "WorkBuddy"},
 		{"client_name=SaaS 不带 UA 与客户端身份头", &Client{ClientName: "SaaS"}, cnAuth(), "", "www.codebuddy.cn", "", "", "", ""},
 	}
@@ -226,9 +226,9 @@ func TestRefreshUserAgent(t *testing.T) {
 		c    *Client
 		want string
 	}{
-		{"默认", &Client{}, "workbuddy-ai/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0"},
+		{"默认", &Client{}, "workbuddy-ai/5.11.7 workbuddy-ai/5.11.7 CLI/2.176.0"},
 		{"显式 user_agent", &Client{UserAgent: "MyUA/1"}, "MyUA/1"},
-		{"client_name=SaaS", &Client{ClientName: "SaaS"}, "WorkBuddy/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0"},
+		{"client_name=SaaS", &Client{ClientName: "SaaS"}, "WorkBuddy/5.11.7 workbuddy-ai/5.11.7 CLI/2.176.0"},
 	} {
 		if got := tc.c.refreshUserAgent(globalAuth()); got != tc.want {
 			t.Errorf("%s: refreshUserAgent = %q, want %q", tc.name, got, tc.want)

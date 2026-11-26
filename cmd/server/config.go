@@ -192,7 +192,7 @@ type Config struct {
 		// 请求前两段对调（applicationName 国内版 WorkBuddy、国际版 workbuddy-ai）。
 		UserAgent string `json:"user_agent"`
 		// ClientVersion 桌面端版本（UA 的版本段、X-IDE-Version 与 X-Client-Version），两域共用一个值。
-		// 空 = 内置默认：国内版 5.11.3、国际版 5.11.4（官方安装包）。
+		// 空 = 内置默认：国内版 5.11.3、国际版 5.11.7（官方安装包）。
 		ClientVersion string `json:"client_version"`
 		// CliVersion 出站 UA 中 `CLI/<ver>` 段与 harnessMetadata 的版本。空 = 内置默认 2.176.0（两域桌面端内置的 CLI）。
 		CliVersion string `json:"cli_version"`

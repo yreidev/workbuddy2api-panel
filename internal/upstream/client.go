@@ -719,7 +719,7 @@ type Client struct {
 	UserAgent string
 
 	// ClientVersion 桌面端版本（UA 版本段、X-IDE-Version 与 X-Client-Version），两域共用。
-	// 空 = 内置默认：国内版 5.11.3、国际版 5.11.4。
+	// 空 = 内置默认：国内版 5.11.3、国际版 5.11.7。
 	ClientVersion string
 
 	// CliVersion 出站 UA 中 `CLI/<ver>` 段与 harnessMetadata 的版本。空 = 内置默认 2.176.0（两域相同）。

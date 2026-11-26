@@ -32,8 +32,8 @@ func TestChatHeadersOfficialShape(t *testing.T) {
 		{"国内版个人号", cnAuth(), "www.codebuddy.cn", "", "5.11.3", "WorkBuddy"},
 		{"国内版企业号", cnEnt, "www.codebuddy.cn", "corp-cn", "5.11.3", "WorkBuddy"},
 		{"国内版没有登录域", &auth.Auth{UID: "u-cn", AccessToken: "tok"}, "", "", "5.11.3", "WorkBuddy"},
-		{"国际版个人号", globalAuth(), "www.workbuddy.ai", "", "5.11.4", "workbuddy-ai"},
-		{"国际版企业号", glEnt, "www.workbuddy.ai", "corp-g", "5.11.4", "workbuddy-ai"},
+		{"国际版个人号", globalAuth(), "www.workbuddy.ai", "", "5.11.7", "workbuddy-ai"},
+		{"国际版企业号", glEnt, "www.workbuddy.ai", "corp-g", "5.11.7", "workbuddy-ai"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
